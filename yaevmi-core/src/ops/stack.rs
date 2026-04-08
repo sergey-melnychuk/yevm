@@ -98,7 +98,14 @@ mod tests {
     #[test]
     fn test_push2() {
         let head = Head::default();
-        let mut evm = Evm::new(head, vec![0x61, 0x01, 0x02], 1000, Int::ONE, Int::ONE, vec![]); // PUSH2 0x0102
+        let mut evm = Evm::new(
+            head,
+            vec![0x61, 0x01, 0x02],
+            1000,
+            Int::ONE,
+            Int::ONE,
+            vec![],
+        ); // PUSH2 0x0102
         push(&mut evm, &ctx(), &call(), &mut state()).unwrap();
         evm.apply(&mut state());
         assert_eq!(evm.stack, vec![int(0x0102)]);

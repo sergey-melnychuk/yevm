@@ -348,7 +348,7 @@ pub mod tests {
     }
 
     pub fn state() -> Empty {
-        Empty::default()
+        Empty
     }
 
     #[derive(Default)]

@@ -6,7 +6,7 @@ use yaevmi_core::{
     Call, Head, Tx,
     cache::{Cache, Env},
     exe::{CallResult, Executor},
-    state::Account,
+    state::{Account, State},
     trace::{Event, Step},
 };
 use yaevmi_misc::buf::Buf;
@@ -56,7 +56,7 @@ pub async fn run(
     for (acc, info, storage) in env {
         state.insert_account(acc, info);
         for (key, val) in storage {
-            state.init(acc, key, val);
+            state.init(&acc, &key, val);
         }
     }
 

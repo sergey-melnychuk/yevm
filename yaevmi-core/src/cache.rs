@@ -1,7 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    call::Head, chain::Fetched, state::{Account, State}, trace::{Event, Step, Target, Trace}
+    call::Head,
+    chain::Fetched,
+    state::{Account, State},
+    trace::{Event, Step, Target, Trace},
 };
 use futures::channel::mpsc;
 use yaevmi_base::{Acc, Int, math::lift};

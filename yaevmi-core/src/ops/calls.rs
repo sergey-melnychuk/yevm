@@ -70,9 +70,10 @@ pub fn call(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut dyn State) -> Ev
         return Err(EvmYield::Fetch(Fetch::Account(address)));
     }
     if let Some(delegate) = state.auth(&address)
-        && state.acc(&address).is_none() {
-            return Err(EvmYield::Fetch(Fetch::Account(delegate)));
-        }
+        && state.acc(&address).is_none()
+    {
+        return Err(EvmYield::Fetch(Fetch::Account(delegate)));
+    }
 
     // EIP-2929: warm/cold address access (use pending warm to survive Fetch+reset)
     let access_cost: i64 = if state.is_cold_acc(&address) {
@@ -168,9 +169,10 @@ pub fn callcode(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut dyn State) -
         return Err(EvmYield::Fetch(Fetch::Account(address)));
     };
     if let Some(delegate) = state.auth(&address)
-        && state.acc(&address).is_none() {
-            return Err(EvmYield::Fetch(Fetch::Account(delegate)));
-        }
+        && state.acc(&address).is_none()
+    {
+        return Err(EvmYield::Fetch(Fetch::Account(delegate)));
+    }
 
     let access_cost: i64 = if state.is_cold_acc(&address) {
         2600
@@ -257,9 +259,10 @@ pub fn delegatecall(
         return Err(EvmYield::Fetch(Fetch::Account(address)));
     };
     if let Some(delegate) = state.auth(&address)
-        && state.acc(&address).is_none() {
-            return Err(EvmYield::Fetch(Fetch::Account(delegate)));
-        }
+        && state.acc(&address).is_none()
+    {
+        return Err(EvmYield::Fetch(Fetch::Account(delegate)));
+    }
 
     let access_cost: i64 = if state.is_cold_acc(&address) {
         2600
@@ -355,9 +358,10 @@ pub fn staticcall(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut dyn State)
         return Err(EvmYield::Fetch(Fetch::Account(address)));
     };
     if let Some(delegate) = state.auth(&address)
-        && state.acc(&address).is_none() {
-            return Err(EvmYield::Fetch(Fetch::Account(delegate)));
-        }
+        && state.acc(&address).is_none()
+    {
+        return Err(EvmYield::Fetch(Fetch::Account(delegate)));
+    }
 
     // EIP-2929: warm/cold address access (applies to precompiles too)
     let access_cost: i64 = if state.is_cold_acc(&address) {

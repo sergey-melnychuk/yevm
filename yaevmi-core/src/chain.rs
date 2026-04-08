@@ -32,10 +32,7 @@ pub enum Fetched {
 
 pub async fn fetch(f: Fetch, state: &mut impl State, chain: &impl Chain) -> Result<()> {
     match f {
-        Fetch::Account(acc)
-            | Fetch::Balance(acc) 
-            | Fetch::Nonce(acc) 
-            | Fetch::Code(acc) => {
+        Fetch::Account(acc) | Fetch::Balance(acc) | Fetch::Nonce(acc) | Fetch::Code(acc) => {
             if state.is_offline() {
                 let Some(Fetched::Account(_, account)) = state.next_fetched() else {
                     return Err(eyre::eyre!("!").into());

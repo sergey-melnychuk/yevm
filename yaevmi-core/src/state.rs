@@ -52,9 +52,13 @@ pub trait State {
     fn emit(&mut self, event: Event) -> usize;
 
     fn save_fetched(&mut self, _fetched: Fetched) {}
-    fn next_fetched(&mut self) -> Option<Fetched> { None }
+    fn next_fetched(&mut self) -> Option<Fetched> {
+        None
+    }
     fn prefetched(&mut self, _: Vec<Fetched>) {}
-    fn is_offline(&self) -> bool { false }
+    fn is_offline(&self) -> bool {
+        false
+    }
 
     fn reset(&mut self) {}
 

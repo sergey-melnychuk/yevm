@@ -1,4 +1,9 @@
-use std::{fs::File, io::{BufReader, BufWriter, Read, Write}, path::Path, time::Instant};
+use std::{
+    fs::File,
+    io::{BufReader, BufWriter, Read, Write},
+    path::Path,
+    time::Instant,
+};
 
 use alloy_provider::ProviderBuilder;
 use eyre::OptionExt;
@@ -9,7 +14,8 @@ use yaevmi_core::{
     call::Receipt,
     chain::{Chain, Fetched},
     exe::{CallResult, Executor},
-    rpc::Rpc, state::State,
+    rpc::Rpc,
+    state::State,
 };
 use yaevmi_misc::hex::parse_vec;
 
@@ -72,7 +78,7 @@ async fn main() -> eyre::Result<()> {
     let path = format!("fetch/{}.json", block);
     let fetches = Path::new(&path);
     let block = if fetches.exists() && index.is_none() {
-        let file = File::open(&fetches)?;
+        let file = File::open(fetches)?;
         let mut reader = BufReader::new(file);
         let mut content = String::new();
         reader.read_to_string(&mut content)?;
@@ -194,7 +200,7 @@ async fn main() -> eyre::Result<()> {
 
     if !fetches.exists() && index.is_none() {
         let fetched = std::mem::take(&mut cache.fetched);
-        let file = File::create(&fetches)?;
+        let file = File::create(fetches)?;
         let mut writer = BufWriter::new(file);
         let content = serde_json::to_vec(&fetched)?;
         writer.write_all(&content)?;
@@ -213,7 +219,7 @@ async fn main() -> eyre::Result<()> {
     } else {
         String::new()
     };
-    if ok.len() > 0 {
+    if !ok.is_empty() {
         println!("{ok}, {stat}");
     }
 
@@ -398,11 +404,10 @@ mod live {
                 // step.debug
                 //     .push(format!("TARGET: {target:0x} (balance={balance:0x})"));
 
-                if let Some(tx) = self.tx.as_ref() {
-                    if tx.blocking_send(step).is_err() {
+                if let Some(tx) = self.tx.as_ref()
+                    && tx.blocking_send(step).is_err() {
                         self.tx = None;
                     }
-                }
             }
         }
 

@@ -112,7 +112,7 @@ mod wasm {
             (call, tx.tx.clone(), block.head)
         };
         let hash = tx.hash;
-        rpc.reset(rpc.block_number - 1).await?;
+        rpc.reset(rpc.block_number - 1, head.parent_hash);
 
         let (ytx, yrx) = mpsc::channel(1024 * 1024);
         let mut cache = Cache::with_sender(ytx);

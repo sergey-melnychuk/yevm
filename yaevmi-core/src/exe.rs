@@ -405,8 +405,11 @@ impl Executor {
 
         // Top-level call to a precompile: run inline, skip the step loop.
         if !frame.is_create && is_precompile(&self.call.to) {
-            let (ok, out, gas_used) =
-                crate::pre::run(self.call.to.as_u64(), &self.call.data.0, frame.evm.gas_remaining());
+            let (ok, out, gas_used) = crate::pre::run(
+                self.call.to.as_u64(),
+                &self.call.data.0,
+                frame.evm.gas_remaining(),
+            );
             let _ = frame.evm.gas_charge(gas_used);
             frame.evm.apply(state);
 
