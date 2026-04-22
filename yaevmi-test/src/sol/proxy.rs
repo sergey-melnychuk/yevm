@@ -18,7 +18,7 @@ async fn test_proxy_delegatecall() -> eyre::Result<()> {
     // --- step 1: deploy Logic ---
     let deploy_logic = Call {
         by: deployer,
-        to: Acc::ZERO,
+        to: None,
         gas: 500_000,
         eth: Int::ZERO,
         data: logic_src.bin.clone(),
@@ -53,7 +53,7 @@ async fn test_proxy_delegatecall() -> eyre::Result<()> {
 
     let deploy_proxy = Call {
         by: deployer,
-        to: Acc::ZERO,
+        to: None,
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(proxy_deploy_data),
@@ -84,7 +84,7 @@ async fn test_proxy_delegatecall() -> eyre::Result<()> {
 
     let init_call = Call {
         by: deployer,
-        to: proxy_addr,
+        to: Some(proxy_addr),
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(init_data),
@@ -101,7 +101,7 @@ async fn test_proxy_delegatecall() -> eyre::Result<()> {
     // Proxy slot 0 = impl), the proxy may be broken. We verify yaevmi matches revm regardless.
     let get_call = Call {
         by: deployer,
-        to: proxy_addr,
+        to: Some(proxy_addr),
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(super::selector("get()")),
@@ -119,7 +119,7 @@ async fn test_proxy_delegatecall() -> eyre::Result<()> {
 
     let upgrade_call = Call {
         by: deployer,
-        to: proxy_addr,
+        to: Some(proxy_addr),
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(upgrade_data),
@@ -138,7 +138,7 @@ async fn test_proxy_delegatecall() -> eyre::Result<()> {
     // --- step 6: sending ETH to Proxy triggers receive() which reverts ---
     let eth_call = Call {
         by: deployer,
-        to: proxy_addr,
+        to: Some(proxy_addr),
         gas: 500_000,
         eth: Int::from(1u64),
         data: Buf::default(),

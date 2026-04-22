@@ -39,7 +39,13 @@ pub fn text(code: &[u8]) -> Vec<String> {
     ret
 }
 
-pub fn dispatch<S: State>(op: u8, evm: &mut Evm, ctx: &Context, call: &Call, state: &mut S) -> EvmResult<()> {
+pub fn dispatch<S: State>(
+    op: u8,
+    evm: &mut Evm,
+    ctx: &Context,
+    call: &Call,
+    state: &mut S,
+) -> EvmResult<()> {
     match op {
         0x00 => basic::stop(evm),
         0x01 => basic::add(evm),
@@ -427,7 +433,7 @@ pub mod tests {
     pub fn call() -> Call {
         Call {
             by: Acc::ZERO,
-            to: Acc::ZERO,
+            to: Some(Acc::ONE),
             gas: 0,
             eth: Int::ZERO,
             data: vec![].into(),

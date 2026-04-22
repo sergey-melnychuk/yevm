@@ -19,7 +19,7 @@ async fn test_caller_callee_chain() -> eyre::Result<()> {
 
     let deploy_call = Call {
         by: deployer,
-        to: Acc::ZERO,
+        to: None,
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(deploy_data),
@@ -48,7 +48,7 @@ async fn test_caller_callee_chain() -> eyre::Result<()> {
     // --- step 2: call Caller.create() to deploy Callee ---
     let create_call = Call {
         by: deployer,
-        to: caller_addr,
+        to: Some(caller_addr),
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(super::selector("create()")),
@@ -77,7 +77,7 @@ async fn test_caller_callee_chain() -> eyre::Result<()> {
 
     let chain_call = Call {
         by: deployer,
-        to: caller_addr,
+        to: Some(caller_addr),
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(call_data),

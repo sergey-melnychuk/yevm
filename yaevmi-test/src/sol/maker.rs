@@ -20,7 +20,7 @@ async fn test_maker_simulate() -> eyre::Result<()> {
     // Deploy Setup (large contract — needs more gas)
     let deploy = Call {
         by: deployer,
-        to: Acc::ZERO,
+        to: None,
         gas: 3_000_000,
         eth: Int::ZERO,
         data: setup_src.bin.clone(),
@@ -48,7 +48,7 @@ async fn test_maker_simulate() -> eyre::Result<()> {
     // swaps, removes liquidity, then reverts with the results.
     let simulate_call = Call {
         by: deployer,
-        to: setup_addr,
+        to: Some(setup_addr),
         gas: 5_000_000,
         eth: Int::ZERO,
         data: Buf(super::selector("simulate()")),

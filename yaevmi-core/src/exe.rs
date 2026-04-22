@@ -75,7 +75,10 @@ pub fn intrinsic(
 ) -> Result<(i64, i64, Int)> {
     let mut total = 21_000i64;
     let mut floor = 21_000i64;
-    let has_code = state.code(&call.to).is_some_and(|(c, _)| !c.0.is_empty());
+    let has_code = call
+        .to
+        .and_then(|to| state.code(&to))
+        .is_some_and(|(c, _)| !c.0.is_empty());
     let is_create = call.is_create() && !has_code;
     if is_create {
         total += 32_000;
@@ -93,8 +96,8 @@ pub fn intrinsic(
     // EIP-2929: pre-warm sender, target, coinbase, and precompile addresses.
     // For CREATE (to==0x0) there is no target; do not warm 0x0.
     state.warm_acc(&call.by);
-    if !is_create {
-        state.warm_acc(&call.to);
+    if let Some(to) = call.to {
+        state.warm_acc(&to);
     }
     state.warm_acc(&head.coinbase);
     for i in 1u64..=0xa {
@@ -239,12 +242,11 @@ pub fn transfer(call: &Call, mode: &CallMode, state: &mut impl State) {
         state.set_value(&call.by, sub([by0, call.eth]));
         let to0 = state.balance(&created).unwrap_or_default();
         state.set_value(&created, add([to0, call.eth]));
-    } else {
+    } else if let Some(to) = call.to {
         let sub = lift(|[a, b]| a - b);
         let add = lift(|[a, b]| a + b);
         let by0 = state.balance(&call.by).unwrap_or_default();
         state.set_value(&call.by, sub([by0, call.eth]));
-        let to = call.to;
         let to0 = state.balance(&to).unwrap_or_default();
         state.set_value(&to, add([to0, call.eth]));
     }
@@ -273,22 +275,24 @@ impl Executor {
         if !self.callstack.is_empty() {
             return Err(Error::Internal("inconsistent state detected".into()));
         }
-    
-        for acc in [&self.call.by, &self.call.to, &head.coinbase] {
-            if acc.is_zero() {
-                continue; // CREATE has no target; do not fetch 0x0
-            }
+        for acc in [&self.call.by, &head.coinbase] {
             if state.acc(acc).is_none() {
                 fetch(Fetch::Account(*acc), state, chain).await?;
                 state.warm_acc(acc);
             }
+        }
+        if let Some(acc) = self.call.to.as_ref()
+            && state.acc(acc).is_none()
+        {
+            fetch(Fetch::Account(*acc), state, chain).await?;
+            state.warm_acc(acc);
         }
 
         if tx.chain_id.is_zero() {
             tx.chain_id = state.get_chain_id().into();
             if tx.chain_id.is_zero() {
                 return Err(Error::UndefinedChainId);
-            }            
+            }
         }
 
         // Pre-transaction validation checks
@@ -317,10 +321,12 @@ impl Executor {
             // return Err(Error::SenderNotEOA);
         }
 
-        let has_code = state
-            .code(&self.call.to)
+        let has_code = self
+            .call
+            .to
+            .and_then(|to| state.code(&to))
             .is_some_and(|(c, _)| !c.0.is_empty())
-            && state.auth(&self.call.to).is_none();
+            && self.call.to.and_then(|to| state.auth(&to)).is_none();
 
         // CREATE address uses sender nonce *before* the tx-level increment (YP / EIP-161).
         let mode = if self.call.is_create() && !has_code {
@@ -409,12 +415,15 @@ impl Executor {
         let _ = frame.evm.gas_charge(intrinsic);
 
         // Top-level call to a precompile: run inline, skip the step loop.
-        if !frame.is_create && is_precompile(&self.call.to) {
-            let (ok, out, gas_used) = crate::pre::run(
-                self.call.to.as_u64(),
-                &self.call.data.0,
-                frame.evm.gas_remaining(),
-            );
+        let call_to_is_precompile = self
+            .call
+            .to
+            .map(|to| is_precompile(&to))
+            .unwrap_or_default();
+        if !frame.is_create && call_to_is_precompile {
+            let id = self.call.to.expect("verified precompile address").as_u64();
+            let (ok, out, gas_used) =
+                crate::pre::run(id, &self.call.data.0, frame.evm.gas_remaining());
             let _ = frame.evm.gas_charge(gas_used);
             frame.evm.apply(state);
 
@@ -552,28 +561,44 @@ impl Executor {
                 }
                 StepResult::Call(call, mode) => {
                     this.evm.apply(state);
-                    if is_precompile(&call.to) {
+                    let call_to_is_precompile =
+                        call.to.map(|to| is_precompile(&to)).unwrap_or_default();
+                    if call_to_is_precompile {
+                        // Load precompile account from chain so its on-chain balance
+                        // is reflected in state (mirrors what prepare() does for regular calls).
+                        if let Some(to) = call.to
+                            && state.acc(&to).is_none()
+                        {
+                            let account = chain.acc(&to).await?;
+                            state.merge(&to, account);
+                        }
+
                         // EIP-211: clear return data before new call
                         this.evm.ret.clear();
 
                         // Precompile runs inline. Replace child-gas reservation with actual used
                         // (avoids OOG when child_gas > remaining); keep access cost.
+                        let id = call.to.expect("verified precompile address").as_u64();
                         let (ok, out, gas_used) =
-                            crate::pre::run(call.to.as_u64(), &call.data.0, call.gas as i64);
+                            crate::pre::run(id, &call.data.0, call.gas as i64);
                         this.evm.ret = out.clone();
                         this.evm.pending_gas_charge -= call.gas as i64;
                         this.evm.pending_gas_charge += gas_used;
 
                         // Value transfer only on success — failure reverts all child-frame
                         // state changes, including the value transfer.
-                        if ok && !call.eth.is_zero() && matches!(mode, CallMode::Call(..)) {
+                        if ok
+                            && !call.eth.is_zero()
+                            && matches!(mode, CallMode::Call(..))
+                            && let Some(call_to) = call.to
+                        {
                             let sub = lift(|[a, b]| a - b);
                             let add = lift(|[a, b]| a + b);
                             let by0 = state.balance(&call.by).unwrap_or_default();
-                            let to0 = state.balance(&call.to).unwrap_or_default();
-                            if call.by != call.to {
+                            let to0 = state.balance(&call_to).unwrap_or_default();
+                            if call.by != call_to {
                                 state.set_value(&call.by, sub([by0, call.eth]));
-                                state.set_value(&call.to, add([to0, call.eth]));
+                                state.set_value(&call_to, add([to0, call.eth]));
                             }
                         }
 
@@ -676,7 +701,7 @@ impl Executor {
                         }
 
                         // Create account with nonce=1 (EIP-161), preserving pre-existing balance
-                        
+
                         if state.acc(&created).is_none() {
                             fetch(Fetch::Account(created), state, chain).await?;
                         }
@@ -756,8 +781,9 @@ impl Executor {
 
                         // CALLCODE: value stays with self (by == this), no actual transfer
                         // CALL: value goes from caller to callee
-                        if matches!(mode, CallMode::Call(..)) {
-                            let to = call.to;
+                        if matches!(mode, CallMode::Call(..))
+                            && let Some(to) = call.to
+                        {
                             let add = lift(|[a, b]| a + b);
                             let sub = lift(|[a, b]| a - b);
                             let to0 = state.balance(&to).unwrap_or_default();
@@ -898,21 +924,24 @@ async fn prepare(
     let is_create = matches!(mode, CallMode::Create(_) | CallMode::Create2(_));
     let code = if is_create {
         std::mem::take(&mut call.data)
-    } else if let Some((code, _)) = state.code(&call.to) {
-        code
     } else {
-        fetch(Fetch::Account(call.to), state, chain).await?;
-        if let Some(account) = state.acc(&call.to) {
-            account.code.0.clone()
+        let call_to = call.to.expect("checked non-create call");
+        if let Some((code, _)) = state.code(&call_to) {
+            code
         } else {
-            Buf::default()
+            fetch(Fetch::Account(call_to), state, chain).await?;
+            if let Some(account) = state.acc(&call_to) {
+                account.code.0.clone()
+            } else {
+                Buf::default()
+            }
         }
     };
     // EIP-7702: resolve delegation after code is loaded.
     // Revm's `load_account_delegated` marks both the delegated account and the implementation
     // address warm when resolving code for a frame; mirror that so *CALL does not charge cold
     // access for an address already loaded for execution (see revm-context JournalInner).
-    let code = if let Some(delegate) = state.auth(&call.to) {
+    let code = if let Some(delegate) = call.to.and_then(|to| state.auth(&to)) {
         if let Some((code, _)) = state.code(&delegate) {
             state.warm_acc(&delegate);
             code
@@ -941,7 +970,7 @@ async fn prepare(
     let this = match mode {
         CallMode::Create(acc) => acc,
         CallMode::Create2(acc) => acc,
-        CallMode::Call(_, _) | CallMode::Static(_, _) => call.to,
+        CallMode::Call(_, _) | CallMode::Static(_, _) => call.to.expect("CALL must have 'to' set"),
         CallMode::CallCode(_, _) | CallMode::Delegate(_, _) => {
             ctx.map(|c| c.this).unwrap_or(call.by)
         }

@@ -1,4 +1,4 @@
-use yaevmi_base::{Acc, Int, acc};
+use yaevmi_base::{Int, acc};
 use yaevmi_core::{Call, state::Account};
 use yaevmi_misc::buf::Buf;
 
@@ -24,7 +24,7 @@ async fn test_deploy_counter() -> eyre::Result<()> {
     head.gas_limit = 1_000_000.into();
     let call = Call {
         by: sender,
-        to: Acc::ZERO,
+        to: None,
         gas: 1_000_000,
         eth: Int::ZERO,
         data: contract.bin.clone(),

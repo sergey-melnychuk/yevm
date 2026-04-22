@@ -9,7 +9,7 @@ pub fn push(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmResul
     let op = evm.code[evm.pc];
     let len = match op {
         0x60..=0x7F => op as usize - 0x5F, // PUSH1=1 .. PUSH32=32
-        _ => 0,                              // PUSH0
+        _ => 0,                            // PUSH0
     };
     if len == 0 {
         evm.gas_charge(2)?;

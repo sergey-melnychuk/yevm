@@ -16,7 +16,7 @@ async fn test_flash_loan() -> eyre::Result<()> {
     // --- step 1: deploy Flash ---
     let deploy_flash = Call {
         by: deployer,
-        to: Acc::ZERO,
+        to: None,
         gas: 500_000,
         eth: Int::ZERO,
         data: flash_src.bin.clone(),
@@ -51,7 +51,7 @@ async fn test_flash_loan() -> eyre::Result<()> {
 
     let deploy_borrower = Call {
         by: deployer,
-        to: Acc::ZERO,
+        to: None,
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(borrower_deploy),
@@ -73,7 +73,7 @@ async fn test_flash_loan() -> eyre::Result<()> {
     // --- step 3: fund Flash with 5 ETH (send ETH to its receive()) ---
     let fund_flash = Call {
         by: deployer,
-        to: flash_addr,
+        to: Some(flash_addr),
         gas: 500_000,
         eth: super::ethers(5),
         data: Buf::default(),
@@ -89,7 +89,7 @@ async fn test_flash_loan() -> eyre::Result<()> {
     // --- step 4: fund MockBorrower with 2 ETH (so it can repay) ---
     let fund_borrower = Call {
         by: deployer,
-        to: borrower_addr,
+        to: Some(borrower_addr),
         gas: 500_000,
         eth: super::ethers(2),
         data: Buf::default(),
@@ -114,7 +114,7 @@ async fn test_flash_loan() -> eyre::Result<()> {
 
     let loan_call = Call {
         by: deployer,
-        to: flash_addr,
+        to: Some(flash_addr),
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(loan_data),

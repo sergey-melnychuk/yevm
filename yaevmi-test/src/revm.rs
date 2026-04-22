@@ -165,10 +165,10 @@ pub async fn run(
         tx.max_priority_fee_per_gas.as_u128()
     };
 
-    let kind = if call.is_create() {
-        TxKind::Create
+    let kind = if let Some(to) = call.to {
+        TxKind::Call(to_addr(&to))
     } else {
-        TxKind::Call(to_addr(&call.to))
+        TxKind::Create
     };
     let tx = TxEnv::builder()
         .caller(to_addr(&call.by))

@@ -169,7 +169,7 @@ async fn test_meta_tx() -> eyre::Result<()> {
     let call_data = encode_execute(&signer, &box_addr, &set_data, 0, &sig65);
     let call = Call {
         by: relayer,
-        to: auth_addr,
+        to: Some(auth_addr),
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(call_data),

@@ -17,7 +17,7 @@ async fn test_token_buy_use_give() -> eyre::Result<()> {
     // --- step 1: deploy MockERC20 ---
     let deploy_mock = Call {
         by: deployer,
-        to: Acc::ZERO,
+        to: None,
         gas: 500_000,
         eth: Int::ZERO,
         data: mock_src.bin.clone(),
@@ -70,7 +70,7 @@ async fn test_token_buy_use_give() -> eyre::Result<()> {
 
     let deploy_token = Call {
         by: deployer,
-        to: Acc::ZERO,
+        to: None,
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(token_deploy),
@@ -96,7 +96,7 @@ async fn test_token_buy_use_give() -> eyre::Result<()> {
 
     let mint_call = Call {
         by: deployer,
-        to: mock_addr,
+        to: Some(mock_addr),
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(mint_data),
@@ -115,7 +115,7 @@ async fn test_token_buy_use_give() -> eyre::Result<()> {
 
     let approve_call = Call {
         by: buyer,
-        to: mock_addr,
+        to: Some(mock_addr),
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(approve_data),
@@ -136,7 +136,7 @@ async fn test_token_buy_use_give() -> eyre::Result<()> {
     // --- step 5: buyer calls buy() on Token ---
     let buy_call = Call {
         by: buyer,
-        to: token_addr,
+        to: Some(token_addr),
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(super::selector("buy()")),
@@ -151,7 +151,7 @@ async fn test_token_buy_use_give() -> eyre::Result<()> {
     // --- step 6: buyer calls use() on Token ---
     let use_call = Call {
         by: buyer,
-        to: token_addr,
+        to: Some(token_addr),
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(super::selector("use()")),
@@ -168,7 +168,7 @@ async fn test_token_buy_use_give() -> eyre::Result<()> {
     check_data.extend_from_slice(buyer.to::<32>().as_ref());
     let check_call = Call {
         by: deployer,
-        to: token_addr,
+        to: Some(token_addr),
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(check_data),

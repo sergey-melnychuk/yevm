@@ -318,7 +318,12 @@ pub fn chainid(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmRe
     Ok(())
 }
 
-pub fn selfbalance<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> EvmResult<()> {
+pub fn selfbalance<S: State>(
+    evm: &mut Evm,
+    ctx: &Context,
+    _: &Call,
+    state: &mut S,
+) -> EvmResult<()> {
     evm.gas_charge(5)?;
     let acc: Acc = ctx.this;
     let Some(balance) = state.balance(&acc) else {

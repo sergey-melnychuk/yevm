@@ -121,7 +121,7 @@ pub fn build_call_tx(tc: &TestCase, idx: &dto::Indexes) -> (Call, Tx) {
     (
         Call {
             by: tc.transaction.sender,
-            to: tc.transaction.to.unwrap_or(Acc::ZERO),
+            to: tc.transaction.to,
             gas: tc.transaction.gas_limit[idx.gas].as_u64(),
             eth: tc.transaction.value[idx.value],
             data: tc.transaction.data[idx.data].as_slice().to_vec().into(),

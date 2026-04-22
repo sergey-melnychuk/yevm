@@ -5,7 +5,9 @@ use yaevmi_misc::{buf::Buf, hex::Hex, keccak256};
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Call {
     pub by: Acc,
-    pub to: Acc,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<Acc>,
     pub gas: u64,
     pub eth: Int,
     pub data: Buf,
@@ -13,7 +15,7 @@ pub struct Call {
 
 impl Call {
     pub fn is_create(&self) -> bool {
-        self.to.is_zero()
+        self.to.is_none()
     }
 
     pub fn builder() -> Builder {
@@ -34,7 +36,7 @@ impl Builder {
     pub fn build(self) -> Call {
         Call {
             by: self.by.unwrap_or_default(),
-            to: self.to.unwrap_or_default(),
+            to: self.to,
             gas: self.gas.unwrap_or_default(),
             eth: self.eth.unwrap_or_default(),
             data: self.data,
@@ -183,7 +185,7 @@ impl From<TxCall> for Call {
     fn from(call: TxCall) -> Self {
         Call {
             by: call.from,
-            to: call.to.unwrap_or_default(),
+            to: call.to,
             gas: call.gas.as_u64(),
             eth: call.value,
             data: call.input,

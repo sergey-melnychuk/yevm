@@ -476,7 +476,11 @@ impl Evm {
                     step.gas = self.gas.remaining().max(0) as u64;
                     step.stack = self.stack.len();
                     step.memory = self.memory.len();
-                    step.debug.push(format!("CALL:to={},gas={}", call.to, call.gas));
+                    step.debug.push(format!(
+                        "CALL:to={},gas={}",
+                        call.to.unwrap_or_default(),
+                        call.gas
+                    ));
                     if !call.eth.is_zero() {
                         step.debug.push(format!("CALL:eth={}", call.eth));
                     }

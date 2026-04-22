@@ -1,4 +1,9 @@
-use std::{fs::File, io::{BufReader, Read}, path::Path, time::Instant};
+use std::{
+    fs::File,
+    io::{BufReader, Read},
+    path::Path,
+    time::Instant,
+};
 
 use yaevmi_core::{cache::Cache, chain::Fetched, exe::Executor, rpc::Rpc, state::State};
 
@@ -24,7 +29,7 @@ async fn main() -> eyre::Result<()> {
         let Some(Fetched::ChainId(chain_id)) = fetched.first().cloned() else {
             eyre::bail!("Cannot find fetched chain id");
         };
-        let Some(Fetched::Block(block)) = fetched.iter().nth(1).cloned() else {
+        let Some(Fetched::Block(block)) = fetched.get(1).cloned() else {
             eyre::bail!("Cannot find fetched block");
         };
         (block, chain_id, fetched)

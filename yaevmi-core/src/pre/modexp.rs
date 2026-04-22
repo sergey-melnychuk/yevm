@@ -113,7 +113,7 @@ fn calc_iteration_count(e_size: u64, b_size: u64, input: &[u8]) -> u64 {
         if e.is_zero() {
             return 0;
         }
-        let bits = e.bits() as u64;
+        let bits = e.bits();
         bits - 1
     } else {
         // Get the first 32 bytes of the exponent
@@ -130,7 +130,7 @@ fn calc_iteration_count(e_size: u64, b_size: u64, input: &[u8]) -> u64 {
         let head_bits = if e_head.is_zero() {
             0u64
         } else {
-            e_head.bits() as u64 - 1
+            e_head.bits() - 1
         };
         // EIP-7883: multiplier is 16 (was 8 in EIP-2565)
         head_bits.saturating_add(16u64.saturating_mul(e_size - 32))

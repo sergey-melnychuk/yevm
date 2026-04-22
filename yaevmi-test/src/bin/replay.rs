@@ -8,14 +8,14 @@ use std::{
 use alloy_provider::ProviderBuilder;
 use eyre::OptionExt;
 use futures::{StreamExt, channel::mpsc};
-use yaevmi_base::int;
+use yaevmi_base::{Acc, Int, int};
 use yaevmi_core::{
     cache::Cache,
     call::Receipt,
     chain::{Chain, Fetched},
     exe::{CallResult, Executor},
     rpc::Rpc,
-    state::State,
+    state::{Account, State},
 };
 use yaevmi_misc::hex::parse_vec;
 
@@ -81,6 +81,7 @@ async fn main() -> eyre::Result<()> {
     let (ytx, mut yrx) = mpsc::channel(4 * 1024 * 1024);
     let mut cache = Cache::with_sender(ytx);
 
+    // TODO: make single-tx also replayable? just save all fetches to block:index.js
     std::fs::create_dir_all("fetch")?;
     let path = format!("fetch/{}.json", block);
     let fetches = Path::new(&path);
@@ -94,7 +95,7 @@ async fn main() -> eyre::Result<()> {
             eyre::bail!("Cannot find fetched chain id");
         };
         cache.set_chain_id(chain_id);
-        let Some(Fetched::Block(block)) = fetched.iter().nth(1).cloned() else {
+        let Some(Fetched::Block(block)) = fetched.get(1).cloned() else {
             eyre::bail!("Cannot find stored block");
         };
         cache.prefetched(fetched);
@@ -147,16 +148,28 @@ async fn main() -> eyre::Result<()> {
     let txs = block.txs.clone();
     let pack = (txs.clone(), head.clone(), index, chain_id);
 
+    let (revm_result_tx, mut revm_result_rx) = tokio::sync::mpsc::channel::<RevmResult>(1);
+
     let provider = ProviderBuilder::new().connect(&url).await?;
     tokio::task::spawn_blocking(move || {
         let (txs, head, index, network_chain_id) = pack;
         if let Some(i) = index {
             let tx = &txs[i];
             let (call, tx) = (tx.call.clone().into(), tx.tx.clone());
-            if let Err(e) = live::run_one(call, tx, head, network_chain_id, rtx, provider) {
+            if let Err(e) = live::run_one(
+                call,
+                tx,
+                head,
+                network_chain_id,
+                rtx,
+                revm_result_tx,
+                provider,
+            ) {
                 eprintln!("REVM replay error (no trace steps): {e:#}");
             }
-        } else if let Err(e) = live::run_all(network_chain_id, &txs, head, rtx, provider) {
+        } else if let Err(e) =
+            live::run_all(network_chain_id, &txs, head, rtx, revm_result_tx, provider)
+        {
             eprintln!("REVM replay error (no trace steps): {e:#}");
         }
     });
@@ -191,7 +204,17 @@ async fn main() -> eyre::Result<()> {
         let receipt = rpc.receipt(hash).await?;
         let ty = receipt.r#type.as_u8();
 
-        let violations = check(result, receipt);
+        // TODO: make revm checks optional? (e.g. --revm flag)
+        let Some(RevmResult {
+            call: revm_call,
+            state: revm_state,
+        }) = revm_result_rx.recv().await
+        else {
+            eyre::bail!("revm result unavailable");
+        };
+        let mut violations = check_result(result, receipt, Some(revm_call));
+        check_state(revm_state, &mut cache, &mut violations);
+
         let stats = if fetching > 0 {
             format!("{ms}ms/{}ms, fetches:{fetches}/{fetching}ms", ms - fetching)
         } else {
@@ -243,40 +266,149 @@ async fn main() -> eyre::Result<()> {
     Ok(())
 }
 
-fn check(result: CallResult, receipt: Receipt) -> Vec<String> {
-    let mut ret = Vec::new();
+fn check_result(result: CallResult, receipt: Receipt, revm: Option<CallResult>) -> Vec<String> {
+    let mut violations = Vec::new();
     let used_gas = receipt.gas_used.as_u64() as i64;
     match result {
-        CallResult::Done {
-            status,
-            ret: _,
-            gas,
-        } => {
+        CallResult::Done { status, ret, gas } => {
             if status != receipt.status {
-                ret.push(format!(
+                violations.push(format!(
                     " ok: have {} want {}",
                     status.as_u8(),
                     receipt.status.as_u8()
                 ));
             }
             if gas.finalized != used_gas {
-                ret.push(format!("gas: have {} want {}", gas.finalized, used_gas));
+                violations.push(format!("gas: have {} want {}", gas.finalized, used_gas));
+            }
+
+            if let Some(revm) = revm {
+                let CallResult::Done {
+                    status: revm_status,
+                    ret: revm_ret,
+                    gas: revm_gas,
+                } = revm
+                else {
+                    violations.push(format!(
+                        "revm: call result mismatch\n  have {ret:#?}\n revm {revm:#?}"
+                    ));
+                    return violations;
+                };
+                if revm_status == receipt.status && status != revm_status {
+                    violations.push(format!(
+                        "revm: status mismatch: have {status} want {revm_status}"
+                    ));
+                }
+                if revm_gas.finalized == used_gas && gas.finalized != revm_gas.finalized {
+                    violations.push(format!(
+                        "revm: gas mismatch: have {} want {}",
+                        gas.finalized, revm_gas.finalized
+                    ));
+                }
+                if ret != revm_ret {
+                    violations.push(format!(
+                        "revm: ret mismatch: have {} bytes want {} bytes",
+                        ret.len(),
+                        revm_ret.len()
+                    ));
+                }
             }
         }
-        CallResult::Created { acc, code: _, gas } => {
+        CallResult::Created { acc, ref code, gas } => {
             if Some(acc) != receipt.contract_address {
-                ret.push(format!(
+                violations.push(format!(
                     "new: have {} want {}",
                     acc,
                     receipt.contract_address.unwrap_or_default()
                 ));
             }
             if gas.finalized != used_gas {
-                ret.push(format!("gas: have {} want {}", gas.finalized, used_gas));
+                violations.push(format!("gas: have {} want {}", gas.finalized, used_gas));
+            }
+
+            if let Some(revm) = revm {
+                let CallResult::Created {
+                    acc: revm_acc,
+                    code: revm_code,
+                    gas: revm_gas,
+                } = revm
+                else {
+                    violations.push(format!(
+                        "revm: call result mismatch\n  have {result:#?}\n revm {revm:#?}"
+                    ));
+                    return violations;
+                };
+                if acc != revm_acc {
+                    violations.push(format!(
+                        "revm: created mismatch: have {acc} want {revm_acc}"
+                    ));
+                }
+                if code != &revm_code {
+                    violations.push(format!(
+                        "revm: code mismatch: have {} bytes want {} bytes",
+                        code.len(),
+                        revm_code.len()
+                    ));
+                }
+                if gas.finalized != revm_gas.finalized {
+                    violations.push(format!(
+                        "revm: gas mismatch: have {} want {}",
+                        gas.finalized, revm_gas.finalized
+                    ));
+                }
             }
         }
     }
-    ret
+    // TODO: check against revm result
+    violations
+}
+
+pub type Env = Vec<(Acc, Account, Vec<(Int, Int)>)>;
+
+fn check_state(state: Env, cache: &mut Cache, violations: &mut Vec<String>) {
+    for (acc, account, storage) in state {
+        let is_empty = account.value.is_zero()
+            && account.nonce.is_zero()
+            && account.code.0.is_empty()
+            && (storage.is_empty() || storage.iter().all(|(_, v)| v.is_zero()));
+        if is_empty {
+            continue;
+        }
+
+        let actual = cache.account(&acc).cloned().unwrap_or_default();
+        if actual.code.0 != account.code.0 {
+            violations.push(format!(
+                "REVM: account {acc} code mismatch\n  want {} bytes\n  have {} bytes",
+                account.code.0.len(),
+                actual.code.0.len()
+            ));
+        }
+        if actual.value != account.value {
+            violations.push(format!(
+                "REVM: account {acc} value mismatch\n  want {}\n  have {}",
+                account.value, actual.value
+            ));
+        }
+        if actual.nonce != account.nonce {
+            violations.push(format!(
+                "REVM: account {acc} nonce mismatch\n  want {}\n  have {}",
+                account.nonce, actual.nonce
+            ));
+        }
+        for (key, val) in storage {
+            let (act, _) = cache.get(&acc, &key).unwrap_or_default();
+            if act != val {
+                violations.push(format!(
+                    "REVM: account {acc} storage [{key}] mismatch:\nwant {val}\nhave {act}"
+                ));
+            }
+        }
+    }
+}
+
+pub struct RevmResult {
+    pub call: CallResult,
+    pub state: Env,
 }
 
 // TODO: run embedded database for acc/state storage
@@ -289,9 +421,11 @@ fn check(result: CallResult, receipt: Receipt) -> Vec<String> {
 
 mod live {
     use alloy_eip7702::{Authorization, SignedAuthorization};
+    use alloy_primitives::map::FbBuildHasher;
     use alloy_primitives::{Address as AlloyAddress, U256 as AlloyU256};
     use alloy_provider::Provider;
     use revm::bytecode::opcode::OpCode;
+    use revm::context::result::{ExecutionResult, HaltReason, Output};
     use revm::context::transaction::{AccessList, AccessListItem};
     use revm::context::{ContextTr, TxEnv};
     use revm::context_interface::result::ExecResultAndState;
@@ -305,9 +439,13 @@ mod live {
     use tokio::sync::mpsc;
     use yaevmi_base::{Acc, Int};
     use yaevmi_core::call::TxFull;
+    use yaevmi_core::evm::Gas;
+    use yaevmi_core::state::Account;
     use yaevmi_core::trace::Step;
     use yaevmi_core::{Call, Head, Tx};
     use yaevmi_misc::buf::Buf;
+
+    use crate::RevmResult;
 
     fn signed_authorizations(tx: &Tx) -> Vec<SignedAuthorization> {
         tx.authorization_list
@@ -401,28 +539,19 @@ mod live {
                 {
                     step.debug.push(format!("SSTORE: key={key:?}"));
                     step.debug.push(format!("SSTORE: val={val:?}"));
-                }
-
-                if step.name == "CALLER" {
+                } else if step.name == "CALLER" {
                     let caller = interp.stack.peek(0).unwrap_or_default();
                     step.debug.push(format!("CALLER: {caller:0x}"));
-                }
-                if step.name == "BALANCE" {
+                } else if step.name == "BALANCE" {
                     let balance = interp.stack.peek(0).unwrap_or_default();
                     step.debug.push(format!("BALANCE: {balance:0x}"));
                 }
-                // let target = interp.input.target_address;
-                // let balance = ctx
-                //     .balance(interp.input.target_address)
-                //     .map(|state| state.data)
-                //     .unwrap_or_default();
-                // step.debug
-                //     .push(format!("TARGET: {target:0x} (balance={balance:0x})"));
 
                 if let Some(tx) = self.tx.as_ref()
-                    && tx.blocking_send(step).is_err() {
-                        self.tx = None;
-                    }
+                    && tx.blocking_send(step).is_err()
+                {
+                    self.tx = None;
+                }
             }
         }
 
@@ -454,6 +583,7 @@ mod live {
         txs: &[TxFull],
         head: Head,
         sender: mpsc::Sender<Step>,
+        result_sender: mpsc::Sender<RevmResult>,
         provider: impl Provider + Clone,
     ) -> eyre::Result<()> {
         let to_addr = |a: &Acc| Address::from(<[u8; 20]>::try_from(a.as_ref()).unwrap());
@@ -496,10 +626,10 @@ mod live {
                 tx.max_priority_fee_per_gas.as_u128()
             };
 
-            let kind = if call.is_create() {
-                TxKind::Create
+            let kind = if let Some(to) = call.to {
+                TxKind::Call(to_addr(&to))
             } else {
-                TxKind::Call(to_addr(&call.to))
+                TxKind::Create
             };
             let tx = TxEnv::builder()
                 .caller(to_addr(&call.by))
@@ -535,20 +665,23 @@ mod live {
                 .build()
                 .map_err(|e| eyre::eyre!("{e:?}"))?;
 
-            let ExecResultAndState { result: _, state } = evm.inspect_tx(tx)?;
-            evm.commit(state);
+            let ExecResultAndState { result, state } = evm.inspect_tx(tx)?;
+            evm.commit(state.clone());
+
+            let revm_result = to_revm_result(result, state);
+            result_sender.blocking_send(revm_result)?;
         }
         let _ = evm.inspector.tx.take();
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn run_one(
         call: Call,
         tx: Tx,
         head: Head,
         network_chain_id: u64,
         sender: mpsc::Sender<Step>,
+        result_sender: mpsc::Sender<RevmResult>,
         provider: impl Provider + Clone,
     ) -> eyre::Result<()> {
         let to_addr = |a: &Acc| Address::from(<[u8; 20]>::try_from(a.as_ref()).unwrap());
@@ -584,10 +717,10 @@ mod live {
             tx.max_priority_fee_per_gas.as_u128()
         };
 
-        let kind = if call.is_create() {
-            TxKind::Create
+        let kind = if let Some(to) = call.to {
+            TxKind::Call(to_addr(&to))
         } else {
-            TxKind::Call(to_addr(&call.to))
+            TxKind::Create
         };
         let tx_env = TxEnv::builder()
             .caller(to_addr(&call.by))
@@ -624,11 +757,121 @@ mod live {
             ..Tracer::default()
         };
         let mut evm = ctx.build_mainnet_with_inspector(inspector);
-        let ExecResultAndState {
-            result: _,
-            state: _,
-        } = evm.inspect_tx(tx_env)?;
+        let ExecResultAndState { result, state } = evm.inspect_tx(tx_env)?;
+        let revm_result = to_revm_result(result, state);
+        result_sender.blocking_send(revm_result)?;
         let _ = evm.inspector.tx.take();
         Ok(())
+    }
+
+    fn to_revm_result(
+        result: ExecutionResult<HaltReason>,
+        state: revm::primitives::HashMap<Address, revm::state::Account, FbBuildHasher<20>>,
+    ) -> RevmResult {
+        RevmResult {
+            call: match result {
+                ExecutionResult::Success {
+                    reason: _,
+                    gas,
+                    logs: _,
+                    output: Output::Call(ret),
+                } => yaevmi_core::exe::CallResult::Done {
+                    status: Int::ONE,
+                    ret: ret.to_vec().into(),
+                    gas: Gas {
+                        limit: 0,
+                        spent: 0,
+                        refund: 0,
+                        finalized: gas.used() as i64,
+                    },
+                },
+                ExecutionResult::Success {
+                    reason: _,
+                    gas,
+                    logs: _,
+                    output: Output::Create(code, Some(address)),
+                } => yaevmi_core::exe::CallResult::Created {
+                    acc: Acc::from(address.as_slice()),
+                    code: code.to_vec().into(),
+                    gas: Gas {
+                        limit: 0,
+                        spent: 0,
+                        refund: 0,
+                        finalized: gas.used() as i64,
+                    },
+                },
+                ExecutionResult::Success {
+                    reason: _,
+                    gas,
+                    logs: _,
+                    output: Output::Create(code, None),
+                } => yaevmi_core::exe::CallResult::Created {
+                    acc: Acc::ZERO,
+                    code: code.to_vec().into(),
+                    gas: Gas {
+                        limit: 0,
+                        spent: 0,
+                        refund: 0,
+                        finalized: gas.used() as i64,
+                    },
+                },
+                ExecutionResult::Revert {
+                    gas,
+                    logs: _,
+                    output: ret,
+                } => yaevmi_core::exe::CallResult::Done {
+                    status: Int::ZERO,
+                    ret: ret.to_vec().into(),
+                    gas: Gas {
+                        limit: 0,
+                        spent: 0,
+                        refund: 0,
+                        finalized: gas.used() as i64,
+                    },
+                },
+                ExecutionResult::Halt {
+                    reason: _,
+                    gas,
+                    logs: _,
+                } => yaevmi_core::exe::CallResult::Done {
+                    status: Int::ZERO,
+                    ret: vec![].into(),
+                    gas: Gas {
+                        limit: 0,
+                        spent: 0,
+                        refund: 0,
+                        finalized: gas.used() as i64,
+                    },
+                },
+            },
+            state: state
+                .into_iter()
+                .map(|(address, account)| {
+                    let storage = account
+                        .storage
+                        .into_iter()
+                        .map(|(slot, value)| {
+                            (
+                                Int::from(slot.to_be_bytes::<32>().as_slice()),
+                                Int::from(value.present_value.to_be_bytes::<32>().as_slice()),
+                            )
+                        })
+                        .collect();
+                    let bytecode = account.info.code.unwrap_or_default();
+                    let code = if bytecode.is_empty() {
+                        Buf::default()
+                    } else {
+                        bytecode.original_byte_slice().to_vec().into()
+                    };
+                    let account = Account {
+                        value: Int::from(account.info.balance.to_be_bytes::<32>().as_slice()),
+                        nonce: account.info.nonce.into(),
+                        code: (code, Int::ZERO),
+                    };
+                    let acc = Acc::from(address.as_slice());
+                    (acc, account, storage)
+                })
+                .collect(),
+        }
     }
 }

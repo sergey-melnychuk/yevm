@@ -37,7 +37,9 @@ pub async fn fetch(f: Fetch, state: &mut impl State, chain: &impl Chain) -> Resu
             if state.is_offline() {
                 let next = state.next_fetched();
                 let Some(Fetched::Account(_, account)) = next else {
-                    return Err(eyre::eyre!("Offline fetch: expected account but got {next:?}").into());
+                    return Err(
+                        eyre::eyre!("Offline fetch: expected account but got {next:?}").into(),
+                    );
                 };
                 state.merge(&acc, account.clone());
             } else {
@@ -51,7 +53,9 @@ pub async fn fetch(f: Fetch, state: &mut impl State, chain: &impl Chain) -> Resu
             if state.is_offline() {
                 let next = state.next_fetched();
                 let Some(Fetched::Hash(number, hash)) = next else {
-                    return Err(eyre::eyre!("Offline fetch: expected block hash but got {next:?}").into());
+                    return Err(
+                        eyre::eyre!("Offline fetch: expected block hash but got {next:?}").into(),
+                    );
                 };
                 state.hash(number, hash);
             } else {
@@ -69,7 +73,9 @@ pub async fn fetch(f: Fetch, state: &mut impl State, chain: &impl Chain) -> Resu
             if state.is_offline() {
                 let next = state.next_fetched();
                 let Some(Fetched::State(_, _, val)) = next else {
-                    return Err(eyre::eyre!("Offline fetch: expected state cell but got {next:?}").into());
+                    return Err(
+                        eyre::eyre!("Offline fetch: expected state cell but got {next:?}").into(),
+                    );
                 };
                 state.init(&acc, &key, val);
             } else {

@@ -38,7 +38,7 @@ pub fn create<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -
 
     let call = Call {
         by: ctx.this,
-        to: Acc::ZERO,
+        to: None,
         gas,
         eth: value,
         data: data.into(),
@@ -137,7 +137,7 @@ pub fn call<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> 
 
     let call = Call {
         by: ctx.this,
-        to: address,
+        to: Some(address),
         gas,
         eth: value,
         data: data.to_vec().into(),
@@ -212,7 +212,7 @@ pub fn callcode<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S)
 
     let call = Call {
         by: ctx.this,
-        to: address,
+        to: Some(address),
         gas,
         eth: value,
         data: data.to_vec().into(),
@@ -294,7 +294,7 @@ pub fn delegatecall<S: State>(
     // DELEGATECALL preserves msg.sender and msg.value from the parent frame
     let inner_call = Call {
         by: call.by,
-        to: address,
+        to: Some(address),
         gas,
         eth: call.eth,
         data: data.to_vec().into(),
@@ -328,7 +328,7 @@ pub fn create2(evm: &mut Evm, ctx: &Context, _: &Call, _: &mut dyn State) -> Evm
 
     let call = Call {
         by: ctx.this,
-        to: Acc::ZERO,
+        to: None,
         gas,
         eth: value,
         data: data.into(),
@@ -337,7 +337,12 @@ pub fn create2(evm: &mut Evm, ctx: &Context, _: &Call, _: &mut dyn State) -> Evm
     Err(EvmYield::Call(call, CallMode::Create2(address)))
 }
 
-pub fn staticcall<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> EvmResult<()> {
+pub fn staticcall<S: State>(
+    evm: &mut Evm,
+    ctx: &Context,
+    _: &Call,
+    state: &mut S,
+) -> EvmResult<()> {
     let [
         gas_arg,
         address,
@@ -398,7 +403,7 @@ pub fn staticcall<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut 
 
     let call = Call {
         by: ctx.this,
-        to: address,
+        to: Some(address),
         gas,
         eth: Int::ZERO,
         data: data.to_vec().into(),

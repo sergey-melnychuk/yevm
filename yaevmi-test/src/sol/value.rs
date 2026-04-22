@@ -15,7 +15,7 @@ async fn test_vault_give_move_take() -> eyre::Result<()> {
     // Deploy Vault
     let deploy = Call {
         by: alice,
-        to: Acc::ZERO,
+        to: None,
         gas: 500_000,
         eth: Int::ZERO,
         data: vault_src.bin.clone(),
@@ -54,7 +54,7 @@ async fn test_vault_give_move_take() -> eyre::Result<()> {
     // Alice calls give() with 1 ETH
     let give_call = Call {
         by: alice,
-        to: vault_addr,
+        to: Some(vault_addr),
         gas: 500_000,
         eth: super::ethers(1),
         data: Buf(super::selector("give()")),
@@ -71,7 +71,7 @@ async fn test_vault_give_move_take() -> eyre::Result<()> {
     have_data.extend_from_slice(alice.to::<32>().as_ref());
     let have_call = Call {
         by: alice,
-        to: vault_addr,
+        to: Some(vault_addr),
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(have_data),
@@ -87,7 +87,7 @@ async fn test_vault_give_move_take() -> eyre::Result<()> {
     move_data.extend_from_slice(Int::from(100u64).as_ref());
     let move_call = Call {
         by: alice,
-        to: vault_addr,
+        to: Some(vault_addr),
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(move_data),
@@ -104,7 +104,7 @@ async fn test_vault_give_move_take() -> eyre::Result<()> {
     take_data.extend_from_slice(Int::from(50u64).as_ref());
     let take_call = Call {
         by: bob,
-        to: vault_addr,
+        to: Some(vault_addr),
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(take_data),

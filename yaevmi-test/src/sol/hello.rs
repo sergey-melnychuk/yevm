@@ -14,7 +14,7 @@ async fn test_hello_deploy_and_read() -> eyre::Result<()> {
     // Deploy Hello
     let deploy = Call {
         by: deployer,
-        to: Acc::ZERO,
+        to: None,
         gas: 500_000,
         eth: Int::ZERO,
         data: hello_src.bin.clone(),
@@ -42,7 +42,7 @@ async fn test_hello_deploy_and_read() -> eyre::Result<()> {
     let env1 = res.4;
     let read_call = Call {
         by: deployer,
-        to: hello_addr,
+        to: Some(hello_addr),
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(super::selector("message()")),
@@ -70,7 +70,7 @@ async fn test_owner_get_set_odd() -> eyre::Result<()> {
 
     let deploy = Call {
         by: deployer,
-        to: Acc::ZERO,
+        to: None,
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(deploy_data),
@@ -108,7 +108,7 @@ async fn test_owner_get_set_odd() -> eyre::Result<()> {
     // get() should return 7
     let get_call = Call {
         by: deployer,
-        to: owner_addr,
+        to: Some(owner_addr),
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(super::selector("get()")),
@@ -121,7 +121,7 @@ async fn test_owner_get_set_odd() -> eyre::Result<()> {
     // odd() should return true (7 is odd)
     let odd_call = Call {
         by: deployer,
-        to: owner_addr,
+        to: Some(owner_addr),
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(super::selector("odd()")),
@@ -136,7 +136,7 @@ async fn test_owner_get_set_odd() -> eyre::Result<()> {
     set_data.extend_from_slice(Int::from(10u64).as_ref());
     let set_call = Call {
         by: deployer,
-        to: owner_addr,
+        to: Some(owner_addr),
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(set_data.clone()),
@@ -149,7 +149,7 @@ async fn test_owner_get_set_odd() -> eyre::Result<()> {
     // set(10) by stranger should revert
     let stranger_set = Call {
         by: stranger,
-        to: owner_addr,
+        to: Some(owner_addr),
         gas: 500_000,
         eth: Int::ZERO,
         data: Buf(set_data),
