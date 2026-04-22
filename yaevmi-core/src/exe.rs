@@ -569,8 +569,7 @@ impl Executor {
                         if let Some(to) = call.to
                             && state.acc(&to).is_none()
                         {
-                            let account = chain.acc(&to).await?;
-                            state.merge(&to, account);
+                            fetch(Fetch::Account(to), state, chain).await?;
                         }
 
                         // EIP-211: clear return data before new call
