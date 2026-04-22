@@ -26,7 +26,9 @@ const YAEVMI_RPC_URL: &str = "YAEVMI_RPC_URL";
 // ./target/release/replay <block>:<index> | <hash> - replay specific transaction
 
 // ## replaying number of consecutive blocks (inclusive interval, replays 11 blocks):
-// for i in {0..10}; do x=$(($i + 24935457)); ./target/release/replay $x; done > 10.log &
+// rm -rf tmp/ && mkdir tmp && cp ./target/release/replay ./tmp
+// for i in {0..10}; do x=$(($i + 24935457)); ./tmp/replay $x; done > 10.log &
+// ## cat 10.log | grep FAIL | cut -d '=' -f 2 | cut -d ' ' -f 1 >> todo.log
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
