@@ -5,7 +5,7 @@ use alloy_primitives::{Address, U256};
 use yaevmi_misc::buf::Buf;
 
 use crate::Tx;
-use crate::chain::Chain;
+use crate::chain::{Chain, fetch};
 use crate::state::{Account, State};
 use crate::{Acc, Int, Result};
 
@@ -57,13 +57,10 @@ pub async fn apply_authorization_list(
             continue;
         }
 
-        let acc = if let Some(acc) = state.acc(&authority) {
-            acc
-        } else {
-            let account = chain.acc(&authority).await?;
-            state.merge(&authority, account.clone());
-            account
-        };
+        if state.acc(&authority).is_none() {
+            fetch(crate::Fetch::Account(authority), state, chain).await?;
+        }
+        let acc = state.acc(&authority).unwrap_or_default();
         state.warm_acc(&authority);
 
         let code = acc.code.0.as_slice();
@@ -86,8 +83,7 @@ pub async fn apply_authorization_list(
         } else {
             state.set_auth(&authority, &item.address);
             if state.acc(&item.address).is_none() {
-                let acc = chain.acc(&item.address).await?;
-                state.merge(&item.address, acc);
+                fetch(crate::Fetch::Account(item.address), state, chain).await?;
             }
         }
         state.inc_nonce(&authority, Int::ONE);

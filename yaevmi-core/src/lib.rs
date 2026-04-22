@@ -22,6 +22,8 @@ pub mod trace;
 
 #[derive(Error, Debug)]
 pub enum Error {
+    #[error("Undefined chain id")]
+    UndefinedChainId,
     #[error("Gas too low: have {have} but want {want}")]
     GasTooLow { have: u64, want: u64 },
     #[error("Insufficient account funds")]

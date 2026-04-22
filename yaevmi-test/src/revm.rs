@@ -86,7 +86,7 @@ impl<CTX: ContextTr> Inspector<CTX, EthInterpreter> for Tracer {
     }
 
     fn call_end(&mut self, _: &mut CTX, _: &CallInputs, _: &mut CallOutcome) {
-        self.depth -= 1;
+        self.depth = self.depth.saturating_sub(1);
     }
 
     fn create(&mut self, _: &mut CTX, _: &mut CreateInputs) -> Option<CreateOutcome> {
@@ -95,11 +95,11 @@ impl<CTX: ContextTr> Inspector<CTX, EthInterpreter> for Tracer {
     }
 
     fn create_end(&mut self, _: &mut CTX, _: &CreateInputs, _: &mut CreateOutcome) {
-        self.depth -= 1;
+        self.depth = self.depth.saturating_sub(1);
     }
 
     fn selfdestruct(&mut self, _: Address, _: Address, _: U256) {
-        self.depth -= 1;
+        self.depth = self.depth.saturating_sub(1);
     }
 }
 

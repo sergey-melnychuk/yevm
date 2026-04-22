@@ -39,6 +39,15 @@ impl Rpc {
         })
     }
 
+    pub fn offline() -> Self {
+        Self {
+            url: "".to_string(),
+            http: Http::new(),
+            block_number: 0,
+            block_hash: Int::zero(),
+        }
+    }
+
     pub fn reset(&mut self, number: u64, hash: Int) {
         self.block_number = number;
         self.block_hash = hash;

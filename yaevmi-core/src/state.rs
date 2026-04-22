@@ -68,4 +68,7 @@ pub trait State {
     }
     /// Revert all state mutations since the given checkpoint.
     fn revert_to(&mut self, _checkpoint: usize) {}
+
+    fn set_chain_id(&mut self, _id: u64) {}
+    fn get_chain_id(&self) -> u64 { 0 }
 }

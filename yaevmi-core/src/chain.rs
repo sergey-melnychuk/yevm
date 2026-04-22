@@ -28,14 +28,16 @@ pub enum Fetched {
     State(Acc, Int, Int),
     Hash(u64, Int),
     Block(Block),
+    ChainId(u64),
 }
 
 pub async fn fetch(f: Fetch, state: &mut impl State, chain: &impl Chain) -> Result<()> {
     match f {
         Fetch::Account(acc) | Fetch::Balance(acc) | Fetch::Nonce(acc) | Fetch::Code(acc) => {
             if state.is_offline() {
-                let Some(Fetched::Account(_, account)) = state.next_fetched() else {
-                    return Err(eyre::eyre!("!").into());
+                let next = state.next_fetched();
+                let Some(Fetched::Account(_, account)) = next else {
+                    return Err(eyre::eyre!("Offline fetch: expected account but got {next:?}").into());
                 };
                 state.merge(&acc, account.clone());
             } else {
@@ -47,8 +49,9 @@ pub async fn fetch(f: Fetch, state: &mut impl State, chain: &impl Chain) -> Resu
         }
         Fetch::BlockHash(number) => {
             if state.is_offline() {
-                let Some(Fetched::Hash(number, hash)) = state.next_fetched() else {
-                    return Err(eyre::eyre!("!").into());
+                let next = state.next_fetched();
+                let Some(Fetched::Hash(number, hash)) = next else {
+                    return Err(eyre::eyre!("Offline fetch: expected block hash but got {next:?}").into());
                 };
                 state.hash(number, hash);
             } else {
@@ -64,8 +67,9 @@ pub async fn fetch(f: Fetch, state: &mut impl State, chain: &impl Chain) -> Resu
         }
         Fetch::StateCell(acc, key) => {
             if state.is_offline() {
-                let Some(Fetched::State(_, _, val)) = state.next_fetched() else {
-                    return Err(eyre::eyre!("!").into());
+                let next = state.next_fetched();
+                let Some(Fetched::State(_, _, val)) = next else {
+                    return Err(eyre::eyre!("Offline fetch: expected state cell but got {next:?}").into());
                 };
                 state.init(&acc, &key, val);
             } else {

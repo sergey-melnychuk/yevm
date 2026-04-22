@@ -1,6 +1,5 @@
 /target
 
-bin/
 *.log
 *.txt
 
@@ -9,4 +8,8 @@ bin/
 .cursor/
 
 .env
+tmp/
 fetch/
+
+## profiling data (samply)
+profile.json.gz

@@ -21,10 +21,6 @@ use yaevmi_misc::hex::parse_vec;
 
 const YAEVMI_RPC_URL: &str = "YAEVMI_RPC_URL";
 
-/*
-cargo build --release --bin replay
-./target/release/replay >replay.log 2>&1
-*/
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     dotenv::dotenv().ok();
@@ -83,12 +79,20 @@ async fn main() -> eyre::Result<()> {
         let mut content = String::new();
         reader.read_to_string(&mut content)?;
         let fetched: Vec<Fetched> = serde_json::from_str(&content)?;
-        let Some(Fetched::Block(block)) = fetched.first().cloned() else {
+        let Some(Fetched::ChainId(chain_id)) = fetched.first().cloned() else {
+            eyre::bail!("Cannot find fetched chain id");
+        };
+        cache.set_chain_id(chain_id);
+        let Some(Fetched::Block(block)) = fetched.iter().nth(1).cloned() else {
             eyre::bail!("Cannot find stored block");
         };
         cache.prefetched(fetched);
         block
     } else {
+        let chain_id = rpc.chain_id().await?;
+        cache.set_chain_id(chain_id);
+        cache.save_fetched(Fetched::ChainId(chain_id));
+
         let block = rpc.block(block).await?;
         cache.save_fetched(Fetched::Block(block.clone()));
         block

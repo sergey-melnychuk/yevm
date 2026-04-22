@@ -69,8 +69,9 @@ pub struct Cache {
     pub events: Vec<Trace>,
     pub sender: Option<mpsc::Sender<Step>>,
     pub fetched: Vec<Fetched>,
+    pub index: usize,
     offline: bool,
-    index: usize,
+    chain_id: u64,
 }
 
 impl Cache {
@@ -390,13 +391,14 @@ impl State for Cache {
     }
 
     fn next_fetched(&mut self) -> Option<Fetched> {
-        self.index += 1; // skip first block fetch
+        self.index += 1;
         self.fetched.get(self.index).cloned()
     }
 
     fn prefetched(&mut self, fetched: Vec<Fetched>) {
         self.fetched = fetched;
         self.offline = true;
+        self.index = 1; // skip chain id & block
     }
 
     fn is_offline(&self) -> bool {
@@ -508,6 +510,14 @@ impl State for Cache {
             }
             self.created.remove(&acc);
         }
+    }
+
+    fn set_chain_id(&mut self, id: u64) {
+        self.chain_id = id;
+    }
+
+    fn get_chain_id(&self) -> u64 {
+        self.chain_id
     }
 }
 

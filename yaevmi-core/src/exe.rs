@@ -4,6 +4,7 @@ use yaevmi_misc::keccak256;
 
 use yaevmi_misc::buf::Buf;
 
+use crate::Fetch;
 use crate::Tx;
 use crate::aux::{create_address, is_precompile};
 use crate::evm::{CallMode, Context, Evm, Gas, StepResult};
@@ -272,18 +273,22 @@ impl Executor {
         if !self.callstack.is_empty() {
             return Err(Error::Internal("inconsistent state detected".into()));
         }
+    
         for acc in [&self.call.by, &self.call.to, &head.coinbase] {
             if acc.is_zero() {
                 continue; // CREATE has no target; do not fetch 0x0
             }
             if state.acc(acc).is_none() {
-                state.merge(acc, chain.acc(acc).await?);
+                fetch(Fetch::Account(*acc), state, chain).await?;
                 state.warm_acc(acc);
             }
         }
 
         if tx.chain_id.is_zero() {
-            tx.chain_id = chain.chain_id().await?.into();
+            tx.chain_id = state.get_chain_id().into();
+            if tx.chain_id.is_zero() {
+                return Err(Error::UndefinedChainId);
+            }            
         }
 
         // Pre-transaction validation checks
@@ -671,9 +676,9 @@ impl Executor {
                         }
 
                         // Create account with nonce=1 (EIP-161), preserving pre-existing balance
+                        
                         if state.acc(&created).is_none() {
-                            let account = chain.acc(&created).await?;
-                            state.merge(&created, account);
+                            fetch(Fetch::Account(created), state, chain).await?;
                         }
                         let existing_balance = state.balance(&created).unwrap_or(Int::ZERO);
                         state.create(
@@ -896,12 +901,13 @@ async fn prepare(
         std::mem::take(&mut call.data)
     } else if let Some((code, _)) = state.code(&call.to) {
         code
-    } else if let Ok(account) = chain.acc(&call.to).await {
-        let code = account.code.0.clone();
-        state.merge(&call.to, account);
-        code
     } else {
-        Buf::default()
+        fetch(Fetch::Account(call.to), state, chain).await?;
+        if let Some(account) = state.acc(&call.to) {
+            account.code.0.clone()
+        } else {
+            Buf::default()
+        }
     };
     // EIP-7702: resolve delegation after code is loaded.
     // Revm's `load_account_delegated` marks both the delegated account and the implementation
@@ -911,13 +917,14 @@ async fn prepare(
         if let Some((code, _)) = state.code(&delegate) {
             state.warm_acc(&delegate);
             code
-        } else if let Ok(account) = chain.acc(&delegate).await {
-            let code = account.code.0.clone();
-            state.merge(&delegate, account);
-            state.warm_acc(&delegate);
-            code
         } else {
-            Buf::default()
+            fetch(Fetch::Account(delegate), state, chain).await?;
+            if let Some(account) = state.acc(&delegate) {
+                state.warm_acc(&delegate);
+                account.code.0.clone()
+            } else {
+                Buf::default()
+            }
         }
     } else {
         code

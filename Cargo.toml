@@ -9,6 +9,9 @@ members = [
     "yaevmi-wasm",
 ]
 
+[profile.release]
+debug = true
+
 [workspace.dependencies]
 eyre = "0.6"
 thiserror = "2.0"
