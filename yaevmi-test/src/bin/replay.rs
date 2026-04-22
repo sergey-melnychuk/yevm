@@ -29,6 +29,8 @@ const YAEVMI_RPC_URL: &str = "YAEVMI_RPC_URL";
 // rm -rf tmp/ && mkdir tmp && cp ./target/release/replay ./tmp
 // for i in {0..10}; do x=$(($i + 24935457)); ./tmp/replay $x; done > 10.log &
 // ## cat 10.log | grep FAIL | cut -d '=' -f 2 | cut -d ' ' -f 1 >> todo.log
+// for i in {0..100}; do x=$(($i + 24935681)); ./tmp/replay $x; done > 100.log &
+// for i in {0..200}; do x=$(($i + 24938068)); ./tmp/replay $x; done > 200.log &
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
