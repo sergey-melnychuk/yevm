@@ -21,6 +21,7 @@ bn = { package = "substrate-bn", version = "0.6" }
 kzg-rs = "0.2"
 p256 = { version = "0.13", features = ["ecdsa"] }
 futures.workspace = true
+ahash.workspace = true
 yaevmi-base.workspace = true
 yaevmi-misc.workspace = true
 alloy-eip7702 = { version = "0.6.3", features = ["k256"] }

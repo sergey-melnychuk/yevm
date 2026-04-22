@@ -6,7 +6,7 @@ use crate::{
 
 const LOG0: u8 = 0xA0;
 
-pub fn log(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut dyn State) -> EvmResult<()> {
+pub fn log<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> EvmResult<()> {
     if ctx.is_static {
         return Err(EvmYield::Halt(HaltReason::NonStatic));
     }

@@ -21,6 +21,13 @@ use yaevmi_misc::hex::parse_vec;
 
 const YAEVMI_RPC_URL: &str = "YAEVMI_RPC_URL";
 
+// ./target/release/replay - replay the latest block
+// ./target/release/replay <block> - replay the block number
+// ./target/release/replay <block>:<index> | <hash> - replay specific transaction
+
+// ## replaying number of consecutive blocks (inclusive interval, replays 11 blocks):
+// for i in {0..10}; do x=$(($i + 24935457)); ./target/release/replay $x; done > 10.log &
+
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     dotenv::dotenv().ok();

@@ -189,7 +189,7 @@ pub async fn run(
         ))
         .max_fee_per_gas(max_fee)
         .gas_priority_fee(Some(priority_fee))
-        .authorization_list(vec![])
+        .authorization_list(vec![]) // TODO: FIXME
         .blob_hashes(
             tx.blob_versioned_hashes
                 .iter()

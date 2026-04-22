@@ -71,4 +71,6 @@ pub trait State {
 
     fn set_chain_id(&mut self, _id: u64) {}
     fn get_chain_id(&self) -> u64 { 0 }
+
+    fn is_tracing(&self) -> bool { true }
 }

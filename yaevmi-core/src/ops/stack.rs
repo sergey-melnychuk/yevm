@@ -4,20 +4,30 @@ use crate::{
     state::State,
 };
 
+#[inline]
 pub fn push(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmResult<()> {
-    let data = evm.data(evm.pc);
-    let int = if data.is_empty() {
+    let op = evm.code[evm.pc];
+    let len = match op {
+        0x60..=0x7F => op as usize - 0x5F, // PUSH1=1 .. PUSH32=32
+        _ => 0,                              // PUSH0
+    };
+    if len == 0 {
         evm.gas_charge(2)?;
-        Int::ZERO
+        evm.push(Int::ZERO)?;
     } else {
         evm.gas_charge(3)?;
-        Int::from(data.as_ref())
-    };
-    evm.push(int)?;
-    evm.pc += data.len();
+        let lo = evm.pc + 1;
+        let available = len.min(evm.code.len().saturating_sub(lo));
+        let mut buf = [0u8; 32];
+        let dst = 32 - len;
+        buf[dst..dst + available].copy_from_slice(&evm.code[lo..lo + available]);
+        evm.push(Int::from(&buf[..]))?;
+        evm.pc += len;
+    }
     Ok(())
 }
 
+#[inline]
 pub fn dup(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmResult<()> {
     evm.gas_charge(3)?;
     let op = evm.code[evm.pc];

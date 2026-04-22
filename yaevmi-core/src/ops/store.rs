@@ -12,16 +12,19 @@ pub fn pop(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmResult
     Ok(())
 }
 
+#[inline]
 pub fn mload(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmResult<()> {
     evm.gas_charge(3)?;
     let [offset] = evm.peek::<1>()?;
     mem_check_int(offset, Int::from(32u32))?;
-    let data = evm.mem_get(offset.as_usize(), 32)?;
-    let int = Int::from(&data[..]);
+    let offset = offset.as_usize();
+    evm.mem_expand(offset, 32)?;
+    let int = Int::from(&evm.memory[offset..offset + 32]);
     evm.push(int)?;
     Ok(())
 }
 
+#[inline]
 pub fn mstore(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmResult<()> {
     evm.gas_charge(3)?;
     let [offset, value] = evm.peek()?;
@@ -39,7 +42,7 @@ pub fn mstore8(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmRe
     Ok(())
 }
 
-pub fn sload(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut dyn State) -> EvmResult<()> {
+pub fn sload<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> EvmResult<()> {
     evm.gas_charge(100)?;
     let [key] = evm.peek()?;
     let acc = ctx.this;
@@ -115,7 +118,7 @@ fn sstore_gas(val: Int, cur: Int, org: Int) -> (i64, i64) {
     (g, r)
 }
 
-pub fn sstore(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut dyn State) -> EvmResult<()> {
+pub fn sstore<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> EvmResult<()> {
     if ctx.is_static {
         return Err(EvmYield::Halt(HaltReason::NonStatic));
     }
@@ -211,7 +214,7 @@ pub fn gas(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmResult
     Ok(())
 }
 
-pub fn tload(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut dyn State) -> EvmResult<()> {
+pub fn tload<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> EvmResult<()> {
     evm.gas_charge(100)?;
     let [key] = evm.peek()?;
     let val = state.tget(&ctx.this, &key).unwrap_or_default();
@@ -219,7 +222,7 @@ pub fn tload(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut dyn State) -> E
     Ok(())
 }
 
-pub fn tstore(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut dyn State) -> EvmResult<()> {
+pub fn tstore<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> EvmResult<()> {
     if ctx.is_static {
         return Err(EvmYield::Halt(HaltReason::NonStatic));
     }

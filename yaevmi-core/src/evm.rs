@@ -3,7 +3,7 @@ use crate::trace::{Event, Step};
 use serde::{Deserialize, Serialize};
 use yaevmi_base::math::lift;
 
-use crate::{Acc, Call, Int, Result, ops::OPS, state::State};
+use crate::{Acc, Call, Int, Result, ops, state::State};
 
 const K: usize = 1024;
 
@@ -158,9 +158,9 @@ pub struct Evm {
     pub(crate) pending_stack_push: Vec<Int>,
     pub(crate) pending_gas_charge: i64,
     pub(crate) pending_gas_refund: i64,
-    pub(crate) pending_acc_warmup: Vec<Acc>,
-    pub(crate) pending_key_warmup: Vec<(Acc, Int)>,
-    pub(crate) pending_mem_stores: Vec<(usize, usize, Vec<u8>)>,
+    pub(crate) pending_acc_warmup: [Acc; 2],
+    pub(crate) pending_acc_count: usize,
+    pub(crate) pending_key_warmup: Option<(Acc, Int)>,
 
     pub(crate) step: Option<Step>,
 }
@@ -194,9 +194,9 @@ impl Evm {
             pending_stack_push: Vec::new(),
             pending_gas_charge: 0,
             pending_gas_refund: 0,
-            pending_mem_stores: Vec::new(),
-            pending_acc_warmup: Vec::new(),
-            pending_key_warmup: Vec::new(),
+            pending_acc_warmup: [Acc::ZERO; 2],
+            pending_acc_count: 0,
+            pending_key_warmup: None,
             step: None,
         }
     }
@@ -239,19 +239,13 @@ impl Evm {
         self.gas.refund += self.pending_gas_refund;
         self.pending_gas_refund = 0;
 
-        for acc in self.pending_acc_warmup.drain(..) {
-            state.warm_acc(&acc);
+        for i in 0..self.pending_acc_count {
+            state.warm_acc(&self.pending_acc_warmup[i]);
         }
-        assert!(self.pending_acc_warmup.is_empty());
+        self.pending_acc_count = 0;
 
-        for (acc, key) in self.pending_key_warmup.drain(..) {
+        if let Some((acc, key)) = self.pending_key_warmup.take() {
             state.warm_key(&acc, &key);
-        }
-        assert!(self.pending_key_warmup.is_empty());
-
-        let pending_mem_stores = std::mem::take(&mut self.pending_mem_stores);
-        for (offset, size, source) in pending_mem_stores {
-            self.mem_store(offset, size, source);
         }
     }
 
@@ -260,9 +254,8 @@ impl Evm {
         self.pending_stack_push.clear();
         self.pending_gas_charge = 0;
         self.pending_gas_refund = 0;
-        self.pending_mem_stores.clear();
-        self.pending_acc_warmup.clear();
-        self.pending_key_warmup.clear();
+        self.pending_acc_count = 0;
+        self.pending_key_warmup = None;
     }
 
     pub fn push(&mut self, int: Int) -> EvmResult<()> {
@@ -279,11 +272,12 @@ impl Evm {
     }
 
     pub fn warm_acc(&mut self, acc: &Acc) {
-        self.pending_acc_warmup.push(*acc);
+        self.pending_acc_warmup[self.pending_acc_count] = *acc;
+        self.pending_acc_count += 1;
     }
 
     pub fn warm_key(&mut self, acc: &Acc, key: &Int) {
-        self.pending_key_warmup.push((*acc, *key));
+        self.pending_key_warmup = Some((*acc, *key));
     }
 
     pub fn gas_remaining(&self) -> i64 {
@@ -345,19 +339,12 @@ impl Evm {
         Ok(())
     }
 
-    fn mem_store(&mut self, offset: usize, size: usize, source: Vec<u8>) {
-        let _ = self.mem_expand(offset, size);
-        if size == 0 || source.is_empty() {
-            return;
-        }
-        let len = source.len().min(size);
-        self.memory[offset..offset + len].copy_from_slice(&source[..len]);
-    }
-
     pub fn mem_put(&mut self, offset: usize, size: usize, source: &[u8]) -> EvmResult<()> {
         self.mem_expand(offset, size)?;
-        self.pending_mem_stores
-            .push((offset, size, source.to_vec()));
+        if size > 0 && !source.is_empty() {
+            let len = source.len().min(size);
+            self.memory[offset..offset + len].copy_from_slice(&source[..len]);
+        }
         Ok(())
     }
 
@@ -393,31 +380,33 @@ impl Evm {
         let Some(op) = self.code.get(self.pc).copied() else {
             return Ok(StepResult::End);
         };
-        let (name, f) = OPS[op as usize];
+        let name = ops::OPS[op as usize];
 
-        let pc = self.pc;
-        let name = if name.starts_with("INVALID/") {
-            "INVALID".to_string()
-        } else {
-            name.to_string()
-        };
-        let data = self.data(pc);
-        let data = if data.is_empty() {
-            None
-        } else {
-            Some(data.into())
-        };
-        let gas = self.gas.remaining().max(0) as u64;
-        self.step = Some(Step {
-            pc,
-            op,
-            name,
-            data,
-            gas,
-            stack: self.stack.len(),
-            memory: self.memory.len(),
-            debug: vec![],
-        });
+        if state.is_tracing() {
+            let pc = self.pc;
+            let name = if name.starts_with("INVALID/") {
+                "INVALID".to_string()
+            } else {
+                name.to_string()
+            };
+            let data = self.data(pc);
+            let data = if data.is_empty() {
+                None
+            } else {
+                Some(data.into())
+            };
+            let gas = self.gas.remaining().max(0) as u64;
+            self.step = Some(Step {
+                pc,
+                op,
+                name,
+                data,
+                gas,
+                stack: self.stack.len(),
+                memory: self.memory.len(),
+                debug: vec![],
+            });
+        }
 
         // let balance = state.balance(&ctx.this).unwrap_or_default();
         // if let Some(step) = self.step.as_mut() {
@@ -425,9 +414,8 @@ impl Evm {
         //         .push(format!("balance[{:?}]={:?}", ctx.this, balance.as_u128()));
         // };
 
-        let result = f(self, ctx, call, state);
-        result
-            .map(|_| {
+        match ops::dispatch(op, self, ctx, call, state) {
+            Ok(()) => {
                 self.apply(state);
                 if !is_jump(op) {
                     self.pc += 1;
@@ -443,65 +431,61 @@ impl Evm {
                     }
                     state.emit(Event::Step(step));
                 }
-                StepResult::Ok
-            })
-            .or_else(|evm_yield| {
-                Ok(match evm_yield {
-                    EvmYield::Fetch(fetch) => {
-                        self.reset();
-                        StepResult::Fetch(fetch)
+                Ok(StepResult::Ok)
+            }
+            Err(EvmYield::Fetch(fetch)) => {
+                self.reset();
+                Ok(StepResult::Fetch(fetch))
+            }
+            Err(EvmYield::Halt(reason)) => {
+                self.apply(state);
+                if let Some(mut step) = self.step.take() {
+                    step.gas = self.gas.remaining().max(0) as u64;
+                    step.stack = self.stack.len();
+                    step.memory = self.memory.len();
+                    step.debug.push(format!("HALT:{:?}", reason));
+                    state.emit(Event::Step(step));
+                }
+                Ok(StepResult::Halt(reason))
+            }
+            Err(EvmYield::Return(ret)) => {
+                self.apply(state);
+                if let Some(mut step) = self.step.take() {
+                    step.gas = self.gas.remaining().max(0) as u64;
+                    step.stack = self.stack.len();
+                    step.memory = self.memory.len();
+                    step.debug.push(format!("RETURN:size={}", ret.len()));
+                    state.emit(Event::Step(step));
+                }
+                Ok(StepResult::Return(ret))
+            }
+            Err(EvmYield::Revert(ret)) => {
+                self.apply(state);
+                if let Some(mut step) = self.step.take() {
+                    step.gas = self.gas.remaining().max(0) as u64;
+                    step.stack = self.stack.len();
+                    step.memory = self.memory.len();
+                    step.debug.push(format!("REVERT:size={}", ret.len()));
+                    state.emit(Event::Step(step));
+                }
+                Ok(StepResult::Revert(ret))
+            }
+            Err(EvmYield::Call(call, mode)) => {
+                self.apply(state);
+                if let Some(mut step) = self.step.take() {
+                    step.gas = self.gas.remaining().max(0) as u64;
+                    step.stack = self.stack.len();
+                    step.memory = self.memory.len();
+                    step.debug.push(format!("CALL:to={},gas={}", call.to, call.gas));
+                    if !call.eth.is_zero() {
+                        step.debug.push(format!("CALL:eth={}", call.eth));
                     }
-                    EvmYield::Halt(reason) => {
-                        self.apply(state); // apply whatever changes were made before halting
-                        if let Some(mut step) = self.step.take() {
-                            step.gas = self.gas.remaining().max(0) as u64;
-                            step.stack = self.stack.len();
-                            step.memory = self.memory.len();
-                            step.debug.push(format!("HALT:{:?}", reason));
-                            state.emit(Event::Step(step));
-                        }
-                        StepResult::Halt(reason)
-                    }
-                    EvmYield::Return(ret) => {
-                        self.apply(state);
-                        if let Some(mut step) = self.step.take() {
-                            step.gas = self.gas.remaining().max(0) as u64;
-                            step.stack = self.stack.len();
-                            step.memory = self.memory.len();
-                            step.debug.push(format!("RETURN:size={}", ret.len()));
-                            state.emit(Event::Step(step));
-                        }
-                        StepResult::Return(ret)
-                    }
-                    EvmYield::Revert(ret) => {
-                        self.apply(state);
-                        if let Some(mut step) = self.step.take() {
-                            step.gas = self.gas.remaining().max(0) as u64;
-                            step.stack = self.stack.len();
-                            step.memory = self.memory.len();
-                            step.debug.push(format!("REVERT:size={}", ret.len()));
-                            state.emit(Event::Step(step));
-                        }
-                        StepResult::Revert(ret)
-                    }
-                    EvmYield::Call(call, mode) => {
-                        self.apply(state);
-                        if let Some(mut step) = self.step.take() {
-                            step.gas = self.gas.remaining().max(0) as u64;
-                            step.stack = self.stack.len();
-                            step.memory = self.memory.len();
-                            step.debug
-                                .push(format!("CALL:to={},gas={}", call.to, call.gas));
-                            if !call.eth.is_zero() {
-                                step.debug.push(format!("CALL:eth={}", call.eth));
-                            }
-                            step.debug.push(format!("CALL:mode={mode:?}"));
-                            state.emit(Event::Step(step));
-                        }
-                        StepResult::Call(call, mode)
-                    }
-                })
-            })
+                    step.debug.push(format!("CALL:mode={mode:?}"));
+                    state.emit(Event::Step(step));
+                }
+                Ok(StepResult::Call(call, mode))
+            }
+        }
     }
 }
 

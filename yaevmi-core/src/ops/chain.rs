@@ -13,7 +13,7 @@ pub fn address(evm: &mut Evm, ctx: &Context, _: &Call, _: &mut dyn State) -> Evm
     Ok(())
 }
 
-pub fn balance(evm: &mut Evm, _: &Context, _: &Call, state: &mut dyn State) -> EvmResult<()> {
+pub fn balance<S: State>(evm: &mut Evm, _: &Context, _: &Call, state: &mut S) -> EvmResult<()> {
     evm.gas_charge(100)?;
     let [acc] = evm.peek()?;
     let acc: Acc = acc.to();
@@ -136,7 +136,7 @@ pub fn gasprice(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmR
     Ok(())
 }
 
-pub fn extcodesize(evm: &mut Evm, _: &Context, _: &Call, state: &mut dyn State) -> EvmResult<()> {
+pub fn extcodesize<S: State>(evm: &mut Evm, _: &Context, _: &Call, state: &mut S) -> EvmResult<()> {
     evm.gas_charge(100)?;
     let [acc] = evm.peek()?;
     let acc: Acc = acc.to();
@@ -151,7 +151,7 @@ pub fn extcodesize(evm: &mut Evm, _: &Context, _: &Call, state: &mut dyn State) 
     Ok(())
 }
 
-pub fn extcodecopy(evm: &mut Evm, _: &Context, _: &Call, state: &mut dyn State) -> EvmResult<()> {
+pub fn extcodecopy<S: State>(evm: &mut Evm, _: &Context, _: &Call, state: &mut S) -> EvmResult<()> {
     evm.gas_charge(100)?;
     let [acc, dest_offset, offset, size] = evm.peek()?;
     let acc: Acc = acc.to();
@@ -246,7 +246,7 @@ pub fn returndatacopy(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -
     Ok(())
 }
 
-pub fn extcodehash(evm: &mut Evm, _: &Context, _: &Call, state: &mut dyn State) -> EvmResult<()> {
+pub fn extcodehash<S: State>(evm: &mut Evm, _: &Context, _: &Call, state: &mut S) -> EvmResult<()> {
     evm.gas_charge(100)?;
     let [acc] = evm.peek()?;
     let acc: Acc = acc.to();
@@ -271,7 +271,7 @@ pub fn extcodehash(evm: &mut Evm, _: &Context, _: &Call, state: &mut dyn State) 
     Ok(())
 }
 
-pub fn blockhash(evm: &mut Evm, _: &Context, _: &Call, state: &mut dyn State) -> EvmResult<()> {
+pub fn blockhash<S: State>(evm: &mut Evm, _: &Context, _: &Call, state: &mut S) -> EvmResult<()> {
     evm.gas_charge(20)?;
     let [number] = evm.peek()?;
     let number = number.as_u64();
@@ -318,7 +318,7 @@ pub fn chainid(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmRe
     Ok(())
 }
 
-pub fn selfbalance(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut dyn State) -> EvmResult<()> {
+pub fn selfbalance<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> EvmResult<()> {
     evm.gas_charge(5)?;
     let acc: Acc = ctx.this;
     let Some(balance) = state.balance(&acc) else {

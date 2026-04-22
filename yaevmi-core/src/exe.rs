@@ -826,7 +826,6 @@ impl Executor {
                     self.callstack.pop();
                 }
                 StepResult::Fetch(f) => {
-                    // TODO: FIXME: exclude time-related stuff for wasm32 target
                     #[cfg(not(target_arch = "wasm32"))]
                     let now = std::time::Instant::now();
 

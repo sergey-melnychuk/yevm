@@ -15,7 +15,7 @@ fn sub_call_gas(evm: &Evm) -> u64 {
     remaining - remaining / 64
 }
 
-pub fn create(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut dyn State) -> EvmResult<()> {
+pub fn create<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> EvmResult<()> {
     if ctx.is_static {
         return Err(EvmYield::Halt(HaltReason::NonStatic));
     }
@@ -47,7 +47,7 @@ pub fn create(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut dyn State) -> 
     Err(EvmYield::Call(call, CallMode::Create(address)))
 }
 
-pub fn call(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut dyn State) -> EvmResult<()> {
+pub fn call<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> EvmResult<()> {
     let [
         gas_arg,
         address,
@@ -146,7 +146,7 @@ pub fn call(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut dyn State) -> Ev
     Err(EvmYield::Call(call, CallMode::Call(ret_offset, ret_size)))
 }
 
-pub fn callcode(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut dyn State) -> EvmResult<()> {
+pub fn callcode<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> EvmResult<()> {
     let [
         gas_arg,
         address,
@@ -232,11 +232,11 @@ pub fn r#return(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmR
     Err(EvmYield::Return(mem.to_vec()))
 }
 
-pub fn delegatecall(
+pub fn delegatecall<S: State>(
     evm: &mut Evm,
     _ctx: &Context,
     call: &Call,
-    state: &mut dyn State,
+    state: &mut S,
 ) -> EvmResult<()> {
     let [
         gas_arg,
@@ -337,7 +337,7 @@ pub fn create2(evm: &mut Evm, ctx: &Context, _: &Call, _: &mut dyn State) -> Evm
     Err(EvmYield::Call(call, CallMode::Create2(address)))
 }
 
-pub fn staticcall(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut dyn State) -> EvmResult<()> {
+pub fn staticcall<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> EvmResult<()> {
     let [
         gas_arg,
         address,
@@ -415,11 +415,11 @@ pub fn revert(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmRes
     Err(EvmYield::Revert(mem.to_vec()))
 }
 
-pub fn selfdestruct(
+pub fn selfdestruct<S: State>(
     evm: &mut Evm,
     ctx: &Context,
     _: &Call,
-    state: &mut dyn State,
+    state: &mut S,
 ) -> EvmResult<()> {
     evm.gas_charge(5_000)?;
 

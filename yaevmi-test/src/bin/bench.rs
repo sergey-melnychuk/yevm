@@ -4,7 +4,7 @@ use yaevmi_core::{cache::Cache, chain::Fetched, exe::Executor, rpc::Rpc, state::
 
 const BLOCK: u64 = 24929490;
 
-const N: usize = 10;
+const N: usize = 1000;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {

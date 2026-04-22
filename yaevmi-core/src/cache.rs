@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use ahash::{AHashMap as HashMap, AHashSet as HashSet};
 
 use crate::{
     call::Head,
@@ -518,6 +518,10 @@ impl State for Cache {
 
     fn get_chain_id(&self) -> u64 {
         self.chain_id
+    }
+
+    fn is_tracing(&self) -> bool {
+        self.sender.is_some()
     }
 }
 
