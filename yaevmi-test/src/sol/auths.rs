@@ -95,6 +95,7 @@ fn test_head() -> Head {
         blobhash: Some(Int::ONE),
         prevrandao: Int::ONE,
         parent_hash: int("0x1"),
+        parent_beacon_block_root: None,
     }
 }
 

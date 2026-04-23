@@ -29,7 +29,11 @@ pub async fn pre_block(head: &Head, state: &mut impl State, chain: &impl Chain) 
     let timestamp = head.timestamp.as_u64();
     let slot = timestamp % HISTORY_BUFFER_LENGTH;
     state.init(&BEACON_ROOTS, &Int::from(slot), Int::from(timestamp));
-    state.init(&BEACON_ROOTS, &Int::from(slot + HISTORY_BUFFER_LENGTH), root);
+    state.init(
+        &BEACON_ROOTS,
+        &Int::from(slot + HISTORY_BUFFER_LENGTH),
+        root,
+    );
     Ok(())
 }
 const MAX_STEPS: u64 = 10_000_000;
@@ -76,8 +80,6 @@ pub struct CallFrame {
     pub checkpoint: usize,
     /// Return-data target (ret_offset, ret_size) for the parent frame's CALL/STATICCALL.
     pub target: (usize, usize),
-    /// Gas stipend (2300 for value-bearing CALLs) to exclude from gas return on failure.
-    pub stipend: i64,
     /// True when this frame is a CREATE/CREATE2, false for CALL/STATICCALL/etc.
     /// Cannot rely on `call.to.is_zero()` because a plain CALL to address 0x0 is valid.
     pub is_create: bool,
@@ -521,7 +523,6 @@ impl Executor {
                         this.evm.apply(state);
                         this.evm.pc += 1;
                         this.target = (0, 0);
-                        this.stipend = 0;
                         result = None;
                     }
                     CallResult::Created {
@@ -543,7 +544,6 @@ impl Executor {
                         this.evm.apply(state);
                         this.evm.pc += 1;
                         this.evm.ret.clear();
-                        this.stipend = 0;
                     }
                 }
             }
@@ -690,13 +690,6 @@ impl Executor {
 
                     let checkpoint = state.checkpoint();
                     this.target = mode.target().unwrap_or_default();
-                    this.stipend = if !call.eth.is_zero()
-                        && matches!(mode, CallMode::Call(..) | CallMode::CallCode(..))
-                    {
-                        2300
-                    } else {
-                        0
-                    };
 
                     if let Some(created) = mode.created() {
                         let creator = call.by;
@@ -1013,7 +1006,6 @@ async fn prepare(
         ctx,
         checkpoint,
         target: (0, 0),
-        stipend: 0,
         is_create,
     })
 }

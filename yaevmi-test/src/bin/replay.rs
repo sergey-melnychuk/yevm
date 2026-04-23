@@ -602,8 +602,14 @@ mod live {
                 alloy_primitives::address!("000f3df6d732807ef1319fb7b8bb8522d0beac02");
             let timestamp = to_u256(&head.timestamp).to::<u64>();
             let slot = U256::from(timestamp % 8191);
-            db.insert_account_storage(beacon_roots, slot, U256::from(timestamp)).unwrap();
-            db.insert_account_storage(beacon_roots, slot + U256::from(8191u64), U256::from_be_bytes(to_b256(&root).0)).unwrap();
+            db.insert_account_storage(beacon_roots, slot, U256::from(timestamp))
+                .unwrap();
+            db.insert_account_storage(
+                beacon_roots,
+                slot + U256::from(8191u64),
+                U256::from_be_bytes(to_b256(&root).0),
+            )
+            .unwrap();
         }
 
         let mut ctx = Context::mainnet().with_db(db);
@@ -709,8 +715,14 @@ mod live {
                 alloy_primitives::address!("000f3df6d732807ef1319fb7b8bb8522d0beac02");
             let timestamp = to_u256(&head.timestamp).to::<u64>();
             let slot = U256::from(timestamp % 8191);
-            db.insert_account_storage(beacon_roots, slot, U256::from(timestamp)).unwrap();
-            db.insert_account_storage(beacon_roots, slot + U256::from(8191u64), U256::from_be_bytes(to_b256(&root).0)).unwrap();
+            db.insert_account_storage(beacon_roots, slot, U256::from(timestamp))
+                .unwrap();
+            db.insert_account_storage(
+                beacon_roots,
+                slot + U256::from(8191u64),
+                U256::from_be_bytes(to_b256(&root).0),
+            )
+            .unwrap();
         }
 
         let mut ctx = Context::mainnet().with_db(db);
