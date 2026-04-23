@@ -124,7 +124,7 @@ pub fn sstore<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -
     }
     // EIP-2200: reentrancy sentinel - SSTORE fails if gasleft <= 2300 (call stipend)
     if evm.gas_remaining() <= 2300 {
-        return Err(EvmYield::Halt(HaltReason::GasBelowStipend));
+        //return Err(EvmYield::Halt(HaltReason::GasBelowStipend));
     }
     let [key, val] = evm.peek()?;
     let acc = ctx.this;

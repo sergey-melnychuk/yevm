@@ -13,7 +13,7 @@ use yaevmi_core::{
     cache::Cache,
     call::Receipt,
     chain::{Chain, Fetched},
-    exe::{CallResult, Executor},
+    exe::{CallResult, Executor, pre_block},
     rpc::Rpc,
     state::{Account, State},
 };
@@ -31,6 +31,7 @@ const YAEVMI_RPC_URL: &str = "YAEVMI_RPC_URL";
 // ## cat 10.log | grep FAIL | cut -d '=' -f 2 | cut -d ' ' -f 1 >> todo.log
 // for i in {0..100}; do x=$(($i + 24935681)); ./tmp/replay $x; done > 100.log &
 // for i in {0..200}; do x=$(($i + 24938068)); ./tmp/replay $x; done > 200.log &
+// for x in $(cat todo.log); do ./target/release/replay $x; done > todo.replay.log
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
@@ -179,6 +180,8 @@ async fn main() -> eyre::Result<()> {
     } else {
         txs
     };
+
+    pre_block(&head, &mut cache, &rpc).await?;
 
     let n = txs.len();
     let mut ok = 0;
@@ -592,7 +595,16 @@ mod live {
 
         let db = AlloyDB::new(provider, BlockId::from(to_b256(&head.parent_hash)));
         let db = WrapDatabaseAsync::new(db).unwrap();
-        let db = CacheDB::new(db);
+        let mut db = CacheDB::new(db);
+
+        if let Some(root) = head.parent_beacon_block_root {
+            let beacon_roots =
+                alloy_primitives::address!("000f3df6d732807ef1319fb7b8bb8522d0beac02");
+            let timestamp = to_u256(&head.timestamp).to::<u64>();
+            let slot = U256::from(timestamp % 8191);
+            db.insert_account_storage(beacon_roots, slot, U256::from(timestamp)).unwrap();
+            db.insert_account_storage(beacon_roots, slot + U256::from(8191u64), U256::from_be_bytes(to_b256(&root).0)).unwrap();
+        }
 
         let mut ctx = Context::mainnet().with_db(db);
         ctx.block.number = U256::from(head.number.as_u64());
@@ -690,7 +702,16 @@ mod live {
 
         let db = AlloyDB::new(provider, BlockId::from(to_b256(&head.parent_hash)));
         let db = WrapDatabaseAsync::new(db).unwrap();
-        let db = CacheDB::new(db);
+        let mut db = CacheDB::new(db);
+
+        if let Some(root) = head.parent_beacon_block_root {
+            let beacon_roots =
+                alloy_primitives::address!("000f3df6d732807ef1319fb7b8bb8522d0beac02");
+            let timestamp = to_u256(&head.timestamp).to::<u64>();
+            let slot = U256::from(timestamp % 8191);
+            db.insert_account_storage(beacon_roots, slot, U256::from(timestamp)).unwrap();
+            db.insert_account_storage(beacon_roots, slot + U256::from(8191u64), U256::from_be_bytes(to_b256(&root).0)).unwrap();
+        }
 
         let mut ctx = Context::mainnet().with_db(db);
         ctx.block.number = U256::from(head.number.as_u64());

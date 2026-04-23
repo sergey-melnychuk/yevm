@@ -426,8 +426,6 @@ pub fn selfdestruct<S: State>(
     _: &Call,
     state: &mut S,
 ) -> EvmResult<()> {
-    evm.gas_charge(5_000)?;
-
     // EIP-214: SELFDESTRUCT in static context is an exceptional halt
     if ctx.is_static {
         return Err(EvmYield::Halt(HaltReason::NonStatic));
@@ -435,6 +433,13 @@ pub fn selfdestruct<S: State>(
 
     let [beneficiary] = evm.peek()?;
     let beneficiary: Acc = beneficiary.to();
+
+    // Fetch beneficiary before gas accounting so is_empty check is accurate.
+    if state.acc(&beneficiary).is_none() {
+        return Err(EvmYield::Fetch(crate::evm::Fetch::Account(beneficiary)));
+    }
+
+    evm.gas_charge(5_000)?;
 
     // EIP-2929: cold address surcharge for beneficiary (no warm cost — covered by 5000 base)
     if state.is_cold_acc(&beneficiary) {

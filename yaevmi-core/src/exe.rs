@@ -16,6 +16,22 @@ use crate::{
 };
 
 const MAX_CALL_DEPTH: usize = 1024;
+
+const BEACON_ROOTS: Acc = yaevmi_base::acc::acc("0x000f3df6d732807ef1319fb7b8bb8522d0beac02");
+const HISTORY_BUFFER_LENGTH: u64 = 8191;
+
+/// EIP-4788: write the parent beacon block root into the ring buffer before executing transactions.
+pub async fn pre_block(head: &Head, state: &mut impl State, chain: &impl Chain) -> Result<()> {
+    let Some(root) = head.parent_beacon_block_root else {
+        return Ok(());
+    };
+    fetch(Fetch::Account(BEACON_ROOTS), state, chain).await?;
+    let timestamp = head.timestamp.as_u64();
+    let slot = timestamp % HISTORY_BUFFER_LENGTH;
+    state.init(&BEACON_ROOTS, &Int::from(slot), Int::from(timestamp));
+    state.init(&BEACON_ROOTS, &Int::from(slot + HISTORY_BUFFER_LENGTH), root);
+    Ok(())
+}
 const MAX_STEPS: u64 = 10_000_000;
 const MAX_CODE_SIZE: usize = 24_576;
 const CODE_DEPOSIT_GAS: i64 = 200;
