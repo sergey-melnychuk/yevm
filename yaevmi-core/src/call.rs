@@ -112,7 +112,7 @@ pub struct Head {
     pub base_fee: Int,
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub blob_base_fee: Option<Int>,
+    pub blob_base_fee: Option<Int>, // TODO: use 'excessBlobGas' and calculate blob gas fee
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blobhash: Option<Int>,

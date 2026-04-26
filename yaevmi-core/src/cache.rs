@@ -503,8 +503,8 @@ impl State for Cache {
         let destroyed = std::mem::take(&mut self.destroyed);
         for acc in destroyed {
             if let Some(entry) = self.accounts.get_mut(&acc) {
+                // do not reset nonce for self-destructed contracts
                 entry.account.value = Int::ZERO;
-                entry.account.nonce = Int::ZERO;
                 entry.account.code = (Buf::default(), Int::ZERO);
                 entry.storage.clear();
             }
