@@ -91,7 +91,7 @@ fn test_head() -> Head {
         coinbase: acc("0xC014BA5E"),
         timestamp: 42.into(),
         base_fee: 1.into(),
-        blob_base_fee: Some(1.into()),
+        excess_blob_gas: Some(Int::ZERO),
         blobhash: Some(Int::ONE),
         prevrandao: Int::ONE,
         parent_hash: int("0x1"),

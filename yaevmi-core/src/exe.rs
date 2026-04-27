@@ -189,13 +189,25 @@ pub fn intrinsic(
     };
     let upfront_check = mul([Int::from(call.gas), max_gas_price]);
     let upfront = mul([Int::from(call.gas), effective_gas_price]);
+
+    // EIP-4844: blob gas cost = num_blobs × GAS_PER_BLOB × actual_blob_base_fee (never refunded).
+    const GAS_PER_BLOB: u64 = 0x20000;
+    let blob_gas_cost = if let Some(_excess) = head.excess_blob_gas {
+        // TODO: proper blob handling (remove workaround)
+        // let fee = crate::call::blob_base_fee(head.number.as_u64(), excess);
+        // mul([Int::from(tx.blob_versioned_hashes.len() as u64 * GAS_PER_BLOB), fee])
+        Int::from(tx.blob_versioned_hashes.len() as u64 * GAS_PER_BLOB)
+    } else {
+        Int::ZERO
+    };
+
     let total_cost = add([upfront_check, call.eth]);
     let balance = state.balance(&call.by).unwrap_or_default();
     if !gt([total_cost, balance]).is_zero() {
         // TODO: FIXME: false positives detected
         // return Err(Error::InsufficientFunds);
     }
-    state.set_value(&call.by, sub([balance, upfront]));
+    state.set_value(&call.by, sub([balance, add([upfront, blob_gas_cost])]));
 
     // EIP-7702: authorization list gas (PER_EMPTY_ACCOUNT_COST per tuple, matches revm).
     // EIP-7623 floor is only 21_000 + 10 * tokens (calc_tx_floor_cost); it must NOT include

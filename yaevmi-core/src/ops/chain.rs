@@ -353,6 +353,11 @@ pub fn blobhash(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmR
 
 pub fn blobbasefee(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmResult<()> {
     evm.gas_charge(2)?;
-    evm.push(evm.head.blob_base_fee.unwrap_or_default())?;
+    // TODO: proper blob handling (remove workaround)
+    // let fee = evm.head.excess_blob_gas.map_or(Int::ZERO, |excess| {
+    //     crate::call::blob_base_fee(evm.head.number.as_u64(), excess)
+    // });
+    // evm.push(fee)?;
+    evm.push(Int::ZERO)?;
     Ok(())
 }

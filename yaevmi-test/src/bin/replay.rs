@@ -449,7 +449,7 @@ fn check_state(
             let (act, _) = cache.get(&acc, &key).unwrap_or_default();
             if act != val {
                 violations.push(format!(
-                    "REVM: account {acc} storage [{key}] mismatch:\nwant {val}\nhave {act}"
+                    "REVM: account {acc} storage [{key}] mismatch:\n  want {val}\n  have {act}"
                 ));
             }
         }
@@ -667,6 +667,11 @@ mod live {
         ctx.block.beneficiary = to_addr(&head.coinbase);
         ctx.block.basefee = head.base_fee.as_u64();
         ctx.block.prevrandao = Some(to_b256(&head.prevrandao));
+        // TODO: proper blob handling (remove workaround)
+        // if let Some(excess) = head.excess_blob_gas {
+        //     let fraction = if head.number.as_u64() >= 22_431_084 { 5_007_716u64 } else { 3_338_477u64 };
+        //     ctx.block.set_blob_excess_gas_and_price(excess.as_u64(), fraction);
+        // }
         ctx.cfg.chain_id = chain_id;
 
         // let fork = revm::primitives::hardfork::SpecId::OSAKA;
