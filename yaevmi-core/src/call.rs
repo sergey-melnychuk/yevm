@@ -116,7 +116,8 @@ pub struct Head {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blobhash: Option<Int>,
-    #[serde(alias = "difficulty")]
+    #[serde(alias = "mixHash")]
+    #[serde(alias = "prevRandao")]
     pub prevrandao: Int,
     pub parent_hash: Int,
     #[serde(default)]

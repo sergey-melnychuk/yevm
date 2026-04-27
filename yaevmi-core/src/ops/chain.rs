@@ -275,6 +275,12 @@ pub fn blockhash<S: State>(evm: &mut Evm, _: &Context, _: &Call, state: &mut S) 
     evm.gas_charge(20)?;
     let [number] = evm.peek()?;
     let number = number.as_u64();
+    let current = evm.head.number.as_u64();
+    // EVM spec: return 0 for current/future blocks and blocks older than 256
+    if number >= current || current - number > 256 {
+        evm.push(Int::ZERO)?;
+        return Ok(());
+    }
     let Some(head) = state.head(number) else {
         return Err(EvmYield::Fetch(Fetch::BlockHash(number)));
     };
