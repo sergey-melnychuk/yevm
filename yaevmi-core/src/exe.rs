@@ -193,7 +193,7 @@ pub fn intrinsic(
     // EIP-4844: blob gas cost = num_blobs × GAS_PER_BLOB × actual_blob_base_fee (never refunded).
     const GAS_PER_BLOB: u64 = 0x20000;
     let blob_gas_cost = if let Some(_excess) = head.excess_blob_gas {
-        // TODO: proper blob handling (remove workaround)
+        // TODO: proper blob handling
         // let fee = crate::call::blob_base_fee(head.number.as_u64(), excess);
         // mul([Int::from(tx.blob_versioned_hashes.len() as u64 * GAS_PER_BLOB), fee])
         Int::from(tx.blob_versioned_hashes.len() as u64 * GAS_PER_BLOB)

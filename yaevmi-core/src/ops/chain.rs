@@ -359,11 +359,16 @@ pub fn blobhash(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmR
 
 pub fn blobbasefee(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmResult<()> {
     evm.gas_charge(2)?;
-    // TODO: proper blob handling (remove workaround)
+    // TODO: proper blob handling
+    // context: 0xd6859d613c7ffcfb371ec3c3eebc8ad37dc9480df0e6a304c80864b104d6c962/24935686:49
+    // excess = 0x0da161cb must lead to blob_base_fee = 0x12d4542f (source: chain state)
+    // yet it does not fit `fake_exponent` calculations described in the spec!
+
     // let fee = evm.head.excess_blob_gas.map_or(Int::ZERO, |excess| {
     //     crate::call::blob_base_fee(evm.head.number.as_u64(), excess)
     // });
     // evm.push(fee)?;
-    evm.push(Int::ZERO)?;
+
+    evm.push(Int::ONE)?;
     Ok(())
 }

@@ -667,12 +667,12 @@ mod live {
         ctx.block.beneficiary = to_addr(&head.coinbase);
         ctx.block.basefee = head.base_fee.as_u64();
         ctx.block.prevrandao = Some(to_b256(&head.prevrandao));
-        // TODO: proper blob handling (remove workaround)
+        ctx.cfg.chain_id = chain_id;
+        // TODO: proper blob handling
         // if let Some(excess) = head.excess_blob_gas {
         //     let fraction = if head.number.as_u64() >= 22_431_084 { 5_007_716u64 } else { 3_338_477u64 };
         //     ctx.block.set_blob_excess_gas_and_price(excess.as_u64(), fraction);
         // }
-        ctx.cfg.chain_id = chain_id;
 
         // let fork = revm::primitives::hardfork::SpecId::OSAKA;
         // ctx.cfg.set_spec_and_mainnet_gas_params(fork);

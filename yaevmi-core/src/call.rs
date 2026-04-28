@@ -124,27 +124,6 @@ pub struct Head {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_beacon_block_root: Option<Int>,
 }
-// TODO: proper blob handling (remove workaround)
-/*
-/// EIP-4844 fake_exponential: compute floor(e^(excess_blob_gas/denominator)).
-/// Prague (EIP-7691, mainnet block ≥ 22431084) uses denominator 5007716; Cancun uses 3338477.
-pub fn blob_base_fee(block_number: u64, excess_blob_gas: Int) -> Int {
-    use yaevmi_base::math::lift;
-    let mul = lift(|[a, b]| a * b);
-    let div = lift(|[a, b]| a / b);
-    let add = lift(|[a, b]| a + b);
-    let d = Int::from(if block_number >= 22_431_084u64 { 5_007_716u64 } else { 3_338_477u64 });
-    let mut i = Int::ONE;
-    let mut out = Int::ZERO;
-    let mut acc = d;
-    while !acc.is_zero() {
-        out = add([out, acc]);
-        acc = div([mul([acc, excess_blob_gas]), mul([d, i])]);
-        i = add([i, Int::ONE]);
-    }
-    div([out, d])
-}
-*/
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -272,6 +251,24 @@ pub struct Logged {
     pub transaction_hash: Int,
     pub transaction_index: Int,
 }
+
+// TODO: proper blob handling
+/*
+/// EIP-4844 fake_exponential: compute floor(factor * e^(numerator/denominator)).
+/// Prague (EIP-7691, mainnet block ≥ 22431084) uses denominator 5007716; Cancun uses 3338477.
+pub fn blob_base_fee(block_number: u64, excess_blob_gas: u64) -> u128 {
+    let d = if block_number >= 22_431_084 { 5_007_716u128 } else { 3_338_477u128 };
+    let mut i = 1u64;
+    let mut out = 0;
+    let mut acc = d;
+    while !acc.is_zero() {
+        out += acc;
+        acc = (acc * excess_blob_gas) / (d, i);
+        i += 1;
+    }
+    out / d
+}
+*/
 
 #[cfg(test)]
 mod tests {
