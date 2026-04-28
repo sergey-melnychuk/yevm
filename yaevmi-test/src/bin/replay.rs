@@ -31,6 +31,7 @@ const YAEVMI_RPC_URL: &str = "YAEVMI_RPC_URL";
 // ## cat 10.log | grep FAIL | cut -d '=' -f 2 | cut -d ' ' -f 1 >> todo.log
 // for i in {0..100}; do x=$(($i + 24935681)); ./tmp/replay $x; done > 100.log &
 // for i in {0..200}; do x=$(($i + 24938068)); ./tmp/replay $x; done > 200.log &
+// for i in {0..300}; do x=$(($i + 24978072)); ./tmp/replay $x; done > 300.log &
 // for x in $(cat todo.log); do ./target/release/replay $x; done > todo.replay.log
 
 #[tokio::main]

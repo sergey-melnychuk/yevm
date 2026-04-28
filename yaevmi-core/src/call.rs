@@ -254,16 +254,16 @@ pub struct Logged {
 
 // TODO: proper blob handling
 /*
-/// EIP-4844 fake_exponential: compute floor(factor * e^(numerator/denominator)).
-/// Prague (EIP-7691, mainnet block ≥ 22431084) uses denominator 5007716; Cancun uses 3338477.
-pub fn blob_base_fee(block_number: u64, excess_blob_gas: u64) -> u128 {
-    let d = if block_number >= 22_431_084 { 5_007_716u128 } else { 3_338_477u128 };
+/// EIP-4844 BLOBBASEFEE calculation (fake_exponential)
+/// (see: https://eips.ethereum.org/EIPS/eip-4844)
+pub fn blob_base_fee(excess_blob_gas: u64) -> u128 {
+    let d = 5_007_716u128;
     let mut i = 1u64;
     let mut out = 0;
     let mut acc = d;
-    while !acc.is_zero() {
+    while acc > 0 {
         out += acc;
-        acc = (acc * excess_blob_gas) / (d, i);
+        acc = (acc * excess_blob_gas) / (d * i);
         i += 1;
     }
     out / d
