@@ -706,6 +706,11 @@ impl Executor {
                     if let Some(created) = mode.created() {
                         let creator = call.by;
 
+                        // Fetch before collision check — account may exist on-chain but not in cache
+                        if state.acc(&created).is_none() {
+                            fetch(Fetch::Account(created), state, chain).await?;
+                        }
+
                         // Collision check: existing nonce or code at derived address
                         let existing_nonce = state.nonce(&created).unwrap_or(Int::ZERO);
                         let has_code = state.code(&created).is_some_and(|(c, _)| !c.0.is_empty());
@@ -721,10 +726,6 @@ impl Executor {
                         }
 
                         // Create account with nonce=1 (EIP-161), preserving pre-existing balance
-
-                        if state.acc(&created).is_none() {
-                            fetch(Fetch::Account(created), state, chain).await?;
-                        }
                         let existing_balance = state.balance(&created).unwrap_or(Int::ZERO);
                         state.create(
                             created,
