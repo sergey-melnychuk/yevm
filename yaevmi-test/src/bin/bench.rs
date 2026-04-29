@@ -8,17 +8,33 @@ use std::{
 use yaevmi_core::{cache::Cache, chain::Fetched, exe::{Executor, pre_block}, rpc::Rpc, state::State};
 
 const BLOCK: u64 = 24929490;
+const ITERS: usize = 1000;
 
-const N: usize = 1000;
+fn args(block: u64, iters: usize) -> eyre::Result<(u64, usize)> {
+    let mut args = std::env::args();
+    let _ = args.next();
+    let block = match args.next() {
+        Some(s) => s.parse().map_err(|_| eyre::eyre!("invalid block: {s}"))?,
+        None => block,
+    };
+    let iters = match args.next() {
+        Some(s) => s.parse().map_err(|_| eyre::eyre!("invalid iters: {s}"))?,
+        None => iters,
+    };
+    Ok((block, iters))
+}
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     let rpc = Rpc::offline();
 
-    let path = format!("fetch/{}.json", BLOCK);
+    let (block, iters) = args(BLOCK, ITERS)?;
+    println!("bench: block={block} iters={iters}");
+
+    let path = format!("fetch/{}.json", block);
     let fetches = Path::new(&path);
     if !fetches.exists() {
-        eyre::bail!("No saved fetche found: {path}");
+        eyre::bail!("No saved fetches found: {path}");
     }
     let (block, chain_id, fetched) = {
         let file = File::open(fetches)?;
@@ -36,7 +52,7 @@ async fn main() -> eyre::Result<()> {
     };
 
     let head = block.head.clone();
-    for i in 0..N {
+    for i in 0..iters {
         let mut cache = Cache::new();
         cache.set_chain_id(chain_id);
         cache.prefetched(fetched.clone());
@@ -50,7 +66,7 @@ async fn main() -> eyre::Result<()> {
             let _ = exe.run(tx, head.clone(), &mut cache, &rpc).await?;
         }
         let ms = now.elapsed().as_millis() as u64;
-        println!("N={i:03} T={:6.4}", ms as f64 / 1000.0);
+        println!("I={i:03} T={:6.4}", ms as f64 / 1000.0);
     }
     Ok(())
 }
