@@ -5,7 +5,7 @@ use std::{
     time::Instant,
 };
 
-use yaevmi_core::{cache::Cache, chain::Fetched, exe::Executor, rpc::Rpc, state::State};
+use yaevmi_core::{cache::Cache, chain::Fetched, exe::{Executor, pre_block}, rpc::Rpc, state::State};
 
 const BLOCK: u64 = 24929490;
 
@@ -42,6 +42,7 @@ async fn main() -> eyre::Result<()> {
         cache.prefetched(fetched.clone());
 
         let now = Instant::now();
+        pre_block(&head, &mut cache, &rpc).await?;
         for tx in &block.txs {
             let (tx, call) = (tx.tx.clone(), tx.call.clone().into());
             let mut exe = Executor::new(call);
