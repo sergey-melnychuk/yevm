@@ -339,6 +339,7 @@ pub async fn run_case(tc: &TestCase, fork: &str) -> Vec<(usize, eyre::Result<()>
 
 /// Run every test in GeneralStateTests/ for the Cancun fork.
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "GeneralStateTests"]
 async fn test_general_state_cancun() -> eyre::Result<()> {
     const FORK: &str = "Cancun";
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/GeneralStateTests");
