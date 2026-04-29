@@ -42,13 +42,14 @@ cargo build --release --bin bench
 
 3. Results
 
-MBP: MacBook Pro M1, 16GB RAM, 2020
-NUC: Intel NUC 12th Gen i7-1260P, 32GB RAM
-DO general: 4vCPU/8GB
-DO CPU-opt: 8vCPU/16GB
-DO mem-opt: 4vCPU/32GB
+* MBP: MacBook Pro M1, 16GB RAM, 2020
+* AIR: MacBook Air M1, 8GB RAM, 2020
+* NUC: Intel NUC 12th Gen i7-1260P, 32GB RAM
+* DO general: 4vCPU/8GB
+* DO CPU-opt: 8vCPU/16GB
+* DO mem-opt: 4vCPU/32GB
 
-| Block | MBP | NUC | DO gen | DO/cpu | DO mem |
-|-------|-----|-----|--------|--------|--------|
-| 24929490 | 77ms | 81ms | 130ms | 130ms | 130ms |
-| 24929491 | 45ms | 62ms | 81ms | 81ms | 82ms |
+| Block | MBP | AIR | NUC | DO gen | DO/cpu | DO mem |
+|-------|-----|-----|-----|--------|--------|--------|
+| 24929490 | 77ms | 123ms | 81ms | 130ms | 130ms | 130ms |
+| 24929491 | 45ms | 72ms | 62ms | 81ms | 81ms | 82ms |
