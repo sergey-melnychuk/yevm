@@ -181,16 +181,14 @@
 
   <section class="center">
     <h3>Why? - security</h3>
-    <p>ByBit hack: Impl Swap TX (21895238:116)</p>
+    <p>ByBit hack: Impl Swap TX (<a href="https://etherscan.io/tx/0x46deef0f52e3a983b67abf4714448a41dd7ffd6d32d32da69d62081c68ad7882">21895238:116</a>)</p>
     <img src="static/tx0.png" style="max-height: 50vh; max-width: 100%;" />
-    <!-- 0x46deef0f52e3a983b67abf4714448a41dd7ffd6d32d32da69d62081c68ad7882 -->
   </section>
 
   <section class="center">
     <h3>Why? - security</h3>
-    <p>ByBit hack: Drain ETH TX (21895251:35)</p>
+    <p>ByBit hack: Drain ETH TX (<a href="https://etherscan.io/tx/0xb61413c495fdad6114a7aa863a00b2e3c28945979a10885b12b30316ea9f072c">21895251:35</a>)</p>
     <img src="static/tx1.png" style="max-height: 50vh; max-width: 100%;" />
-    <!-- 0xb61413c495fdad6114a7aa863a00b2e3c28945979a10885b12b30316ea9f072c -->
   </section>
 
 </section>
@@ -219,11 +217,11 @@
   <section class="center">
     <h3>How? - A/B against revm</h3>
     <ul>
-      <li>Run the same transaction through YAEVMI and revm simultaneously</li>
-      <li>Compare step-by-step: opcode, PC, gas, stack depth</li>
-      <li>First mismatch pinpoints exactly where implementations diverge</li>
-      <li>revm is the reference — if they agree, we're correct</li>
-      <li>Revealed bugs invisible to unit tests: wrong EIP interactions, edge-case gas</li>
+      <li>The revm trace is the source of truth*</li>
+      <li>Run the same tx through YAEVMI and revm</li>
+      <li>Compare every step: opcode, PC, gas, ...</li>
+      <li>Step mismatch → implementations diverge</li>
+      <li>Gas match + Trace match → peace of mind</li>
     </ul>
   </section>
 
@@ -238,8 +236,7 @@
   </section>
 
   <section class="center">
-    <h3>How? - but...</h3>
-    <p>Lots of WTF moments</p>
+    <h3>How? - ...</h3>
     <ul>
       <li>🤯 why would anyone send ETH to 0x0?</li>
       <li>🙃 why is this address/cell cold/hot?</li>
@@ -302,10 +299,8 @@
   <section class="center">
     <h3>Solenoid: fun facts 🎉</h3>
     <ul>
-      <li>🦄 UniSwap V3 QuoterV2 was the first contract call simulated correctly</li>
+      <li>🦄 UniSwap quoter was first external call</li>
     <pre><code class="bash" data-trim>
-  $ etc/quoter.sh
-  ...
   📊 QuoterV2 Results:
     💰 Amount Out: 1 WETH for 3943.532812 USDC
     📊 Price After (WETH/USDC): 3955.222269012662
@@ -316,7 +311,7 @@
   ⛽ Gas used: 123290
     </code></pre>
       <li>🤖 All precompiles implemented by Claude Code</li>
-      <li>📊 Aztec L2 launch generated 4.5M gas txs — producing <strong>55GB</strong> of per-opcode trace logs</li>
+      <li>📊 Aztec L2 4.5M gas txs: <strong>55GB</strong> of opcode traces</li>
     </ul>
   </section>
 
