@@ -1,4 +1,789 @@
 <!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YAEVMI — EVM Simulator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    /* ── Tokens ────────────────────────────────────── */
+    :root {
+      --bg:         #07090f;
+      --surface:    rgba(255,255,255,0.04);
+      --surface2:   rgba(255,255,255,0.07);
+      --border:     rgba(255,255,255,0.09);
+      --primary:    #FF6B35;
+      --secondary:  #7C3AED;
+      --accent:     #06B6D4;
+      --good:       #4ADE80;
+      --bad:        #F87171;
+      --warn:       #FBBF24;
+      --text:       #CBD5E1;
+      --text-dim:   #475569;
+      --text-b:     #F1F5F9;
+      --radius:     12px;
+      --radius-sm:  6px;
+      --font:       'Inter', system-ui, sans-serif;
+      --mono:       'JetBrains Mono', monospace;
+    }
+
+    /* ── Reset ─────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    /* Ambient blobs */
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background:
+        radial-gradient(ellipse 60% 50% at 10% 0%,   rgba(124,58,237,0.12) 0%, transparent 60%),
+        radial-gradient(ellipse 50% 40% at 90% 100%,  rgba(255,107,53,0.09) 0%, transparent 60%),
+        radial-gradient(ellipse 40% 50% at 55% 50%,   rgba(6,182,212,0.05) 0%, transparent 60%);
+      pointer-events: none; z-index: 0;
+    }
+
+    body::after {
+      content: '';
+      position: fixed; inset: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.011) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.011) 1px, transparent 1px);
+      background-size: 60px 60px;
+      pointer-events: none; z-index: 0;
+    }
+
+    /* ── Layout ────────────────────────────────────── */
+    #app {
+      position: relative; z-index: 1;
+      max-width: 860px;
+      margin: 0 auto;
+      padding: clamp(16px, 4vw, 40px) clamp(12px, 4vw, 24px) 80px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* ── Card ──────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      padding: clamp(16px, 3vw, 28px);
+      box-shadow: 0 24px 48px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.07);
+    }
+
+    /* ── Header ────────────────────────────────────── */
+    .header {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .header h1 {
+      font-size: clamp(1.4em, 3.5vw, 1.9em);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      color: var(--text-b);
+    }
+
+    .header h1 span { color: var(--primary); }
+
+    /* ── Form ──────────────────────────────────────── */
+    .form-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    label {
+      font-size: 0.75em;
+      font-weight: 600;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+    }
+
+    input[type="text"], input[type="url"] {
+      background: rgba(0,0,0,0.35);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text-b);
+      font-family: var(--mono);
+      font-size: 0.82em;
+      padding: 10px 14px;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      width: 100%;
+    }
+
+    input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(6,182,212,0.15);
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    button {
+      font-family: var(--font);
+      font-size: 0.85em;
+      font-weight: 600;
+      border: none;
+      border-radius: var(--radius-sm);
+      padding: 10px 22px;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s;
+      user-select: none;
+    }
+
+    button:active { transform: scale(0.97); }
+    button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--primary), #FF9055);
+      color: #fff;
+    }
+
+    .btn-secondary {
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover:not(:disabled) { background: rgba(255,255,255,0.1); }
+
+    /* ── Status bar ────────────────────────────────── */
+    #status-bar {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.82em;
+      margin-left: 4px;
+    }
+
+    #status-bar.visible { display: flex; }
+
+    .spinner {
+      width: 14px; height: 14px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      flex-shrink: 0;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #status-text { color: var(--text-dim); }
+    #step-counter { color: var(--accent); font-family: var(--mono); font-weight: 600; }
+    #elapsed { color: var(--text-dim); font-family: var(--mono); }
+
+    /* ── Modal ─────────────────────────────────────── */
+    #modal-overlay {
+      display: none;
+      position: fixed; inset: 0;
+      z-index: 100;
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    #modal-overlay.visible { display: flex; }
+
+    #modal {
+      background: #0f1320;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 32px 64px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.08);
+      padding: 28px;
+      width: 100%;
+      max-width: 480px;
+      animation: modal-in 0.18s ease;
+    }
+
+    @keyframes modal-in {
+      from { opacity: 0; transform: translateY(-12px) scale(0.98); }
+      to   { opacity: 1; transform: none; }
+    }
+
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+    }
+
+    .modal-title {
+      font-size: 0.85em;
+      font-weight: 700;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+    }
+
+    .modal-close {
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      font-size: 1.3em;
+      line-height: 1;
+      padding: 2px 6px;
+      cursor: pointer;
+      border-radius: var(--radius-sm);
+      transition: color 0.15s, background 0.15s;
+    }
+
+    .modal-close:hover { color: var(--text-b); background: var(--surface2); }
+    .modal-close:active { transform: none; }
+
+    .modal-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .modal-footer button { min-width: 90px; }
+
+    /* ── Result card ───────────────────────────────── */
+    #result-card { display: none; }
+    #result-card.visible { display: block; }
+
+    .result-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(90px, max-content));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .stat-box {
+      background: rgba(0,0,0,0.25);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 12px 14px;
+    }
+
+    .stat-box .stat-label {
+      font-size: 0.68em;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 4px;
+    }
+
+    .stat-box .stat-value {
+      font-family: var(--mono);
+      font-size: 1.05em;
+      font-weight: 600;
+      color: var(--text-b);
+    }
+
+    .stat-box .stat-value.ok   { color: var(--good); }
+    .stat-box .stat-value.fail { color: var(--bad); }
+
+    .tx-hash {
+      font-family: var(--mono);
+      font-size: 0.75em;
+      color: var(--text-dim);
+      word-break: break-all;
+      margin-bottom: 16px;
+    }
+
+    .tx-hash a {
+      color: var(--accent);
+      text-decoration: none;
+      border-bottom: 1px solid rgba(6,182,212,0.3);
+    }
+
+    /* ── Opcode table ──────────────────────────────── */
+    #ops-card { display: none; }
+    #ops-card.visible { display: block; }
+
+    .card-title {
+      font-size: 0.72em;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 14px;
+    }
+
+    .ops-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+      gap: 6px;
+    }
+
+    .op-chip {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(0,0,0,0.3);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 5px 10px;
+      font-size: 0.75em;
+      gap: 6px;
+    }
+
+    .op-name {
+      font-family: var(--mono);
+      font-weight: 600;
+      color: var(--text-b);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .op-count {
+      font-family: var(--mono);
+      color: var(--text-dim);
+      flex-shrink: 0;
+    }
+
+    /* Opcode group colors */
+    .op-chip[data-group="flow"]    { border-color: rgba(251,191,36,0.25); }
+    .op-chip[data-group="flow"]    .op-name { color: var(--warn); }
+    .op-chip[data-group="storage"] { border-color: rgba(255,107,53,0.25); }
+    .op-chip[data-group="storage"] .op-name { color: var(--primary); }
+    .op-chip[data-group="call"]    { border-color: rgba(124,58,237,0.35); }
+    .op-chip[data-group="call"]    .op-name { color: #A78BFA; }
+    .op-chip[data-group="math"]    { border-color: rgba(6,182,212,0.2); }
+    .op-chip[data-group="math"]    .op-name { color: var(--accent); }
+    .op-chip[data-group="halt"]    { border-color: rgba(248,113,113,0.3); }
+    .op-chip[data-group="halt"]    .op-name { color: var(--bad); }
+
+    /* ── Error ─────────────────────────────────────── */
+    #error-card { display: none; }
+    #error-card.visible { display: block; }
+
+    .error-msg {
+      font-family: var(--mono);
+      font-size: 0.8em;
+      color: var(--bad);
+      background: rgba(248,113,113,0.08);
+      border: 1px solid rgba(248,113,113,0.25);
+      border-radius: var(--radius-sm);
+      padding: 12px 14px;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    /* ── Footer ────────────────────────────────────── */
+    footer {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      z-index: 10;
+      text-align: center;
+      padding: 10px;
+      font-size: 0.72em;
+      color: var(--text-dim);
+      background: linear-gradient(transparent, rgba(7,9,15,0.95));
+    }
+
+    footer a { color: var(--accent); text-decoration: none; }
+
+    /* ── Mobile ────────────────────────────────────── */
+    @media (max-width: 500px) {
+      .ops-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
+      .result-grid { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Endpoint modal -->
+<div id="modal-overlay">
+  <div id="modal">
+    <div class="modal-header">
+      <span class="modal-title">RPC Endpoint</span>
+      <button class="modal-close" id="modal-close" aria-label="Close">✕</button>
+    </div>
+    <div class="field">
+      <label>URL</label>
+      <input type="url" id="rpc-url" value="https://ethereum-rpc.publicnode.com" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" id="modal-cancel">Cancel</button>
+      <button class="btn-primary"   id="modal-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="app">
+  <!-- Header -->
+  <div class="header">
+    <h1>YA<span>EVM</span>I</h1>
+  </div>
+
+  <!-- Input form -->
+  <div class="card" id="form-card">
+    <div class="form-grid">
+      <div class="field">
+        <label>Transaction — hash or block:index</label>
+        <input type="text" id="txn-inp" placeholder="0x… or 21895238:116" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="btn-row">
+        <button class="btn-primary"   id="btn-run">Simulate</button>
+        <button class="btn-secondary" id="btn-endpoint">Endpoint</button>
+        <button class="btn-secondary" id="btn-rnd">Random</button>
+        <div id="status-bar">
+          <div class="spinner"></div>
+          <span id="status-text">Running…</span>
+          <span id="step-counter"></span>
+          <span id="elapsed"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Error -->
+  <div class="card" id="error-card">
+    <div class="card-title">Error</div>
+    <div class="error-msg" id="error-msg"></div>
+  </div>
+
+  <!-- Result -->
+  <div class="card" id="result-card">
+    <div class="card-title">Result</div>
+    <div class="tx-hash" id="result-tx"></div>
+    <div class="result-grid" id="result-grid"></div>
+  </div>
+
+  <!-- Opcode frequency -->
+  <div class="card" id="ops-card">
+    <div class="card-title">Opcodes <span id="ops-steps"></span></div>
+    <div class="ops-grid" id="ops-grid"></div>
+  </div>
+</div>
+
+<footer>
+  <a href="https://github.com/sergey-melnychuk/yaevmi">github.com/sergey-melnychuk/yaevmi</a>
+</footer>
+
+<script type="module">
+import init, { pick, run } from './pkg/yaevmi_wasm.js';
+await init();
+
+/* ── Opcode groups ─────────────────────────────────────────── */
+const OP_GROUPS = {
+  flow:    new Set(['JUMP','JUMPI','JUMPDEST','PC','PUSH1','PUSH2','PUSH3','PUSH4','PUSH5',
+                    'PUSH6','PUSH7','PUSH8','PUSH9','PUSH10','PUSH11','PUSH12','PUSH13',
+                    'PUSH14','PUSH15','PUSH16','PUSH17','PUSH18','PUSH19','PUSH20','PUSH21',
+                    'PUSH22','PUSH23','PUSH24','PUSH25','PUSH26','PUSH27','PUSH28','PUSH29',
+                    'PUSH30','PUSH31','PUSH32','DUP1','DUP2','DUP3','DUP4','DUP5','DUP6',
+                    'DUP7','DUP8','DUP9','DUP10','DUP11','DUP12','DUP13','DUP14','DUP15',
+                    'DUP16','SWAP1','SWAP2','SWAP3','SWAP4','SWAP5','SWAP6','SWAP7','SWAP8',
+                    'SWAP9','SWAP10','SWAP11','SWAP12','SWAP13','SWAP14','SWAP15','SWAP16',
+                    'POP','MLOAD','MSTORE','MSTORE8','MSIZE']),
+  storage: new Set(['SLOAD','SSTORE','TLOAD','TSTORE']),
+  call:    new Set(['CALL','STATICCALL','DELEGATECALL','CALLCODE','CREATE','CREATE2',
+                    'RETURN','SELFDESTRUCT']),
+  math:    new Set(['ADD','MUL','SUB','DIV','SDIV','MOD','SMOD','ADDMOD','MULMOD','EXP',
+                    'SIGNEXTEND','LT','GT','SLT','SGT','EQ','ISZERO','AND','OR','XOR','NOT',
+                    'BYTE','SHL','SHR','SAR','SHA3']),
+  halt:    new Set(['STOP','REVERT','INVALID']),
+};
+
+function opGroup(name) {
+  for (const [g, s] of Object.entries(OP_GROUPS)) if (s.has(name)) return g;
+  return 'other';
+}
+
+/* ── Components ────────────────────────────────────────────── */
+
+class StatusBar {
+  constructor() {
+    this.el      = document.getElementById('status-bar');
+    this.textEl  = document.getElementById('status-text');
+    this.countEl = document.getElementById('step-counter');
+    this.timeEl  = document.getElementById('elapsed');
+    this._t0     = 0;
+    this._raf    = null;
+  }
+
+  show(msg) {
+    this.textEl.textContent = msg;
+    this.countEl.textContent = '';
+    this.el.classList.add('visible');
+    this._t0 = performance.now();
+    this._tick();
+  }
+
+  update(steps) {
+    this.countEl.textContent = `${steps.toLocaleString()} steps`;
+  }
+
+  hide() {
+    cancelAnimationFrame(this._raf);
+    this.el.classList.remove('visible');
+  }
+
+  _tick() {
+    const ms = performance.now() - this._t0;
+    this.timeEl.textContent = _fmtMs(ms);
+    this._raf = requestAnimationFrame(() => this._tick());
+  }
+}
+
+class EndpointModal {
+  constructor() {
+    this.overlay  = document.getElementById('modal-overlay');
+    this.inpUrl   = document.getElementById('rpc-url');
+    this._pending = null;
+
+    document.getElementById('modal-close').onclick  = () => this.hide();
+    document.getElementById('modal-cancel').onclick = () => this.hide();
+    document.getElementById('modal-save').onclick   = () => this._save();
+    this.overlay.addEventListener('click', e => { if (e.target === this.overlay) this.hide(); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') this.hide(); });
+  }
+
+  show() {
+    this._pending = this.inpUrl.value;
+    this.overlay.classList.add('visible');
+    setTimeout(() => this.inpUrl.focus(), 50);
+  }
+
+  hide() {
+    this.inpUrl.value = this._pending ?? this.inpUrl.value;
+    this.overlay.classList.remove('visible');
+  }
+
+  _save() {
+    this._pending = this.inpUrl.value;
+    this.overlay.classList.remove('visible');
+  }
+
+  get url() { return this.inpUrl.value.trim(); }
+}
+
+class ErrorCard {
+  constructor() {
+    this.el  = document.getElementById('error-card');
+    this.msg = document.getElementById('error-msg');
+  }
+  show(text) { this.msg.textContent = text; this.el.classList.add('visible'); }
+  hide()     { this.el.classList.remove('visible'); }
+}
+
+class ResultCard {
+  constructor() {
+    this.el   = document.getElementById('result-card');
+    this.tx   = document.getElementById('result-tx');
+    this.grid = document.getElementById('result-grid');
+  }
+
+  show(checkStr, steps, ms) {
+    const lines = checkStr.split('\n');
+    const txHash = (lines[0] || '').replace('TX: ', '').trim();
+    const gasOk  = /OK=true/.test(lines[1] || '');
+    const stOk   = /OK=true/.test(lines[2] || '');
+    const yGas   = (lines[1] || '').match(/yevm=(\d+)/)?.[1] ?? '?';
+
+    if (txHash) {
+      this.tx.innerHTML = `<a href="https://etherscan.io/tx/${txHash}" target="_blank" rel="noopener">${txHash}</a>`;
+    }
+
+    this.grid.innerHTML = `
+      ${_stat('Steps',  steps.toLocaleString())}
+      ${_stat('Time',   _fmtMs(ms))}
+      ${_stat('Gas',    _fmtNum(yGas), gasOk ? 'ok' : 'fail')}
+      ${_stat('Status', stOk ? 'OK' : 'FAIL', stOk ? 'ok' : 'fail')}
+    `;
+    this.el.classList.add('visible');
+  }
+
+  hide() { this.el.classList.remove('visible'); }
+}
+
+class OpsCard {
+  constructor() {
+    this.el   = document.getElementById('ops-card');
+    this.grid = document.getElementById('ops-grid');
+  }
+
+  show(counts, steps) {
+    const total = steps.toLocaleString();
+    document.getElementById('ops-steps').textContent = `· ${total} steps`;
+    const sorted = Object.entries(counts).sort((a, b) => a[0].localeCompare(b[0]));
+    this.grid.innerHTML = sorted.map(([name, n]) => {
+      const g = opGroup(name);
+      return `<div class="op-chip" data-group="${g}">
+        <span class="op-name">${name}</span>
+        <span class="op-count">${n.toLocaleString()}</span>
+      </div>`;
+    }).join('');
+    this.el.classList.add('visible');
+  }
+
+  hide() { this.el.classList.remove('visible'); }
+}
+
+/* ── Helpers ───────────────────────────────────────────────── */
+function _fmtMs(ms) {
+  if (ms < 1000) return `${ms.toFixed(0)} ms`;
+  return `${(ms / 1000).toFixed(2)} s`;
+}
+function _fmtNum(n) {
+  const x = parseInt(n, 10);
+  return isNaN(x) ? n : x.toLocaleString();
+}
+function _stat(label, value, cls = '') {
+  return `<div class="stat-box">
+    <div class="stat-label">${label}</div>
+    <div class="stat-value ${cls}">${value}</div>
+  </div>`;
+}
+
+/* ── App ───────────────────────────────────────────────────── */
+class App {
+  constructor() {
+    this.status   = new StatusBar();
+    this.modal    = new EndpointModal();
+    this.errCard  = new ErrorCard();
+    this.result   = new ResultCard();
+    this.ops      = new OpsCard();
+
+    this.btnRun      = document.getElementById('btn-run');
+    this.btnEndpoint = document.getElementById('btn-endpoint');
+    this.btnRnd      = document.getElementById('btn-rnd');
+    this.inpTxn      = document.getElementById('txn-inp');
+
+    this.running = false;
+  }
+
+  init() {
+    this.btnRun.onclick      = () => this._run();
+    this.btnEndpoint.onclick = () => this.modal.show();
+    this.btnRnd.onclick      = () => this._random().then(() => this._run());
+
+    const params = new URLSearchParams(location.search);
+    const txParam = params.get('tx');
+    if (txParam) {
+      this.inpTxn.value = txParam;
+      this._run();
+    } else {
+      this._random().then(() => this._run());
+    }
+  }
+
+  _setRunning(v) {
+    this.running = v;
+    this.btnRun.disabled      = v;
+    this.btnRnd.disabled      = v;
+    this.btnEndpoint.disabled = v;
+  }
+
+  async _random() {
+    if (this.running) return;
+    const url = this.modal.url;
+    if (!url) return;
+    this.status.show('Picking random tx…');
+    this.btnRun.disabled      = true;
+    this.btnRnd.disabled      = true;
+    this.btnEndpoint.disabled = true;
+    try {
+      const tx = await pick(url);
+      this.inpTxn.value = tx;
+      history.replaceState(null, '', `?tx=${encodeURIComponent(tx)}`);
+    } catch (e) {
+      this._showError(e);
+    } finally {
+      this.status.hide();
+      this.btnRun.disabled      = false;
+      this.btnRnd.disabled      = false;
+      this.btnEndpoint.disabled = false;
+    }
+  }
+
+  async _run() {
+    if (this.running) return;
+    const url = this.modal.url;
+    const txn = this.inpTxn.value.trim();
+    if (!url || !txn) return;
+
+    this._setRunning(true);
+    this.errCard.hide();
+    this.result.hide();
+    this.ops.hide();
+    this.status.show('Running…');
+
+    history.replaceState(null, '', `?tx=${encodeURIComponent(txn)}`);
+
+    const counts = {};
+    let steps = 0;
+    const UPDATE_INTERVAL = 200;
+
+    try {
+      const stream = await run(url, txn);
+      const t0 = performance.now();
+      let lastUpdate = t0;
+      let step;
+
+      while ((step = await stream.next()) !== null) {
+        console.log(step);
+        counts[step.name] = (counts[step.name] ?? 0) + 1;
+        steps++;
+
+        const now = performance.now();
+        if (now - lastUpdate > UPDATE_INTERVAL) {
+          this.status.update(steps);
+          lastUpdate = now;
+        }
+      }
+
+      const ms = performance.now() - t0;
+      this.status.hide();
+      this.result.show(stream.check(), steps, ms);
+      if (steps > 0) this.ops.show(counts, steps);
+
+    } catch (e) {
+      this.status.hide();
+      this._showError(e);
+    } finally {
+      this._setRunning(false);
+    }
+  }
+
+  _showError(e) {
+    this.errCard.show(e?.message ?? String(e));
+  }
+}
+
+new App().init();
+</script>
+</body>
+</html>
+
+<!--
+
+<!DOCTYPE html>
 <html>
 <head></head>
 <body>
@@ -22,26 +807,6 @@
     <script type="module">
         import init, { hello, call, pick, run } from './pkg/yaevmi_wasm.js';
         await init();
-
-        function test() {
-            console.log(hello('world'));
-
-            let ret = call({
-                by: '0x1',
-                to: '0x2',
-                eth: '0x3',
-                gas: 4,
-                data: '0x5'
-            });
-            console.log(ret);
-
-            try {
-                call('computer says no');
-            } catch (e) {
-                console.error('failed to parse Call', e);
-            }
-        }
-        test();
 
         var running = false;
         async function main() {
@@ -112,3 +877,5 @@
     </script>
 </body>
 </html>
+
+-->
