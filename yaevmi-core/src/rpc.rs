@@ -220,6 +220,9 @@ async fn call<R: DeserializeOwned>(
         if let Some(message) = error.as_str() {
             eyre::bail!(message.to_owned());
         }
+        if let Some(message) = error.get("message") {
+            eyre::bail!(message.to_string());
+        }
         let message = serde_json::to_string(error)?;
         eyre::bail!(message);
     }

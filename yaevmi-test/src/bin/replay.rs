@@ -32,11 +32,19 @@ const YAEVMI_RPC_URL: &str = "YAEVMI_RPC_URL";
 // for i in {0..100}; do x=$(($i + 24935681)); ./tmp/replay $x; done > 100.log &
 // for i in {0..200}; do x=$(($i + 24938068)); ./tmp/replay $x; done > 200.log &
 // for i in {0..300}; do x=$(($i + 24978072)); ./tmp/replay $x; done > 300.log &
+// for i in {0..400}; do x=$(($i + 24994424)); ./tmp/replay $x; done > 400.log &
 // for i in {0..999}; do x=$(($i + 24984743)); ./tmp/replay $x; done > 999.log &
 // for x in $(cat todo.log); do ./target/release/replay $x; done > todo.run.log
 
 #[tokio::main]
-async fn main() -> eyre::Result<()> {
+async fn main() {
+    if let Err(e) = run().await {
+        println!("{e}");
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> eyre::Result<()> {
     dotenv::dotenv().ok();
     let Ok(url) = std::env::var(YAEVMI_RPC_URL) else {
         eyre::bail!("{YAEVMI_RPC_URL} not set");
@@ -653,13 +661,13 @@ mod live {
             let timestamp = to_u256(&head.timestamp).to::<u64>();
             let slot = U256::from(timestamp % 8191);
             db.insert_account_storage(beacon_roots, slot, U256::from(timestamp))
-                .unwrap();
+                .map_err(|e| eyre::eyre!("{e:?}"))?;
             db.insert_account_storage(
                 beacon_roots,
                 slot + U256::from(8191u64),
                 U256::from_be_bytes(to_b256(&root).0),
             )
-            .unwrap();
+            .map_err(|e| eyre::eyre!("{e:?}"))?;
         }
 
         let mut ctx = Context::mainnet().with_db(db);
@@ -771,13 +779,13 @@ mod live {
             let timestamp = to_u256(&head.timestamp).to::<u64>();
             let slot = U256::from(timestamp % 8191);
             db.insert_account_storage(beacon_roots, slot, U256::from(timestamp))
-                .unwrap();
+                .map_err(|e| eyre::eyre!("{e:?}"))?;
             db.insert_account_storage(
                 beacon_roots,
                 slot + U256::from(8191u64),
                 U256::from_be_bytes(to_b256(&root).0),
             )
-            .unwrap();
+            .map_err(|e| eyre::eyre!("{e:?}"))?;
         }
 
         let mut ctx = Context::mainnet().with_db(db);
