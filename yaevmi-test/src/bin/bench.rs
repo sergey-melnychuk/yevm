@@ -5,7 +5,13 @@ use std::{
     time::Instant,
 };
 
-use yaevmi_core::{cache::Cache, chain::Fetched, exe::{Executor, pre_block}, rpc::Rpc, state::State};
+use yaevmi_core::{
+    cache::Cache,
+    chain::Fetched,
+    exe::{Executor, pre_block},
+    rpc::Rpc,
+    state::State,
+};
 
 const BLOCK: u64 = 24929490;
 const ITERS: usize = 1000;

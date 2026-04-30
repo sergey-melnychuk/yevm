@@ -228,8 +228,18 @@ async fn run() -> eyre::Result<()> {
             eyre::bail!("revm result unavailable");
         };
         let (mut violations, revm_gas_ok) = check_result(result, receipt, Some(revm_call));
-        let skip_value = if revm_gas_ok { vec![] } else { vec![sender, head.coinbase] };
-        let new_drift = check_state(revm_state, &mut cache, &mut violations, &skip_value, &revm_drift);
+        let skip_value = if revm_gas_ok {
+            vec![]
+        } else {
+            vec![sender, head.coinbase]
+        };
+        let new_drift = check_state(
+            revm_state,
+            &mut cache,
+            &mut violations,
+            &skip_value,
+            &revm_drift,
+        );
         revm_drift.extend(new_drift);
 
         let stats = if fetching > 0 {
@@ -285,14 +295,21 @@ async fn run() -> eyre::Result<()> {
 
 fn fmt_int(v: Int) -> String {
     let bytes = v.as_ref();
-    let start = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len() - 1);
+    let start = bytes
+        .iter()
+        .position(|&b| b != 0)
+        .unwrap_or(bytes.len() - 1);
     bytes[start..].iter().fold("0x".to_string(), |mut s, b| {
         s.push_str(&format!("{b:02x}"));
         s
     })
 }
 
-fn check_result(result: CallResult, receipt: Receipt, revm: Option<CallResult>) -> (Vec<String>, bool) {
+fn check_result(
+    result: CallResult,
+    receipt: Receipt,
+    revm: Option<CallResult>,
+) -> (Vec<String>, bool) {
     let mut violations = Vec::new();
     let mut revm_gas_ok = true;
     let used_gas = receipt.gas_used.as_u64() as i64;
@@ -307,7 +324,10 @@ fn check_result(result: CallResult, receipt: Receipt, revm: Option<CallResult>) 
             }
             if gas.finalized != used_gas {
                 let diff = gas.finalized - used_gas;
-                violations.push(format!("gas: have {} want {used_gas} [{diff:+}]", gas.finalized));
+                violations.push(format!(
+                    "gas: have {} want {used_gas} [{diff:+}]",
+                    gas.finalized
+                ));
             }
 
             if let Some(revm) = revm {
@@ -360,7 +380,10 @@ fn check_result(result: CallResult, receipt: Receipt, revm: Option<CallResult>) 
             }
             if gas.finalized != used_gas {
                 let diff = gas.finalized - used_gas;
-                violations.push(format!("gas: have {} want {used_gas} [{diff:+}]", gas.finalized));
+                violations.push(format!(
+                    "gas: have {} want {used_gas} [{diff:+}]",
+                    gas.finalized
+                ));
             }
 
             if let Some(revm) = revm {
@@ -431,7 +454,10 @@ fn check_state(
             ));
         }
 
-        let acc_drift = drift.iter().filter(|(a, _)| *a == acc).fold(Int::ZERO, |s, (_, d)| wadd([s, *d]));
+        let acc_drift = drift
+            .iter()
+            .filter(|(a, _)| *a == acc)
+            .fold(Int::ZERO, |s, (_, d)| wadd([s, *d]));
         let revm_value = wadd([account.value, acc_drift]);
         if actual.value != revm_value {
             if skip_value.contains(&acc) {
@@ -444,7 +470,9 @@ fn check_state(
                 };
                 violations.push(format!(
                     "REVM: account {acc} value mismatch\n  want {}\n  have {} [{sign}{}]",
-                    revm_value, actual.value, fmt_int(diff)
+                    revm_value,
+                    actual.value,
+                    fmt_int(diff)
                 ));
             }
         }

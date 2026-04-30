@@ -890,7 +890,8 @@ impl Executor {
             }
         }
 
-        let mut result = result.ok_or::<Error>(eyre::eyre!("inconsistent state: call result missing").into())?;
+        let mut result =
+            result.ok_or::<Error>(eyre::eyre!("inconsistent state: call result missing").into())?;
 
         // Revert top-level state when call returns 0 or CREATE returns zero address
         let should_revert = match &result {
