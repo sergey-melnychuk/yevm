@@ -934,6 +934,7 @@ mod live {
             },
             state: state
                 .into_iter()
+                .filter(|(_, account)| !account.is_selfdestructed())
                 .map(|(address, account)| {
                     let storage = account
                         .storage
