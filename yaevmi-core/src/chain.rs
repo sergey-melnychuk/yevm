@@ -22,6 +22,7 @@ pub trait Chain {
     async fn chain_id(&self) -> eyre::Result<u64>;
 }
 
+#[allow(clippy::large_enum_variant)] // TODO: wrap Block with Box?
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum Fetched {
     Account(Acc, Account),

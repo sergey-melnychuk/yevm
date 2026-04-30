@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use thiserror::Error;
 
 pub use yaevmi_base::{Acc, Int};
@@ -38,10 +36,8 @@ pub enum Error {
     GasAllowanceExceeded,
     #[error("Gas limit times gas price overflow")]
     GasLimitPriceProductOverflow,
-    #[error("Generic error: {0}")]
+    #[error("Error: {0}")]
     Generic(#[from] eyre::Report),
-    #[error("Internal error: {0}")]
-    Internal(Cow<'static, str>),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
