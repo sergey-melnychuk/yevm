@@ -1,13 +1,16 @@
 #[cfg(target_arch = "wasm32")] // comment-out this line for development
 mod wasm {
+    use eyre::eyre;
     use futures::StreamExt;
     use futures::channel::mpsc;
     use js_sys::JsString;
     use wasm_bindgen::prelude::*;
+    use yaevmi_base::int;
     use yaevmi_core::Int;
     use yaevmi_core::cache::Cache;
     use yaevmi_core::chain::Chain;
     use yaevmi_core::exe::{CallResult, Executor};
+    use yaevmi_core::state::State;
     use yaevmi_core::trace::Step;
     use yaevmi_core::{Call, Head, Tx, rpc::Rpc};
 
@@ -103,19 +106,46 @@ mod wasm {
     }
 
     #[wasm_bindgen]
-    pub async fn run(url: JsString) -> Result<Stream, Error> {
+    pub async fn pick(url: JsString) -> Result<JsString, Error> {
+        let rpc = Rpc::latest(url.into()).await?;
+        let txs = &rpc.block(rpc.block_number).await?.txs;
+        let len = txs.len();
+        let idx = (js_sys::Math::random() * len as f64) as usize;
+        let hash = txs[idx].tx.hash.to_string();
+        Ok(hash.into())
+    }
+
+    #[wasm_bindgen]
+    pub async fn run(url: JsString, txn: JsString) -> Result<Stream, Error> {
         let mut rpc = Rpc::latest(url.into()).await?;
+        let chain_id = rpc.chain_id().await?;
+        let txn: String = txn.into();
+        let (block, index) = if let Some((left, right)) = txn.split_once(':') {
+            let block = left.trim().parse().map_err(|_| eyre!("invalid block"))?;
+            let index = right.trim().parse().map_err(|_| eyre!("invalid index"))?;
+            (block, index)
+        } else if txn.starts_with("0x") {
+            let hash = int(&txn);
+            let receipt = rpc.receipt(hash).await?;
+            let block = receipt.block_number.as_u64();
+            let index = receipt.transaction_index.as_usize();
+            (block, index)
+        } else {
+            return Err(eyre!("invalid tx selector").into());
+        };
+
         let (call, tx, head): (Call, Tx, Head) = {
-            let block = rpc.block(rpc.block_number).await?;
-            let tx = &block.txs[0];
+            let block = rpc.block(block).await?;
+            let tx = &block.txs[index];
             let call = tx.call.clone().into();
             (call, tx.tx.clone(), block.head)
         };
         let hash = tx.hash;
-        rpc.reset(rpc.block_number - 1, head.parent_hash);
+        rpc.reset(head.number.as_u64() - 1, head.parent_hash);
 
         let (ytx, yrx) = mpsc::channel(1024 * 1024);
         let mut cache = Cache::with_sender(ytx);
+        cache.set_chain_id(chain_id);
 
         let mut exe = Executor::new(call);
         let result = exe.run(tx, head, &mut cache, &rpc).await?;
