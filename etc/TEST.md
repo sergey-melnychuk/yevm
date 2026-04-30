@@ -1,9 +1,9 @@
 ```
 ## Run regular unit tests
-cargo test -- --skip eth
+cargo test
 
 ## Run GeneralStateTests suite (release)
-cargo test --release -p yaevmi-test eth
+cargo test -p yaevmi-test --release --tests eth -- --ignored
 ```
 
 ```

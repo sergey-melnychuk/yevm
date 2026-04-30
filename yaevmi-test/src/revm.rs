@@ -151,7 +151,7 @@ pub async fn run(
     } else {
         tx.chain_id.as_u64()
     };
-    ctx.cfg.set_spec_and_mainnet_gas_params(SpecId::CANCUN);
+    ctx.cfg.set_spec_and_mainnet_gas_params(SpecId::OSAKA);
 
     // For legacy tx (max_fee_per_gas=0), use gas_price for effective fee
     let max_fee = if tx.max_fee_per_gas.is_zero() {
