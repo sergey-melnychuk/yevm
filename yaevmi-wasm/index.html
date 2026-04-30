@@ -49,6 +49,7 @@
                 return;
             }
             running = true;
+            document.getElementById("out").textContent = 'running...';
 
             const url = document.getElementById("rpc-url").value;
             if (url.trim().length === 0) {
