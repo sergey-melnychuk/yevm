@@ -1181,8 +1181,11 @@ class EventsLog {
     const data = trace.event[kind];
     if (kind === 'Undo') {
       const [from, to] = data;
+      const FRAME_EVENTS = new Set(['Call','Return','Revert','Halt']);
       for (const row of this._rows) {
-        if (row.seq >= from && row.seq < to) row.reverted = true;
+        if (row.seq >= from && row.seq < to && !FRAME_EVENTS.has(row.kind)) {
+          row.reverted = true;
+        }
       }
     } else {
       if (kind === 'Get' && data != null) {
@@ -1312,7 +1315,7 @@ class EventsLog {
 
   open()  { this.overlay.classList.add('visible'); }
   close() { this.overlay.classList.remove('visible'); }
-  hide()  { this._rows = []; this._seenGets.clear(); this._seenCode.clear(); this._hashToAcc.clear(); this.btnOpen.disabled = true; }
+  hide()  { this._rows = []; this._seenGets.clear(); this._seenCode.clear(); this._hashToAcc.clear(); this.list.innerHTML = ''; this.btnOpen.disabled = true; }
 }
 
 const _MODE = { Call:'CALL', Static:'STATICCALL', Delegate:'DELEGATECALL', CallCode:'CALLCODE', Create:'CREATE', Create2:'CREATE2' };
