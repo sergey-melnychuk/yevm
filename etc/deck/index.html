@@ -522,6 +522,7 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
     <ul>
       <li>B1: Block 24929490 (373 txs, 32 466 055 gas)</li>
       <li>B2: Block 24929491 (74 txs, 20 653 399 gas)</li>
+      <li>B3: Block 25000000 (377 txs, 33 774 715 gas)</li>
     </ul>
     <p>AVG time (ms) to execute full block:</p>
     <table>
@@ -529,10 +530,11 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
         <th>Host</th>
         <th>B1</th>
         <th>B2</th>
+        <th>B3</th>
       </tr>
-      <tr><td>MacBook Pro M1</td><td>77</td><td>45</td></tr>
-      <tr><td>Intel NUC i7-1260P</td><td>81</td><td>51</td></tr>
-      <tr><td>[some cloud provider]</td><td>130</td><td>81</td></tr>
+      <tr><td>MacBook Pro M1</td><td>77</td><td>45</td><td>43</td></tr>
+      <tr><td>Intel NUC i7-1260P</td><td>81</td><td>51</td><td>50</td></tr>
+      <tr><td>[some cloud provider]</td><td>130</td><td>81</td><td>80</td></tr>
     </table>
   </section>
 
@@ -596,6 +598,7 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
 Interesting transactions (EVM edge cases):
 - CREATE2 collision: 24984846:70 https://etherscan.io/tx/0x5160e194d799d854b358f9c7692c56e0531f3abe1e1f52fb36dd95b35d37ae28
 - SELFDESTRUCT call: 24985022:92 https://etherscan.io/tx/0x8df37a0246d1cd6c0673082d180c029d000900c93880a755e57de2df6ebd9dce
+- Fails in block, OK in tx: 25000000:11 https://etherscan.io/tx/0x931a9431783998415cf4808ce25fc3561ab0cd406af53c9aa334798737008c60
 -->
 
 </div>
