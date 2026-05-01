@@ -458,8 +458,11 @@ impl Executor {
             frame.evm.apply(state);
 
             let status = if ok { Int::ONE } else { Int::ZERO };
-            if !ok {
+            if ok {
+                state.emit(Event::Return(out.clone().into(), gas_used.max(0) as u64));
+            } else {
                 state.revert_to(frame.checkpoint);
+                state.emit(Event::Revert(vec![].into(), gas_used.max(0) as u64));
             }
 
             let mut result = CallResult::Done {
@@ -632,6 +635,17 @@ impl Executor {
                         }
 
                         let status = if ok { Int::ONE } else { Int::ZERO };
+                        if ok {
+                            let d = state.get_depth();
+                            state.set_depth(d + 1);
+                            state.emit(Event::Return(out.clone().into(), gas_used.max(0) as u64));
+                            state.set_depth(d);
+                        } else {
+                            let d = state.get_depth();
+                            state.set_depth(d + 1);
+                            state.emit(Event::Revert(vec![].into(), gas_used.max(0) as u64));
+                            state.set_depth(d);
+                        }
                         let (ret_offset, ret_size) = mode.target().unwrap_or_default();
                         this.evm.apply(state);
                         let _ = this.evm.push(status);

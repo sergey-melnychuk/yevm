@@ -48,6 +48,7 @@ pub trait State {
     fn destroyed(&self) -> Vec<Acc>;
     fn apply(&mut self);
 
+    fn get_depth(&mut self) -> usize { 0 }
     fn set_depth(&mut self, _depth: usize) {}
     fn emit(&mut self, event: Event) -> usize;
 

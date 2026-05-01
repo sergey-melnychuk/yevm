@@ -22,6 +22,7 @@ pub mod filter {
     pub const MOVE:         u32 = 1 << 10;
     pub const FEE:          u32 = 1 << 11;
     pub const HASH:         u32 = 1 << 12;
+    pub const CODE:         u32 = 1 << 13;
     pub const ALL:          u32 = u32::MAX;
     pub const TOP:          u32 = ALL ^ STEP;
 }
@@ -91,6 +92,7 @@ impl Event {
             Event::Move(..)   => filter::MOVE,
             Event::Fee(..)    => filter::FEE,
             Event::Hash(..)   => filter::HASH,
+            Event::Code(..)   => filter::CODE,
             _                 => filter::NONE,
         }
     }

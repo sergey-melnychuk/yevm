@@ -145,6 +145,11 @@
       align-items: center;
     }
 
+    .btn-main {
+      width: 100px;
+    }
+
+
     button {
       font-family: var(--font);
       font-size: 0.85em;
@@ -245,9 +250,6 @@
       color: #38BDF8;
       border: 1px solid rgba(56,189,248,0.3);
       border-radius: var(--radius-sm);
-      padding: 8px 16px;
-      font: inherit;
-      font-size: 0.85em;
       font-weight: 600;
       cursor: pointer;
       transition: background 0.15s, border-color 0.15s;
@@ -538,6 +540,9 @@
       vertical-align: middle;
       letter-spacing: 0.02em;
     }
+    .ev-addr-label.clone      { background: #0891B2; } /* cyan   — EIP-1167 clone */
+    .ev-addr-label.delegate   { background: #059669; } /* green  — EIP-7702 delegate */
+    .ev-addr-label.precompile { background: #B45309; } /* amber  — precompile */
     .ev-diff-pos { color: #4ADE80; }
     .ev-diff-neg { color: #F87171; }
 
@@ -588,6 +593,13 @@
 
     .ev-wrap.ev-reverted .ev-body   { opacity: 0.4; text-decoration: line-through; }
     .ev-wrap.ev-reverted .ev-indent { opacity: 0.1; }
+
+    .ev-wrap[data-depth="1"] .ev-row { background: rgba(167,139,250,0.04); }
+    .ev-wrap[data-depth="2"] .ev-row { background: rgba(56,189,248,0.04); }
+    .ev-wrap[data-depth="3"] .ev-row { background: rgba(74,222,128,0.04); }
+    .ev-wrap[data-depth="4"] .ev-row { background: rgba(251,191,36,0.04); }
+    .ev-wrap[data-depth="5"] .ev-row { background: rgba(251,146,60,0.04); }
+    .ev-wrap[data-depth="6"] .ev-row { background: rgba(244,114,182,0.04); }
 
     .ev-sep {
       height: 1px;
@@ -661,10 +673,10 @@
         <input type="text" id="txn-inp" placeholder="0x… or 21895238:116" autocomplete="off" spellcheck="false">
       </div>
       <div class="btn-row">
-        <button class="btn-primary"   id="btn-run">Simulate</button>
-        <button class="btn-secondary" id="btn-endpoint">Endpoint</button>
-        <button class="btn-secondary" id="btn-rnd">Random</button>
-        <button class="btn-events"    id="btn-events" disabled>Events</button>
+        <button class="btn-primary  btn-main" id="btn-run">Simulate</button>
+        <button class="btn-secondary btn-main" id="btn-rnd">Random</button>
+        <button class="btn-secondary btn-main" id="btn-endpoint">Endpoint</button>
+        <button class="btn-events    btn-main" id="btn-events" disabled>Tracing</button>
         <div id="status-bar">
           <div class="spinner"></div>
           <span id="status-text">Running…</span>
@@ -718,8 +730,9 @@ const F = {
   MOVE:       1 << 10,
   FEE:        1 << 11,
   HASH:       1 << 12,
+  CODE:       1 << 13,
 };
-F.TOP        = F.CALL | F.RETURN | F.REVERT | F.HALT | F.CREATE | F.DELETE | F.LOG | F.FEE | F.PUT | F.HASH;
+F.TOP        = F.CALL | F.RETURN | F.REVERT | F.HALT | F.CREATE | F.DELETE | F.LOG | F.FEE | F.GET | F.PUT | F.HASH | F.CODE;
 F.ALL        = 0xFFFFFFFF;
 
 /* ── Known addresses ───────────────────────────────────────── */
@@ -740,14 +753,47 @@ const KNOWN_ADDRS = {
   '0x00000000219ab540356cbb839cbe05303d7705fa': 'ETH2 Deposit',
   '0xae7ab96520de3a18e5e111b5eaab095312d7fe84': 'stETH (Lido)',
   '0xd9e1ce17f2641f24ae83637ab66a2cca9c378b9f': 'SushiSwap Router',
+  // Precompiles
+  '0x0000000000000000000000000000000000000001': 'ecRecover',
+  '0x0000000000000000000000000000000000000002': 'SHA-256',
+  '0x0000000000000000000000000000000000000003': 'RIPEMD-160',
+  '0x0000000000000000000000000000000000000004': 'identity',
+  '0x0000000000000000000000000000000000000005': 'modexp',
+  '0x0000000000000000000000000000000000000006': 'ecAdd',
+  '0x0000000000000000000000000000000000000007': 'ecMul',
+  '0x0000000000000000000000000000000000000008': 'ecPairing',
+  '0x0000000000000000000000000000000000000009': 'blake2f',
+  '0x000000000000000000000000000000000000000a': 'pointEval',
 };
 
+// Populated at runtime by bytecode detection
+const CONTRACT_LABELS = new Map(); // addr (lowercase) -> 'Clone' | 'Proxy'
+
 function _addrLabel(addr) {
-  return KNOWN_ADDRS[addr?.toLowerCase()] ?? null;
+  return KNOWN_ADDRS[addr?.toLowerCase()] ?? CONTRACT_LABELS.get(addr?.toLowerCase()) ?? null;
 }
+const _PRECOMPILE_ADDRS = new Set([
+  '0x0000000000000000000000000000000000000001',
+  '0x0000000000000000000000000000000000000002',
+  '0x0000000000000000000000000000000000000003',
+  '0x0000000000000000000000000000000000000004',
+  '0x0000000000000000000000000000000000000005',
+  '0x0000000000000000000000000000000000000006',
+  '0x0000000000000000000000000000000000000007',
+  '0x0000000000000000000000000000000000000008',
+  '0x0000000000000000000000000000000000000009',
+  '0x000000000000000000000000000000000000000a',
+]);
+
 function _lbl(addr) {
   const l = _addrLabel(addr);
-  return l ? `${addr}<span class="ev-addr-label">${l}</span>` : String(addr);
+  if (!l) return String(addr);
+  const a = addr?.toLowerCase();
+  const cls = l === 'Clone'    ? ' clone'
+            : l === 'Delegate' ? ' delegate'
+            : _PRECOMPILE_ADDRS.has(a) ? ' precompile'
+            : '';
+  return `${addr}<span class="ev-addr-label${cls}">${l}</span>`;
 }
 
 /* ── 4byte.directory lookup + ABI decode ───────────────────── */
@@ -826,6 +872,86 @@ async function _lookupAndDecode(callHex, hexDiv) {
     : `<div class="ev-sig-head">${parsed.name}()</div>`;
 }
 
+/* ── 4byte event signature lookup ─────────────────────────── */
+const _4byteEventCache = new Map();
+
+async function _lookupEventSig(topic0) {
+  if (!topic0 || topic0.length < 10) return null;
+  const sel = topic0.slice(0, 66); // full 32-byte topic
+  if (_4byteEventCache.has(sel)) return _4byteEventCache.get(sel);
+  let sig = null;
+  try {
+    const r = await fetch(`https://www.4byte.directory/api/v1/event-signatures/?hex_signature=${sel}`);
+    const j = await r.json();
+    sig = j.results?.length
+      ? j.results.reduce((a, b) => a.id < b.id ? a : b).text_signature
+      : null;
+  } catch {}
+  _4byteEventCache.set(sel, sig);
+  return sig;
+}
+
+async function _decodeLogTopics(topics, hexDiv) {
+  if (!topics?.length) return;
+  const sig = await _lookupEventSig(topics[0]);
+  if (!sig) return;
+  const parsed = _parseSig(sig);
+  if (!parsed) return;
+  // decode non-indexed params from log data (last child of hexDiv)
+  const dataEl = hexDiv.querySelector('.ev-data-row:last-child .ev-data-val');
+  const logData = dataEl?.textContent?.trim();
+  const vals = logData && logData.length > 2 ? _abiDecode(parsed.params, logData.slice(2)) : [];
+  // signature as full-width header
+  // topics[1..] are indexed params; remaining params are non-indexed, encoded in data
+  const indexedCount = topics.length - 1;
+  const rows = [`<div class="ev-sig-head">${sig}</div>`];
+  topics.slice(1).forEach((t, i) => {
+    const pname = parsed.params[i] ?? `topic[${i + 1}]`;
+    rows.push(`<div class="ev-data-row"><span class="ev-data-label">${pname}</span><span class="ev-data-val">${t}</span></div>`);
+  });
+  const nonIndexedParams = parsed.params.slice(indexedCount);
+  if (nonIndexedParams.length && logData && logData.length > 2) {
+    const dvals = _abiDecode(nonIndexedParams, logData.slice(2));
+    nonIndexedParams.forEach((type, i) => {
+      rows.push(`<div class="ev-data-row"><span class="ev-data-label">${type}</span><span class="ev-data-val">${dvals[i]}</span></div>`);
+    });
+  } else if (logData && logData.length > 2) {
+    rows.push(`<div class="ev-data-row"><span class="ev-data-label">data</span><span class="ev-data-val">${logData}</span></div>`);
+  }
+  hexDiv.innerHTML = rows.join('');
+}
+
+/* ── Revert reason decoder ─────────────────────────────────── */
+const PANIC_CODES = {
+  0x00: 'generic',       0x01: 'assert',        0x11: 'overflow',
+  0x12: 'div/zero',      0x21: 'bad enum',       0x22: 'bad storage',
+  0x31: 'pop empty',     0x32: 'out of bounds',  0x41: 'out of memory',
+  0x51: 'bad fn ptr',
+};
+
+function _decodeRevertReason(hex) {
+  if (!hex || hex.length < 10) return null;
+  const sel = hex.slice(0, 10).toLowerCase();
+  const payload = hex.slice(10);
+  if (sel === '0x08c379a0') {
+    // Error(string)
+    try {
+      const [msg] = _abiDecode(['string'], payload);
+      return msg ? `${msg}` : null;
+    } catch {}
+  }
+  if (sel === '0x4e487b71') {
+    // Panic(uint256)
+    try {
+      const [code] = _abiDecode(['uint256'], payload);
+      const n = Number(code.replace(/,/g, ''));
+      const label = PANIC_CODES[n] ?? `code ${n}`;
+      return `Panic: ${label}`;
+    } catch {}
+  }
+  return null;
+}
+
 /* ── Opcode groups ─────────────────────────────────────────── */
 const OP_GROUPS = {
   flow:    new Set(['JUMP','JUMPI','JUMPDEST','PC','PUSH1','PUSH2','PUSH3','PUSH4','PUSH5',
@@ -893,9 +1019,13 @@ class EndpointModal {
     this.inpUrl   = document.getElementById('rpc-url');
     this._pending = null;
 
+    const saved = localStorage.getItem('yaevmi_rpc_url');
+    if (saved) this.inpUrl.value = saved;
+
     document.getElementById('modal-close').onclick  = () => this.hide();
     document.getElementById('modal-cancel').onclick = () => this.hide();
     document.getElementById('modal-save').onclick   = () => this._save();
+    this.inpUrl.addEventListener('keydown', e => { if (e.key === 'Enter') this._save(); });
     this.overlay.addEventListener('click', e => { if (e.target === this.overlay) this.hide(); });
     document.addEventListener('keydown', e => { if (e.key === 'Escape') this.hide(); });
   }
@@ -913,6 +1043,8 @@ class EndpointModal {
 
   _save() {
     this._pending = this.inpUrl.value;
+    const url = this.inpUrl.value.trim();
+    if (url) localStorage.setItem('yaevmi_rpc_url', url);
     this.overlay.classList.remove('visible');
   }
 
@@ -947,7 +1079,7 @@ class ResultCard {
     }
 
     this.grid.innerHTML = `
-      ${_stat('Steps',  steps.toLocaleString())}
+      ${_stat('Events', steps.toLocaleString())}
       ${_stat('Time',   _fmtMs(ms))}
       ${_stat('Gas',    _fmtNum(yGas), gasOk ? 'ok' : 'fail')}
       ${_stat('Status', stOk ? 'OK' : 'FAIL', stOk ? 'ok' : 'fail')}
@@ -1014,8 +1146,10 @@ class EventsLog {
     this.overlay  = document.getElementById('events-overlay');
     this.list     = document.getElementById('events-list');
     this.btnOpen  = document.getElementById('btn-events');
-    this._rows    = [];
-    this._seenGets = new Set(); // dedup Get(Code/Value/Nonce) per acc
+    this._rows      = [];
+    this._seenGets  = new Set(); // dedup Get(Code/Value/Nonce) per acc
+    this._seenCode  = new Set(); // dedup Code by hash
+    this._hashToAcc = new Map(); // code hash -> acc addr (for bytecode label detection)
 
     document.getElementById('events-close').onclick = () => this.close();
     this.overlay.addEventListener('click', e => { if (e.target === this.overlay) this.close(); });
@@ -1027,11 +1161,16 @@ class EventsLog {
       if (!wrap) return;
       const opening = !wrap.classList.contains('ev-open');
       wrap.classList.toggle('ev-open');
-      if (opening && wrap.dataset.kind === 'Call') {
+      if (opening) {
         const hexDiv = wrap.querySelector('.ev-hex-data');
         if (hexDiv && !hexDiv.dataset.decoded) {
           hexDiv.dataset.decoded = '1';
-          _lookupAndDecode(hexDiv.textContent.trim(), hexDiv);
+          if (wrap.dataset.kind === 'Call') {
+            _lookupAndDecode(hexDiv.textContent.trim(), hexDiv);
+          } else if (wrap.dataset.kind === 'Log' && wrap.dataset.topics) {
+            const topics = JSON.parse(decodeURIComponent(wrap.dataset.topics));
+            _decodeLogTopics(topics, hexDiv);
+          }
         }
       }
     });
@@ -1053,14 +1192,53 @@ class EventsLog {
           if (this._seenGets.has(dedup)) return;
           this._seenGets.add(dedup);
         }
+        // record hash->acc for bytecode detection
+        if (tkey === 'Code') {
+          this._hashToAcc.set(data.Code.hash, data.Code.acc);
+        }
       }
-      // drop Put(Value/Nonce) 0 → 0
+      // Code event: attach bytecode to the matching Get(Code) row, don't add new row
+      if (kind === 'Code' && Array.isArray(data)) {
+        const [bytecode, hash] = data;
+        if (this._seenCode.has(hash)) return;
+        this._seenCode.add(hash);
+        const acc = this._hashToAcc.get(hash);
+        // detect proxy/clone patterns
+        if (acc && typeof bytecode === 'string') {
+          const b = bytecode.toLowerCase();
+          if (b.startsWith('0x363d3d373d3d3d363d73') && b.endsWith('5af43d82803e903d91602b57fd5bf3') && bytecode.length === 92)
+            CONTRACT_LABELS.set(acc.toLowerCase(), 'Clone');
+          else if (b.startsWith('0xef0100') && bytecode.length === 48)
+            CONTRACT_LABELS.set(acc.toLowerCase(), 'Delegate');
+        }
+        // attach bytecode to the last Get(Code) row with matching hash
+        for (let i = this._rows.length - 1; i >= 0; i--) {
+          const r = this._rows[i];
+          if (r.kind === 'Get' && r.data?.Code?.hash === hash) {
+            r.codeBytes = bytecode;
+            break;
+          }
+        }
+        return; // don't add a separate row
+      }
+      // drop Put(Value/Nonce) 0 → 0, and overflow/underflow Value steps
       if (kind === 'Put' && Array.isArray(data) && data[0] != null) {
         const tkey = Object.keys(data[0])[0];
-        if (tkey === 'Value' || tkey === 'Nonce') {
+        if (tkey === 'Value') {
+          try {
+            const ETH = 10n ** 18n;
+            const oldW = BigInt(data[0][tkey].val);
+            const newW = BigInt(data[1]);
+            const oldOver = oldW / ETH > _MAX_SANE_ETH;
+            const newOver = newW / ETH > _MAX_SANE_ETH;
+            if (!oldOver && newOver) return; // sane → overflow: drop
+          } catch {}
           const oldV = _fmtValue(data[0][tkey].val);
           const newV = _fmtValue(data[1]);
           if (oldV === '0' && newV === '0') return;
+        }
+        if (tkey === 'Nonce') {
+          if (_fmtValue(data[0][tkey].val) === '0' && _fmtValue(data[1]) === '0') return;
         }
       }
       this._rows.push({ seq: trace.seq, kind, data, depth: trace.depth, reverted: trace.reverted });
@@ -1102,7 +1280,7 @@ class EventsLog {
       const depth = rows[i].depth;
       const cat     = _eventCat(kind);
       const label   = _displayKind(kind, data);
-      const [body, hex] = _fmtEventBody(kind, data);
+      const [body, hex] = _fmtEventBody(kind, data, rows[i].codeBytes);
       const undo    = reverted ? `<span class="ev-undo" title="reverted">✕</span>` : '';
       let hintTxt = '', hexContent = '';
       if (hex) {
@@ -1117,7 +1295,8 @@ class EventsLog {
       const hint    = hintTxt ? `<span class="ev-hex-hint">${hintTxt}</span>` : '';
       const hexDiv  = hexContent ? `<div class="ev-hex-data">${hexContent}</div>` : '';
       const wrapCls = ['ev-wrap', reverted ? 'ev-reverted' : '', hexContent ? 'ev-has-data' : ''].filter(Boolean).join(' ');
-      html.push(`<div class="${wrapCls}" data-kind="${kind}" data-cat="${cat}">
+      const topicsAttr = kind === 'Log' && Array.isArray(data) ? ` data-topics="${encodeURIComponent(JSON.stringify(data[0]))}"` : '';
+      html.push(`<div class="${wrapCls}" data-kind="${kind}" data-cat="${cat}" data-depth="${depth}"${topicsAttr}>
         <div class="ev-row">
           ${_depthBars(depth)}<div class="ev-main"><div class="ev-content">
             <span class="ev-kind">${label}</span>
@@ -1133,13 +1312,13 @@ class EventsLog {
 
   open()  { this.overlay.classList.add('visible'); }
   close() { this.overlay.classList.remove('visible'); }
-  hide()  { this._rows = []; this._seenGets.clear(); this.btnOpen.disabled = true; }
+  hide()  { this._rows = []; this._seenGets.clear(); this._seenCode.clear(); this._hashToAcc.clear(); this.btnOpen.disabled = true; }
 }
 
 const _MODE = { Call:'CALL', Static:'STATICCALL', Delegate:'DELEGATECALL', CallCode:'CALLCODE', Create:'CREATE', Create2:'CREATE2' };
 
 // Returns [body_html, hex_or_null]
-function _fmtEventBody(kind, data) {
+function _fmtEventBody(kind, data, codeBytes) {
   if (data == null) return ['', null];
   try {
     switch (kind) {
@@ -1166,7 +1345,9 @@ function _fmtEventBody(kind, data) {
       case 'Revert': {
         const [ret, gas] = data;
         const hex = typeof ret === 'string' && ret.length > 2 ? ret : null;
-        return [`(${_fmtNum(gas)} gas)`, hex];
+        const reason = hex ? _decodeRevertReason(hex) : null;
+        const reasonStr = reason ? `  <span style="color:#F87171">${reason}</span>` : '';
+        return [`(${_fmtNum(gas)} gas)${reasonStr}`, hex];
       }
       case 'Halt':   { const [reason, gas] = data; const r = typeof reason === 'string' ? reason : JSON.stringify(reason); return [`${r}  (${_fmtNum(gas)} gas)`, null]; }
       case 'Hash': {
@@ -1175,8 +1356,8 @@ function _fmtEventBody(kind, data) {
         const bytes = inHex.length > 2 ? (inHex.length - 2) / 2 : 0;
         return [_fmtEth(output), bytes > 0 ? inHex : null];
       }
-      case 'Create': return [String(data), null];
-      case 'Delete': return [String(data), null];
+      case 'Create': return [_lbl(String(data)), null];
+      case 'Delete': return [_lbl(String(data)), null];
       case 'Move': {
         const [from, to, val] = data;
         return [`${_lbl(from)} → ${_lbl(to)}  ${_fmtValue(val)}`, null];
@@ -1206,7 +1387,7 @@ function _fmtEventBody(kind, data) {
           case 'Temp':  return [`${_lbl(t.acc)} [T:${_strip(t.key)}] = ${_fmtEth(t.val)}`, null];
           case 'Value': return [`${_lbl(t.acc)}  value = ${_fmtValue(t.val)}`, null];
           case 'Nonce': return [`${_lbl(t.acc)}  nonce = ${_fmtNum(t.val)}`, null];
-          case 'Code':  return [`${_lbl(t.acc)}  code = ${t.hash}`, null];
+          case 'Code':  return [`${_lbl(t.acc)}  code = ${t.hash}`, codeBytes ?? null];
           case 'Auth':  return [`auth[${_lbl(t.acc)}]`, null];
           default:      return [JSON.stringify(data), null];
         }
@@ -1219,7 +1400,22 @@ function _fmtEventBody(kind, data) {
           case 'Store': return [`${_lbl(t.acc)} [${_strip(t.key)}] = ${_fmtEth(t.val)} → ${_fmtEth(newV)}`, null];
           case 'Temp':  return [`${_lbl(t.acc)} [T:${_strip(t.key)}] = ${_fmtEth(t.val)} → ${_fmtEth(newV)}`, null];
           case 'Value': {
+            const _prefunded = `<span style="color:#475569">prefunded</span>`;
+            const _isOver = v => { try { const ETH=10n**18n; return BigInt(v)/ETH > _MAX_SANE_ETH; } catch { return false; } };
+            const oldOver = _isOver(t.val), newOver = _isOver(newV);
+            const oldStr = oldOver ? _prefunded : _fmtValue(t.val);
+            const newStr = newOver ? _prefunded : _fmtValue(newV);
             const diff = (() => { try {
+              if (oldOver && newOver) {
+                // both prefunded: compute diff directly (small delta between two large numbers)
+                const d = BigInt(newV) - BigInt(t.val);
+                if (d === 0n) return '';
+                const s = _fmtValue('0x' + (d < 0n ? (-d) : d).toString(16));
+                return d > 0n
+                  ? `  <span class="ev-diff-pos">+${s}</span>`
+                  : `  <span class="ev-diff-neg">-${s}</span>`;
+              }
+              if (oldOver || newOver) return '';
               const d = BigInt(newV) - BigInt(t.val);
               if (d === 0n) return '';
               const s = _fmtValue('0x' + (d < 0n ? (-d) : d).toString(16));
@@ -1227,7 +1423,7 @@ function _fmtEventBody(kind, data) {
                 ? `  <span class="ev-diff-pos">+${s}</span>`
                 : `  <span class="ev-diff-neg">-${s}</span>`;
             } catch { return ''; } })();
-            return [`${_lbl(t.acc)}  ${_fmtValue(t.val)} → ${_fmtValue(newV)}${diff}`, null];
+            return [`${_lbl(t.acc)}  ${oldStr} → ${newStr}${diff}`, null];
           }
           case 'Nonce': return [`${_lbl(t.acc)}  nonce = ${_fmtNum(t.val)} → ${_fmtNum(newV)}`, null];
           case 'Code':  return [`${_lbl(t.acc)}  code = ${t.hash}`, null];
@@ -1261,6 +1457,8 @@ function _fmtEth(val) {
 }
 
 // Format ETH value: show as ETH if >= 1e12 wei (0.000001 ETH), otherwise show wei count
+const _MAX_SANE_ETH = 10n ** 9n; // 1B ETH — anything above is an underflow artifact
+
 function _fmtValue(val) {
   if (!val || val === '0x0000000000000000000000000000000000000000000000000000000000000000') return '0';
   if (typeof val === 'string' && val.startsWith('0x')) {
@@ -1269,8 +1467,8 @@ function _fmtValue(val) {
     const ETH = 10n ** 18n;
     const micro = 10n ** 12n;
     if (wei >= micro) {
-      // show as ETH with up to 6 significant decimal places
       const whole = wei / ETH;
+      if (whole > _MAX_SANE_ETH) return _short(val);
       const frac = wei % ETH;
       if (frac === 0n) return `${whole} ETH`;
       const fracStr = frac.toString().padStart(18, '0').replace(/0+$/, '');
@@ -1389,7 +1587,7 @@ class App {
     const counts = {};
     let steps = 0;
     const UPDATE_INTERVAL = 200;
-    const eventFilter = F.TOP | F.STEP | F.GET;
+    const eventFilter = F.TOP; // add F.STEP for opcode hits panel
 
     try {
       const stream = await run(url, txn, eventFilter);
@@ -1418,7 +1616,7 @@ class App {
 
       const ms = performance.now() - t0;
       this.status.hide();
-      this.result.show(stream.check(), steps, ms);
+      this.result.show(stream.check(), this.evLog._rows.length, ms);
       this.evLog.flush();
       if (steps > 0) this.ops.show(counts, steps);
 

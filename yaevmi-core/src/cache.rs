@@ -271,6 +271,9 @@ impl State for Cache {
     fn code(&mut self, acc: &Acc) -> Option<(Buf, Int)> {
         let (code, hash) = self.accounts.get(acc).map(|e| e.account.code.clone())?;
         self.emit(Event::Get(Target::Code { acc: *acc, hash }));
+        if !code.is_empty() {
+            self.emit(Event::Code(code.clone(), hash));
+        }
         Some((code, hash))
     }
 
@@ -357,6 +360,10 @@ impl State for Cache {
     fn log(&mut self, data: Buf, topics: Vec<Int>) {
         self.emit(Event::Log(topics.clone(), data.clone()));
         self.logs.push((data, topics));
+    }
+
+    fn get_depth(&mut self) -> usize {
+        self.depth
     }
 
     fn set_depth(&mut self, depth: usize) {
