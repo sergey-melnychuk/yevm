@@ -4,7 +4,7 @@ use crate::{
     call::Head,
     chain::Fetched,
     state::{Account, State},
-    trace::{Event, Step, Target, Trace},
+    trace::{Event, Target, Trace, filter},
 };
 use futures::channel::mpsc;
 use yaevmi_base::{Acc, Int, math::lift};
@@ -67,7 +67,8 @@ pub struct Cache {
     depth: usize,
     pub logs: Vec<(Buf, Vec<Int>)>,
     pub events: Vec<Trace>,
-    pub sender: Option<mpsc::Sender<Step>>,
+    pub sender: Option<mpsc::Sender<Trace>>,
+    pub filter: u32,
     pub fetched: Vec<Fetched>,
     pub index: usize,
     offline: bool,
@@ -79,9 +80,10 @@ impl Cache {
         Self::default()
     }
 
-    pub fn with_sender(sender: mpsc::Sender<Step>) -> Self {
+    pub fn with_sender(sender: mpsc::Sender<Trace>, filter: u32) -> Self {
         Self {
             sender: Some(sender),
+            filter,
             ..Self::default()
         }
     }
@@ -305,20 +307,12 @@ impl State for Cache {
     }
 
     fn create(&mut self, acc: Acc, info: Account) {
-        self.emit(Event::Put(
-            Target::Nonce {
-                acc,
-                val: Int::ZERO,
-            },
-            info.nonce,
-        ));
-        self.emit(Event::Put(
-            Target::Value {
-                acc,
-                val: Int::ZERO,
-            },
-            info.value,
-        ));
+        if !info.nonce.is_zero() {
+            self.emit(Event::Put(Target::Nonce { acc, val: Int::ZERO }, info.nonce));
+        }
+        if !info.value.is_zero() {
+            self.emit(Event::Put(Target::Value { acc, val: Int::ZERO }, info.value));
+        }
         self.emit(Event::Create(acc));
         self.accounts.insert(acc, AccountEntry::new(info));
         self.created.insert(acc);
@@ -373,16 +367,19 @@ impl State for Cache {
         let id = self.events.len();
         if let Event::Step(step) = &mut event {
             step.debug.push(format!("depth={}", self.depth));
-            if let Some(sender) = self.sender.as_mut() {
-                let _ = sender.try_send(step.clone()); // TODO: check for error
-            }
         }
-        self.events.push(Trace {
+        let trace = Trace {
             seq: id,
             event,
             depth: self.depth,
             reverted: false,
-        });
+        };
+        if self.filter & trace.event.filter_bit() != 0 {
+            if let Some(sender) = self.sender.as_mut() {
+                let _ = sender.try_send(trace.clone());
+            }
+        }
+        self.events.push(trace);
         id
     }
 
@@ -413,6 +410,7 @@ impl State for Cache {
         if cp >= self.events.len() {
             return;
         }
+        let to = self.events.len();
 
         // Count logs added since checkpoint (to truncate self.logs)
         let logs_to_remove = self.events[cp..]
@@ -495,6 +493,17 @@ impl State for Cache {
                 Revert::WarmKey(acc, key) => {
                     self.warm_keys.remove(&(acc, key));
                 }
+            }
+        }
+
+        if self.filter & filter::REVERT != 0 {
+            if let Some(sender) = self.sender.as_mut() {
+                let _ = sender.try_send(Trace {
+                    seq: cp,
+                    event: Event::Undo(cp, to),
+                    depth: self.depth,
+                    reverted: true,
+                });
             }
         }
     }

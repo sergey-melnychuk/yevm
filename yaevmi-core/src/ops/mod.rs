@@ -74,7 +74,7 @@ pub fn dispatch<S: State>(
         0x1C => basic::shr(evm),
         0x1D => basic::sar(evm),
         0x1E => basic::clz(evm),
-        0x20 => basic::hash(evm),
+        0x20 => basic::hash(evm, state),
         0x30 => chain::address(evm, ctx, call, state),
         0x31 => chain::balance(evm, ctx, call, state),
         0x32 => chain::origin(evm, ctx, call, state),

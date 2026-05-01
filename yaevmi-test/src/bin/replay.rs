@@ -12,6 +12,7 @@ use yaevmi_base::{Acc, Int, int, math::lift};
 use yaevmi_core::{
     cache::Cache,
     call::Receipt,
+    trace::filter,
     chain::{Chain, Fetched},
     exe::{CallResult, Executor, pre_block},
     rpc::Rpc,
@@ -90,7 +91,7 @@ async fn run() -> eyre::Result<()> {
     };
 
     let (ytx, mut yrx) = mpsc::channel(4 * 1024 * 1024);
-    let mut cache = Cache::with_sender(ytx);
+    let mut cache = Cache::with_sender(ytx, filter::STEP);
 
     // TODO: make single-tx also replayable? just save all fetches to block:index.js
     std::fs::create_dir_all("fetch")?;
@@ -135,7 +136,10 @@ async fn run() -> eyre::Result<()> {
         loop {
             let y = yrx.next().await;
             let r = rrx.recv().await;
-            if let (Some(mut y), Some(mut r)) = (y, r) {
+            if let (Some(y_trace), Some(mut r)) = (y, r) {
+                let yaevmi_core::trace::Event::Step(mut y) = y_trace.event else {
+                    continue;
+                };
                 if y != r {
                     println!("===\nSTEP MISMATCH:\nYEVM: {y:#?}\nREVM: {r:#?}\n(skip: {skip})");
                     break;

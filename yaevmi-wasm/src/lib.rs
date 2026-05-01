@@ -11,7 +11,7 @@ mod wasm {
     use yaevmi_core::chain::Chain;
     use yaevmi_core::exe::{CallResult, Executor};
     use yaevmi_core::state::State;
-    use yaevmi_core::trace::Step;
+    use yaevmi_core::trace::Trace;
     use yaevmi_core::{Call, Head, Tx, rpc::Rpc};
 
     #[derive(Debug, thiserror::Error)]
@@ -49,7 +49,7 @@ mod wasm {
 
     #[wasm_bindgen]
     pub struct Stream {
-        receiver: mpsc::Receiver<Step>,
+        receiver: mpsc::Receiver<Trace>,
         tx: Int,
         rcpt_gas: Int,
         yevm_gas: Int,
@@ -116,7 +116,7 @@ mod wasm {
     }
 
     #[wasm_bindgen]
-    pub async fn run(url: JsString, txn: JsString) -> Result<Stream, Error> {
+    pub async fn run(url: JsString, txn: JsString, event_filter: u32) -> Result<Stream, Error> {
         let mut rpc = Rpc::latest(url.into()).await?;
         let chain_id = rpc.chain_id().await?;
         let txn: String = txn.into();
@@ -144,7 +144,7 @@ mod wasm {
         rpc.reset(head.number.as_u64() - 1, head.parent_hash);
 
         let (ytx, yrx) = mpsc::channel(1024 * 1024);
-        let mut cache = Cache::with_sender(ytx);
+        let mut cache = Cache::with_sender(ytx, event_filter);
         cache.set_chain_id(chain_id);
 
         let mut exe = Executor::new(call);

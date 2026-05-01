@@ -13,6 +13,7 @@ use crate::{
     call::Head,
     chain::{Chain, fetch},
     state::{Account, State},
+    trace::Event,
 };
 
 const MAX_CALL_DEPTH: usize = 1024;
@@ -258,6 +259,10 @@ pub fn finalized(
         let balance = state.balance(&head.coinbase).unwrap_or_default();
         state.set_value(&head.coinbase, add([balance, tip]));
     }
+
+    let base_burn = mul([Int::from(final_gas), head.base_fee]);
+    state.emit(Event::Fee(call.by, base_burn, tip, final_gas));
+
     final_gas as i64
 }
 
@@ -265,20 +270,15 @@ pub fn transfer(call: &Call, mode: &CallMode, state: &mut impl State) {
     if call.eth.is_zero() {
         return;
     }
-    if let Some(created) = mode.created() {
-        let sub = lift(|[a, b]| a - b);
-        let add = lift(|[a, b]| a + b);
-        let by0 = state.balance(&call.by).unwrap_or_default();
-        state.set_value(&call.by, sub([by0, call.eth]));
-        let to0 = state.balance(&created).unwrap_or_default();
-        state.set_value(&created, add([to0, call.eth]));
-    } else if let Some(to) = call.to {
+    let to = mode.created().or(call.to);
+    if let Some(to) = to {
         let sub = lift(|[a, b]| a - b);
         let add = lift(|[a, b]| a + b);
         let by0 = state.balance(&call.by).unwrap_or_default();
         state.set_value(&call.by, sub([by0, call.eth]));
         let to0 = state.balance(&to).unwrap_or_default();
         state.set_value(&to, add([to0, call.eth]));
+        state.emit(Event::Move(call.by, to, call.eth));
     }
 }
 
@@ -482,6 +482,7 @@ impl Executor {
             return Ok(result);
         }
 
+        state.emit(Event::Call(self.call.clone(), mode));
         self.callstack.push(frame);
 
         let mut result: Option<CallResult> = None;
@@ -588,6 +589,7 @@ impl Executor {
                     self.callstack.pop();
                 }
                 StepResult::Call(call, mode) => {
+                    state.emit(Event::Call(call.clone(), mode.clone()));
                     this.evm.apply(state);
                     let call_to_is_precompile =
                         call.to.map(|to| is_precompile(&to)).unwrap_or_default();
@@ -817,6 +819,7 @@ impl Executor {
                     self.callstack.push(frame);
                 }
                 StepResult::Return(ret) => {
+                    state.emit(Event::Return(ret.clone().into(), this.evm.gas.spent.max(0) as u64));
                     let is_create = this.is_create;
                     result = Some(if is_create {
                         let deploy_cost = CODE_DEPOSIT_GAS * ret.len() as i64;
@@ -851,6 +854,7 @@ impl Executor {
                     self.callstack.pop();
                 }
                 StepResult::Revert(ret) => {
+                    state.emit(Event::Revert(ret.clone().into(), this.evm.gas.spent.max(0) as u64));
                     state.revert_to(this.checkpoint);
                     let mut gas = this.evm.gas;
                     gas.refund = 0;
@@ -861,7 +865,8 @@ impl Executor {
                     });
                     self.callstack.pop();
                 }
-                StepResult::Halt(_reason) => {
+                StepResult::Halt(reason) => {
+                    state.emit(Event::Halt(reason.clone(), this.evm.gas.limit.max(0) as u64));
                     this.evm.apply(state);
                     this.evm.gas.drain();
                     state.revert_to(this.checkpoint);
@@ -913,6 +918,8 @@ impl Executor {
             let hash = Int::from(keccak256(code.as_slice()).as_ref());
             state.set_code(&addr, code.clone(), hash);
         }
+
+        state.set_depth(0);
 
         result.gas_mut().refund += eip7702_refund;
         let gas_final = finalized(

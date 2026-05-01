@@ -5,6 +5,8 @@ use yaevmi_base::{
 use yaevmi_misc::keccak256;
 
 use crate::evm::{self, Evm, EvmResult, EvmYield};
+use crate::state::State;
+use crate::trace::Event;
 
 pub fn stop(_: &mut Evm) -> EvmResult<()> {
     Err(EvmYield::Return(vec![]))
@@ -319,7 +321,7 @@ pub fn clz(evm: &mut Evm) -> EvmResult<()> {
     Ok(())
 }
 
-pub fn hash(evm: &mut Evm) -> EvmResult<()> {
+pub fn hash(evm: &mut Evm, state: &mut dyn State) -> EvmResult<()> {
     evm.gas_charge(30)?;
     let [offset, size] = evm.peek()?;
     evm::mem_check_int(offset, size)?;
@@ -327,6 +329,8 @@ pub fn hash(evm: &mut Evm) -> EvmResult<()> {
     evm.gas_charge(6 * size.div_ceil(32) as i64)?;
     let data = evm.mem_get(offset, size)?;
     let hash = keccak256(&data);
-    evm.push(hash)?;
+    let hash_int = Int::from(hash.as_ref());
+    state.emit(Event::Hash(data.into(), hash_int));
+    evm.push(hash_int)?;
     Ok(())
 }
