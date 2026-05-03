@@ -2,6 +2,8 @@
 
 **(Yield-Aware | Yet Another) EVM Implementation** — in Rust.
 
+**[Live Demo](https://sergey-melnychuk.github.io/yaevmi)**
+
 ## Goals
 
 - **Async-first** — execution yields on every external state access (account, storage, code)
@@ -31,8 +33,8 @@ Intended for:
 
 ## Links
 
-1. [Live demo](https://sergey-melnychuk.github.io/yaevmi)
+1. [YellowPaper](https://ethereum.github.io/yellowpaper/paper.pdf)
 
-2. [YellowPaper](https://ethereum.github.io/yellowpaper/paper.pdf)
+2. [Ethereum EIPs](https://eips.ethereum.org)
 
 3. [EVM.codes](https://www.evm.codes/)
