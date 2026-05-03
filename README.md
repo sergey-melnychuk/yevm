@@ -27,9 +27,9 @@ Intended for:
 | `yaevmi-base` | Primitive types: `Acc` (address), `Int` (uint256), `Head`, `Tx`   |
 | `yaevmi-core` | EVM engine: opcode dispatch, stack/memory, `State`/`Chain` traits |
 | `yaevmi-misc` | Utilities and helpers                                             |
-| `yaevmi-wasm` | WebAssembly bindings                                              |
 | `yaevmi-test` | Test harness and fixtures                                         |
-| `yaevmi-full` | Full integration: ties all crates together                        |
+| `yaevmi-wasm` | WebAssembly bindings                                              |
+| `yaevmi` | Full integration: ties all crates together                        |
 
 ## Links
 
