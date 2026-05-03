@@ -243,7 +243,9 @@ pub struct Logged {
     pub address: Acc,
     pub block_hash: Int,
     pub block_number: Int,
-    pub block_timestamp: Int,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_timestamp: Option<Int>,
     pub data: Buf,
     pub log_index: Int,
     pub removed: bool,
