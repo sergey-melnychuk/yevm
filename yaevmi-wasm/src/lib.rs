@@ -3,7 +3,7 @@ mod wasm {
     use eyre::eyre;
     use futures::StreamExt;
     use futures::channel::mpsc;
-    use js_sys::JsString;
+    use js_sys::{Function, JsString};
     use wasm_bindgen::prelude::*;
     use yaevmi_base::int;
     use yaevmi_core::Int;
@@ -12,7 +12,7 @@ mod wasm {
     use yaevmi_core::exe::{CallResult, Executor};
     use yaevmi_core::state::State;
     use yaevmi_core::trace::Trace;
-    use yaevmi_core::{Call, Head, Tx, call::TxCall, rpc::Rpc};
+    use yaevmi_core::{Call, Head, Tx, call::{TxCall, TxFull}, rpc::Rpc};
 
     #[derive(Debug, thiserror::Error)]
     #[error("{0}")]
@@ -176,6 +176,79 @@ mod wasm {
             rcpt_status,
             yevm_status,
         })
+    }
+
+    #[wasm_bindgen]
+    pub async fn run_with_block(
+        url: JsString,
+        txn: JsString,
+        event_filter: u32,
+        on_progress: Function,
+    ) -> Result<Stream, Error> {
+        let mut rpc = Rpc::latest(url.into()).await?;
+        let chain_id = rpc.chain_id().await?;
+        let txn: String = txn.into();
+
+        let (block, index) = if let Some((left, right)) = txn.split_once(':') {
+            let block = left.trim().parse().map_err(|_| eyre!("invalid block"))?;
+            let index = right.trim().parse().map_err(|_| eyre!("invalid index"))?;
+            (block, index)
+        } else if txn.starts_with("0x") {
+            let hash = int(&txn);
+            let receipt = rpc.receipt(hash).await?;
+            let block = receipt.block_number.as_u64();
+            let index = receipt.transaction_index.as_usize();
+            (block, index)
+        } else {
+            return Err(eyre!("invalid tx selector").into());
+        };
+
+        let (call, tx, head, prior_txs): (Call, _, _, Vec<TxFull>) = {
+            let b = rpc.block(block).await?;
+            let full = &b.txs[index];
+            let prior = b.txs[..index].to_vec();
+            (full.call.clone().into(), full.tx.clone(), b.head, prior)
+        };
+        let hash = tx.hash;
+        rpc.reset(head.number.as_u64() - 1, head.parent_hash);
+
+        // Pre-execute prior txs: no tracing (filter=0, no sender), state accumulates.
+        let mut cache = Cache::new();
+        cache.set_chain_id(chain_id);
+        let total = prior_txs.len();
+        for (i, prior) in prior_txs.into_iter().enumerate() {
+            let prior_call: Call = prior.call.into();
+            let mut exe = Executor::new(prior_call);
+            let _ = exe.run(prior.tx, head.clone(), &mut cache, &rpc).await;
+            cache.reset();
+            release().await;
+            let _ = on_progress.call2(
+                &JsValue::NULL,
+                &JsValue::from(i + 1),
+                &JsValue::from(total),
+            );
+        }
+
+        // Wire up tracing for the target tx, reuse accumulated state.
+        let (ytx, yrx) = mpsc::channel(1024 * 1024);
+        cache.sender = Some(ytx);
+        cache.filter = event_filter;
+        cache.reset(); // reset warm sets / transient for the target tx
+
+        let mut exe = Executor::new(call);
+        let result = exe.run(tx, head, &mut cache, &rpc).await?;
+        let _ = cache.sender.take();
+
+        let (yevm_status, yevm_gas) = match result {
+            CallResult::Done { status, ret: _, gas } => (status, gas.finalized.into()),
+            CallResult::Created { acc, code: _, gas } => (acc.to(), gas.finalized.into()),
+        };
+        let receipt = rpc.receipt(hash).await?;
+        let (rcpt_status, rcpt_gas) = (
+            if let Some(acc) = receipt.contract_address { acc.to() } else { receipt.status },
+            receipt.gas_used,
+        );
+        Ok(Stream { receiver: yrx, tx: hash, rcpt_gas, yevm_gas, rcpt_status, yevm_status })
     }
 
     #[wasm_bindgen]

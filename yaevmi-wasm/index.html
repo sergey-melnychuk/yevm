@@ -242,7 +242,8 @@
     #events-modal .ev-body {
       overflow: visible;
       text-overflow: unset;
-      white-space: nowrap;
+      white-space: normal;
+      overflow-wrap: anywhere;
     }
 
     .btn-events {
@@ -268,6 +269,39 @@
     }
     .btn-call:hover:not(:disabled) { background: rgba(74,222,128,0.2); border-color: rgba(74,222,128,0.5); }
     .btn-call:disabled { opacity: 0.35; cursor: default; }
+
+    .chk-label {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-family: var(--font);
+      font-size: 0.85em;
+      font-weight: 600;
+      color: #FBBF24;
+      background: rgba(251,191,36,0.1);
+      border: 1px solid rgba(251,191,36,0.3);
+      border-radius: var(--radius-sm);
+      padding: 10px 22px;
+      line-height: normal;
+      text-transform: none;
+      letter-spacing: normal;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.15s, border-color 0.15s;
+      white-space: nowrap;
+    }
+    .chk-label:hover { background: rgba(251,191,36,0.2); border-color: rgba(251,191,36,0.5); }
+    .chk-label:has(input:checked) {
+      background: rgba(251,191,36,0.22);
+      border-color: rgba(251,191,36,0.6);
+    }
+    .chk-label input[type="checkbox"] {
+      accent-color: #FBBF24;
+      width: 13px;
+      height: 13px;
+      cursor: pointer;
+    }
 
     #call-modal { max-width: 560px; }
     #call-modal .form-grid { gap: 10px; }
@@ -485,7 +519,6 @@
       display: flex;
       align-items: stretch;
       min-height: 1.6em;
-      overflow: hidden;
       border-radius: 4px;
     }
     .ev-row:hover { background: rgba(255,255,255,0.04); }
@@ -508,10 +541,9 @@
 
     .ev-content {
       display: flex;
-      align-items: baseline;
+      align-items: flex-start;
       gap: 8px;
       padding: 2px 6px;
-      overflow: hidden;
     }
 
     .ev-hex-hint {
@@ -570,9 +602,9 @@
 
     .ev-body {
       color: var(--text-b);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      min-width: 0;
       flex: 1;
       opacity: 0.8;
     }
@@ -736,6 +768,9 @@
       </div>
       <div class="btn-row">
         <button class="btn-primary  btn-main" id="btn-run">Simulate</button>
+        <label class="chk-label btn-main" title="Pre-execute all prior transactions in the block before this one">
+          <input type="checkbox" id="chk-block"> Block
+        </label>
         <button class="btn-secondary btn-main" id="btn-rnd">Random</button>
         <button class="btn-secondary btn-main" id="btn-endpoint">Endpoint</button>
         <button class="btn-call     btn-main" id="btn-call">Custom</button>
@@ -775,7 +810,7 @@
 </footer>
 
 <script type="module">
-import init, { pick, run, simulate } from './pkg/yaevmi_wasm.js';
+import init, { pick, run, run_with_block, simulate } from './pkg/yaevmi_wasm.js';
 await init();
 
 /* ── Filter constants (mirror trace::filter) ──────────────── */
@@ -1068,6 +1103,11 @@ class StatusBar {
 
   update(steps) {
     this.countEl.textContent = `${steps.toLocaleString()} steps`;
+  }
+
+  progress(i, total) {
+    this.textEl.textContent = 'Pre-executing…';
+    this.countEl.textContent = `${i} / ${total}`;
   }
 
   hide() {
@@ -1786,7 +1826,15 @@ class App {
     history.replaceState(null, '', `?tx=${encodeURIComponent(txn)}`);
 
     try {
-      const stream = await run(url, txn, F.TOP);
+      const withBlock = document.getElementById('chk-block').checked;
+      let stream;
+      if (withBlock) {
+        stream = await run_with_block(url, txn, F.TOP,
+          (i, total) => this.status.progress(i, total));
+        this.status.show('Running…');
+      } else {
+        stream = await run(url, txn, F.TOP);
+      }
       await this._consume(stream);
     } catch (e) {
       console.error(e);
