@@ -4,6 +4,7 @@ members = [
     "yaevmi",
     "yaevmi-base",
     "yaevmi-core",
+    "yaevmi-gate",
     "yaevmi-misc",
     "yaevmi-test",
     "yaevmi-wasm",
