@@ -12,7 +12,7 @@ mod wasm {
     use yaevmi_core::exe::{CallResult, Executor};
     use yaevmi_core::state::State;
     use yaevmi_core::trace::Trace;
-    use yaevmi_core::{Call, Head, Tx, rpc::Rpc};
+    use yaevmi_core::{Call, Head, Tx, call::TxCall, rpc::Rpc};
 
     #[derive(Debug, thiserror::Error)]
     #[error("{0}")]
@@ -174,6 +174,55 @@ mod wasm {
             rcpt_gas,
             yevm_gas,
             rcpt_status,
+            yevm_status,
+        })
+    }
+
+    #[wasm_bindgen]
+    pub async fn simulate(url: JsString, call_json: JsValue, event_filter: u32) -> Result<Stream, Error> {
+        let mut rpc = Rpc::latest(url.into()).await?;
+        let chain_id = rpc.chain_id().await?;
+        let head = rpc.block(rpc.block_number).await?.head;
+        rpc.reset(head.number.as_u64(), head.hash);
+
+        let call: Call = serde_wasm_bindgen::from_value::<TxCall>(call_json)
+            .map_err(|e| eyre!("{e}"))?.into();
+
+        // Synthetic legacy tx: gas_price = base_fee satisfies the >= base_fee check.
+        // chain_id left at zero so exe.rs fills it from cache.
+        let tx = Tx {
+            chain_id: Default::default(),
+            nonce: Int::ZERO,
+            gas_price: head.base_fee,
+            max_fee_per_gas: Int::ZERO,
+            max_priority_fee_per_gas: Int::ZERO,
+            access_list: vec![],
+            authorization_list: vec![],
+            blob_versioned_hashes: vec![],
+            max_fee_per_blob_gas: None,
+            hash: Int::ZERO,
+            index: Int::ZERO,
+        };
+
+        let (ytx, yrx) = mpsc::channel(1024 * 1024);
+        let mut cache = Cache::with_sender(ytx, event_filter);
+        cache.set_chain_id(chain_id);
+
+        let mut exe = Executor::new(call);
+        let result = exe.run(tx, head, &mut cache, &rpc).await?;
+        let _ = cache.sender.take();
+
+        let (yevm_status, yevm_gas) = match result {
+            CallResult::Done { status, ret: _, gas } => (status, gas.finalized.into()),
+            CallResult::Created { acc, code: _, gas } => (acc.to(), gas.finalized.into()),
+        };
+
+        Ok(Stream {
+            receiver: yrx,
+            tx: Int::ZERO,
+            rcpt_gas: yevm_gas,
+            yevm_gas,
+            rcpt_status: yevm_status,
             yevm_status,
         })
     }

@@ -257,6 +257,21 @@
     .btn-events:hover:not(:disabled) { background: rgba(56,189,248,0.2); border-color: rgba(56,189,248,0.5); }
     .btn-events:disabled { opacity: 0.35; cursor: default; }
 
+    .btn-call {
+      background: rgba(74,222,128,0.1);
+      color: #4ADE80;
+      border: 1px solid rgba(74,222,128,0.3);
+      border-radius: var(--radius-sm);
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .btn-call:hover:not(:disabled) { background: rgba(74,222,128,0.2); border-color: rgba(74,222,128,0.5); }
+    .btn-call:disabled { opacity: 0.35; cursor: default; }
+
+    #call-modal { max-width: 560px; }
+    #call-modal .form-grid { gap: 10px; }
+
     #modal-overlay {
       display: none;
       position: fixed; inset: 0;
@@ -667,6 +682,45 @@
   </div>
 </div>
 
+<!-- Call modal -->
+<div id="call-overlay" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,0.6);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);align-items:center;justify-content:center;padding:20px;">
+  <div id="call-modal" class="card" style="width:100%;max-width:560px;animation:modal-in 0.18s ease;">
+    <div class="modal-header">
+      <span class="modal-title">Custom Call</span>
+      <button class="modal-close" id="call-close" aria-label="Close">✕</button>
+    </div>
+    <div class="form-grid" id="call-form">
+      <div class="field">
+        <label>From (address)</label>
+        <input type="text" id="call-from" placeholder="0x…" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label>To (address, blank = CREATE)</label>
+        <input type="text" id="call-to" placeholder="0x…" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label>Gas limit</label>
+        <input type="text" id="call-gas" placeholder="1000000" value="1000000" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label>Value (wei)</label>
+        <input type="text" id="call-value" placeholder="0" value="0" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label>Calldata (hex)</label>
+        <input type="text" id="call-data" placeholder="0x" value="0x" autocomplete="off" spellcheck="false">
+      </div>
+    </div>
+    <div class="modal-footer" style="justify-content:space-between;">
+      <button class="btn-secondary" id="call-copylink">Copy Link</button>
+      <div style="display:flex;gap:10px;">
+        <button class="btn-secondary" id="call-cancel">Cancel</button>
+        <button class="btn-call" id="call-submit">Simulate</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="app">
   <!-- Header -->
   <div class="header">
@@ -684,6 +738,7 @@
         <button class="btn-primary  btn-main" id="btn-run">Simulate</button>
         <button class="btn-secondary btn-main" id="btn-rnd">Random</button>
         <button class="btn-secondary btn-main" id="btn-endpoint">Endpoint</button>
+        <button class="btn-call     btn-main" id="btn-call">Custom</button>
         <button class="btn-events    btn-main" id="btn-events" disabled>Tracing</button>
         <div id="status-bar">
           <div class="spinner"></div>
@@ -720,7 +775,7 @@
 </footer>
 
 <script type="module">
-import init, { pick, run } from './pkg/yaevmi_wasm.js';
+import init, { pick, run, simulate } from './pkg/yaevmi_wasm.js';
 await init();
 
 /* ── Filter constants (mirror trace::filter) ──────────────── */
@@ -1088,9 +1143,10 @@ class ResultCard {
     const stOk   = /OK=true/.test(lines[2] || '');
     const yGas   = (lines[1] || '').match(/yevm=(\d+)/)?.[1] ?? '?';
 
-    if (txHash) {
-      this.tx.innerHTML = `<a href="https://etherscan.io/tx/${txHash}" target="_blank" rel="noopener">${txHash}</a>`;
-    }
+    const isZeroHash = !txHash || /^0x0+$/.test(txHash);
+    this.tx.innerHTML = isZeroHash
+      ? `<span style="color:var(--text-dim)">custom call simulation</span>`
+      : `<a href="https://etherscan.io/tx/${txHash}" target="_blank" rel="noopener">${txHash}</a>`;
 
     this.grid.innerHTML = `
       ${_stat('Events', steps.toLocaleString())}
@@ -1556,11 +1612,90 @@ function _stat(label, value, cls = '') {
   </div>`;
 }
 
+/* ── CallModal ─────────────────────────────────────────────── */
+class CallModal {
+  constructor(onSubmit) {
+    this.overlay  = document.getElementById('call-overlay');
+    this.inpFrom  = document.getElementById('call-from');
+    this.inpTo    = document.getElementById('call-to');
+    this.inpGas   = document.getElementById('call-gas');
+    this.inpValue = document.getElementById('call-value');
+    this.inpData  = document.getElementById('call-data');
+    this._onSubmit = onSubmit;
+    this._btnCopy  = document.getElementById('call-copylink');
+
+    document.getElementById('call-close').onclick    = () => this.hide();
+    document.getElementById('call-cancel').onclick   = () => this.hide();
+    document.getElementById('call-submit').onclick   = () => this._submit();
+    this._btnCopy.onclick                            = () => this._copyLink();
+    this.overlay.addEventListener('click', e => { if (e.target === this.overlay) this.hide(); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') this.hide(); });
+  }
+
+  show() {
+    this.overlay.style.display = 'flex';
+    setTimeout(() => this.inpFrom.focus(), 50);
+  }
+
+  hide() { this.overlay.style.display = 'none'; }
+
+  fill(json) {
+    this.inpFrom.value  = json.from  ?? '';
+    this.inpTo.value    = json.to    ?? '';
+    const gasHex = json.gas ?? '0xf4240';
+    this.inpGas.value   = gasHex.startsWith('0x') ? parseInt(gasHex, 16).toString() : gasHex;
+    const valHex = json.value ?? '0x0';
+    try { this.inpValue.value = valHex.startsWith('0x') ? BigInt(valHex).toString() : valHex; }
+    catch { this.inpValue.value = '0'; }
+    this.inpData.value  = json.input ?? '0x';
+  }
+
+  _toHex(v, fallback = '0x0') {
+    v = v.trim();
+    if (!v || v === '0x') return fallback;
+    if (v.startsWith('0x')) return v;
+    const n = parseInt(v, 10);
+    return isNaN(n) ? fallback : '0x' + n.toString(16);
+  }
+
+  _buildJson() {
+    const from  = this.inpFrom.value.trim();
+    const to    = this.inpTo.value.trim();
+    const gas   = this._toHex(this.inpGas.value, '0xf4240');
+    const input = this.inpData.value.trim() || '0x';
+    let value = '0x0';
+    const rawVal = this.inpValue.value.trim();
+    if (rawVal && rawVal !== '0x') {
+      try { value = rawVal.startsWith('0x') ? rawVal : '0x' + BigInt(rawVal).toString(16); }
+      catch {}
+    }
+    const json = { from, gas, value, input };
+    if (to) json.to = to;
+    return json;
+  }
+
+  _copyLink() {
+    const b64 = btoa(JSON.stringify(this._buildJson()));
+    history.replaceState(null, '', `?call=${encodeURIComponent(b64)}`);
+    navigator.clipboard?.writeText(location.href);
+    this._btnCopy.textContent = 'Copied!';
+    setTimeout(() => { this._btnCopy.textContent = 'Copy Link'; }, 1500);
+  }
+
+  _submit() {
+    const json = this._buildJson();
+    if (!json.from) { this.inpFrom.focus(); return; }
+    this.hide();
+    this._onSubmit(json);
+  }
+}
+
 /* ── App ───────────────────────────────────────────────────── */
 class App {
   constructor() {
     this.status   = new StatusBar();
     this.modal    = new EndpointModal();
+    this.callModal = new CallModal(json => this._simulate(json));
     this.errCard  = new ErrorCard();
     this.result   = new ResultCard();
     this.evLog    = new EventsLog();
@@ -1569,6 +1704,7 @@ class App {
     this.btnRun      = document.getElementById('btn-run');
     this.btnEndpoint = document.getElementById('btn-endpoint');
     this.btnRnd      = document.getElementById('btn-rnd');
+    this.btnCall     = document.getElementById('btn-call');
     this.inpTxn      = document.getElementById('txn-inp');
 
     this.running = false;
@@ -1578,12 +1714,26 @@ class App {
     this.btnRun.onclick      = () => this._run();
     this.btnEndpoint.onclick = () => this.modal.show();
     this.btnRnd.onclick      = () => this._random().then(() => this._run());
+    this.btnCall.onclick     = () => this.callModal.show();
 
-    const params = new URLSearchParams(location.search);
-    const txParam = params.get('tx');
-    if (txParam) {
-      this.inpTxn.value = txParam;
+    const params    = new URLSearchParams(location.search);
+    const txParam   = params.get('tx');
+    const callParam = params.get('call');
+
+    let callJson = null;
+    if (callParam) {
+      try { callJson = JSON.parse(atob(callParam)); } catch {}
+    }
+
+    if (txParam)   this.inpTxn.value = txParam;
+    if (callJson)  this.callModal.fill(callJson);
+
+    if (txParam && callJson) {
+      // both present: fill both forms, let user choose which to run
+    } else if (txParam) {
       this._run();
+    } else if (callJson) {
+      this._simulate(callJson);
     } else {
       this._random().then(() => this._run());
     }
@@ -1594,6 +1744,7 @@ class App {
     this.btnRun.disabled      = v;
     this.btnRnd.disabled      = v;
     this.btnEndpoint.disabled = v;
+    this.btnCall.disabled     = v;
   }
 
   async _random() {
@@ -1604,6 +1755,7 @@ class App {
     this.btnRun.disabled      = true;
     this.btnRnd.disabled      = true;
     this.btnEndpoint.disabled = true;
+    this.btnCall.disabled     = true;
     try {
       const tx = await pick(url);
       this.inpTxn.value = tx;
@@ -1615,6 +1767,7 @@ class App {
       this.btnRun.disabled      = false;
       this.btnRnd.disabled      = false;
       this.btnEndpoint.disabled = false;
+      this.btnCall.disabled     = false;
     }
   }
 
@@ -1630,45 +1783,11 @@ class App {
     this.evLog.hide();
     this.ops.hide();
     this.status.show('Running…');
-
     history.replaceState(null, '', `?tx=${encodeURIComponent(txn)}`);
 
-    const counts = {};
-    let steps = 0;
-    const UPDATE_INTERVAL = 200;
-    const eventFilter = F.TOP; // add F.STEP for opcode hits panel
-
     try {
-      const stream = await run(url, txn, eventFilter);
-      const t0 = performance.now();
-      let lastUpdate = t0;
-      let trace;
-
-      while ((trace = await stream.next()) !== null) {
-        if (trace.event == null) { console.error('bad trace:', JSON.stringify(trace)); break; }
-        console.log(trace);
-        const kind = Object.keys(trace.event)[0];
-        if (kind === 'Step') {
-          const step = trace.event.Step;
-          counts[step.name] = (counts[step.name] ?? 0) + 1;
-          steps++;
-        } else {
-          this.evLog.push(trace);
-        }
-
-        const now = performance.now();
-        if (now - lastUpdate > UPDATE_INTERVAL) {
-          this.status.update(steps);
-          lastUpdate = now;
-        }
-      }
-
-      const ms = performance.now() - t0;
-      this.status.hide();
-      this.result.show(stream.check(), this.evLog._rows.length, ms);
-      this.evLog.flush();
-      if (steps > 0) this.ops.show(counts, steps);
-
+      const stream = await run(url, txn, F.TOP);
+      await this._consume(stream);
     } catch (e) {
       console.error(e);
       this.status.hide();
@@ -1676,6 +1795,64 @@ class App {
     } finally {
       this._setRunning(false);
     }
+  }
+
+  async _simulate(callJson) {
+    if (this.running) return;
+    const url = this.modal.url;
+    if (!url) return;
+
+    this._setRunning(true);
+    this.errCard.hide();
+    this.result.hide();
+    this.evLog.hide();
+    this.ops.hide();
+    this.status.show('Simulating…');
+    history.replaceState(null, '', `?call=${encodeURIComponent(btoa(JSON.stringify(callJson)))}`);
+
+    try {
+      const stream = await simulate(url, callJson, F.TOP);
+      await this._consume(stream);
+    } catch (e) {
+      console.error(e);
+      this.status.hide();
+      this._showError(e);
+    } finally {
+      this._setRunning(false);
+    }
+  }
+
+  async _consume(stream) {
+    const counts = {};
+    let steps = 0;
+    const UPDATE_INTERVAL = 200;
+    const t0 = performance.now();
+    let lastUpdate = t0;
+    let trace;
+
+    while ((trace = await stream.next()) !== null) {
+      if (trace.event == null) { console.error('bad trace:', JSON.stringify(trace)); break; }
+      const kind = Object.keys(trace.event)[0];
+      if (kind === 'Step') {
+        const step = trace.event.Step;
+        counts[step.name] = (counts[step.name] ?? 0) + 1;
+        steps++;
+      } else {
+        this.evLog.push(trace);
+      }
+
+      const now = performance.now();
+      if (now - lastUpdate > UPDATE_INTERVAL) {
+        this.status.update(steps);
+        lastUpdate = now;
+      }
+    }
+
+    const ms = performance.now() - t0;
+    this.status.hide();
+    this.result.show(stream.check(), this.evLog._rows.length, ms);
+    this.evLog.flush();
+    if (steps > 0) this.ops.show(counts, steps);
   }
 
   _showError(e) {

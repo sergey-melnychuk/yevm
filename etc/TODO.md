@@ -1,8 +1,5 @@
 TODO:
 
-- add custom call form: fields for from, to, gas (limit + gas market?), eth, calldata (all hex strings) - make a modal window for the form (abi fetching?)
-- add query param 'call' for base64-encoded payload for custom call (link is copyable from the custom call form modal window)
-- both 'call' and 'tx' query params are provided, fill both forms but don't execute anything - user will click either 'Simulate' for tx hash/block:index or 'Custom' for executing base64-decoded call json
 - consider wrapping value part of Get/Put 'address[slot] = {old -> new | val}' to a new line when value part is too long, rn horizontal overflow is hidden, and I don't want horizontal scrolling
 - add custom state overrides for tx simulation: address[slot] = value; make base64-encoded query param 'overrides' for it; consider allowing override nonce, value and code
 
@@ -11,7 +8,9 @@ TODO:
 DONE:
 
 - when clicked on address/hash/value, all the same occurrences are highlighted in yellow, including the one that was clicked at; when new item is clicked, prefious highlighting is discarded
-
+- add custom call form: fields for from, to, gas (limit + gas market?), eth, calldata (all hex strings) - make a modal window for the form (abi fetching?)
+- add query param 'call' for base64-encoded payload for custom call (link is copyable from the custom call form modal window)
+- both 'call' and 'tx' query params are provided, fill both forms but don't execute anything - user will click either 'Simulate' for tx hash/block:index or 'Custom' for executing base64-decoded call json
 
 ---
 
