@@ -594,6 +594,14 @@
     .ev-wrap.ev-reverted .ev-body   { opacity: 0.4; text-decoration: line-through; }
     .ev-wrap.ev-reverted .ev-indent { opacity: 0.1; }
 
+    .ev-token { border-radius: 2px; }
+    .ev-token:hover { background: rgba(255,255,255,0.08); cursor: default; }
+    .ev-token.ev-hl {
+      background: rgba(251,191,36,0.28);
+      outline: 1px solid rgba(251,191,36,0.55);
+      border-radius: 2px;
+    }
+
     .ev-wrap[data-depth="1"] .ev-row { background: rgba(167,139,250,0.04); }
     .ev-wrap[data-depth="2"] .ev-row { background: rgba(56,189,248,0.04); }
     .ev-wrap[data-depth="3"] .ev-row { background: rgba(74,222,128,0.04); }
@@ -785,15 +793,21 @@ const _PRECOMPILE_ADDRS = new Set([
   '0x000000000000000000000000000000000000000a',
 ]);
 
+function _tok(val, html) {
+  if (!val) return html;
+  return `<span class="ev-token" data-val="${val}">${html}</span>`;
+}
+
 function _lbl(addr) {
-  const l = _addrLabel(addr);
-  if (!l) return String(addr);
   const a = addr?.toLowerCase();
+  const l = _addrLabel(addr);
+  const addrTok = _tok(a, String(addr));
+  if (!l) return addrTok;
   const cls = l === 'Clone'    ? ' clone'
             : l === 'Delegate' ? ' delegate'
             : _PRECOMPILE_ADDRS.has(a) ? ' precompile'
             : '';
-  return `${addr}<span class="ev-addr-label${cls}">${l}</span>`;
+  return `${addrTok}<span class="ev-addr-label${cls}">${l}</span>`;
 }
 
 /* ── 4byte.directory lookup + ABI decode ───────────────────── */
@@ -1150,13 +1164,30 @@ class EventsLog {
     this._seenGets  = new Set(); // dedup Get(Code/Value/Nonce) per acc
     this._seenCode  = new Set(); // dedup Code by hash
     this._hashToAcc = new Map(); // code hash -> acc addr (for bytecode label detection)
+    this._hlVal     = null;
 
     document.getElementById('events-close').onclick = () => this.close();
     this.overlay.addEventListener('click', e => { if (e.target === this.overlay) this.close(); });
     document.addEventListener('keydown', e => { if (e.key === 'Escape') this.close(); });
     this.btnOpen.onclick = () => this.open();
+
+    this.list.addEventListener('click', e => {
+      const tok = e.target.closest('.ev-token');
+      if (!tok) return;
+      const val = tok.dataset.val;
+      this._clearHighlight();
+      this._hlVal = val;
+      this.list.querySelectorAll(`.ev-token[data-val="${CSS.escape(val)}"]`)
+        .forEach(el => el.classList.add('ev-hl'));
+    });
+
+    document.addEventListener('click', e => {
+      if (!e.target.closest('.ev-token')) this._clearHighlight();
+    });
+
     this.list.addEventListener('click', e => {
       if (e.target.closest('.ev-hex-data')) return;
+      if (e.target.closest('.ev-token')) return;
       const wrap = e.target.closest('.ev-has-data');
       if (!wrap) return;
       const opening = !wrap.classList.contains('ev-open');
@@ -1313,9 +1344,15 @@ class EventsLog {
     this.btnOpen.disabled = false;
   }
 
+  _clearHighlight() {
+    if (!this._hlVal) return;
+    this.list.querySelectorAll('.ev-token.ev-hl').forEach(el => el.classList.remove('ev-hl'));
+    this._hlVal = null;
+  }
+
   open()  { this.overlay.classList.add('visible'); }
   close() { this.overlay.classList.remove('visible'); }
-  hide()  { this._rows = []; this._seenGets.clear(); this._seenCode.clear(); this._hashToAcc.clear(); this.list.innerHTML = ''; this.btnOpen.disabled = true; }
+  hide()  { this._clearHighlight(); this._rows = []; this._seenGets.clear(); this._seenCode.clear(); this._hashToAcc.clear(); this.list.innerHTML = ''; this.btnOpen.disabled = true; }
 }
 
 const _MODE = { Call:'CALL', Static:'STATICCALL', Delegate:'DELEGATECALL', CallCode:'CALLCODE', Create:'CREATE', Create2:'CREATE2' };
@@ -1390,7 +1427,7 @@ function _fmtEventBody(kind, data, codeBytes) {
           case 'Temp':  return [`${_lbl(t.acc)} [T:${_strip(t.key)}] = ${_fmtEth(t.val)}`, null];
           case 'Value': return [`${_lbl(t.acc)}  value = ${_fmtValue(t.val)}`, null];
           case 'Nonce': return [`${_lbl(t.acc)}  nonce = ${_fmtNum(t.val)}`, null];
-          case 'Code':  return [`${_lbl(t.acc)}  code = ${t.hash}`, codeBytes ?? null];
+          case 'Code':  return [`${_lbl(t.acc)}  code = ${_tok(t.hash, t.hash)}`, codeBytes ?? null];
           case 'Auth':  return [`auth[${_lbl(t.acc)}]`, null];
           default:      return [JSON.stringify(data), null];
         }
@@ -1429,7 +1466,7 @@ function _fmtEventBody(kind, data, codeBytes) {
             return [`${_lbl(t.acc)}  ${oldStr} → ${newStr}${diff}`, null];
           }
           case 'Nonce': return [`${_lbl(t.acc)}  nonce = ${_fmtNum(t.val)} → ${_fmtNum(newV)}`, null];
-          case 'Code':  return [`${_lbl(t.acc)}  code = ${t.hash}`, null];
+          case 'Code':  return [`${_lbl(t.acc)}  code = ${_tok(t.hash, t.hash)}`, null];
           case 'Auth':  return [`auth[${_lbl(t.acc)}]`, null];
           default:      return [JSON.stringify(data), null];
         }
@@ -1445,16 +1482,19 @@ function _fmtBytes(buf) {
 }
 
 function _strip(hex) {
-  if (typeof hex !== 'string' || !hex.startsWith('0x')) return hex;
+  if (typeof hex !== 'string' || !hex.startsWith('0x')) return String(hex);
   const s = hex.replace(/^0x0+/, '0x');
-  return s === '0x' ? '0x0' : s;
+  const display = s === '0x' ? '0x0' : s;
+  return _tok(display, display);
 }
 
 function _fmtEth(val) {
   if (!val || val === '0x0000000000000000000000000000000000000000000000000000000000000000') return '0';
   if (typeof val === 'string' && val.startsWith('0x')) {
     const s = val.replace(/^0x0+/, '0x');
-    return s === '0x' ? '0x0' : s;
+    const display = s === '0x' ? '0x0' : s;
+    if (display === '0' || display === '0x0') return display;
+    return _tok(display, display);
   }
   return String(val);
 }
@@ -1473,12 +1513,18 @@ function _fmtValue(val) {
       const whole = wei / ETH;
       if (whole > _MAX_SANE_ETH) return _short(val);
       const frac = wei % ETH;
-      if (frac === 0n) return `${whole} ETH`;
-      const fracStr = frac.toString().padStart(18, '0').replace(/0+$/, '');
-      const decimals = fracStr.length > 6 ? fracStr.slice(0, 6) + '…' : fracStr;
-      return whole === 0n ? `0.${decimals} ETH` : `${whole}.${decimals} ETH`;
+      let display;
+      if (frac === 0n) {
+        display = `${whole} ETH`;
+      } else {
+        const fracStr = frac.toString().padStart(18, '0').replace(/0+$/, '');
+        const decimals = fracStr.length > 6 ? fracStr.slice(0, 6) + '…' : fracStr;
+        display = whole === 0n ? `0.${decimals} ETH` : `${whole}.${decimals} ETH`;
+      }
+      return _tok(display, display);
     }
-    return `${wei} wei`;
+    const display = `${wei} wei`;
+    return _tok(display, display);
   }
   return String(val);
 }
