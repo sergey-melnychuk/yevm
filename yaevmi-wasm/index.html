@@ -292,6 +292,7 @@
       white-space: nowrap;
     }
     .chk-label:hover { background: rgba(251,191,36,0.2); border-color: rgba(251,191,36,0.5); }
+    .chk-label:has(input:disabled) { opacity: 0.4; cursor: not-allowed; }
     .chk-label:has(input:checked) {
       background: rgba(251,191,36,0.22);
       border-color: rgba(251,191,36,0.6);
@@ -1745,6 +1746,7 @@ class App {
     this.btnEndpoint = document.getElementById('btn-endpoint');
     this.btnRnd      = document.getElementById('btn-rnd');
     this.btnCall     = document.getElementById('btn-call');
+    this.chkBlock    = document.getElementById('chk-block');
     this.inpTxn      = document.getElementById('txn-inp');
 
     this.running = false;
@@ -1785,6 +1787,7 @@ class App {
     this.btnRnd.disabled      = v;
     this.btnEndpoint.disabled = v;
     this.btnCall.disabled     = v;
+    this.chkBlock.disabled    = v;
   }
 
   async _random() {
@@ -1796,6 +1799,7 @@ class App {
     this.btnRnd.disabled      = true;
     this.btnEndpoint.disabled = true;
     this.btnCall.disabled     = true;
+    this.chkBlock.disabled    = true;
     try {
       const tx = await pick(url);
       this.inpTxn.value = tx;
@@ -1808,6 +1812,7 @@ class App {
       this.btnRnd.disabled      = false;
       this.btnEndpoint.disabled = false;
       this.btnCall.disabled     = false;
+      this.chkBlock.disabled    = false;
     }
   }
 
