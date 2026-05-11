@@ -3,26 +3,26 @@ mod decode;
 
 use auth::AuthStore;
 use axum::{
-    Json, Router,
     extract::{Path, Request, State as AxumState},
     middleware::{self, Next},
     response::Html,
     routing::{get, post},
+    Json, Router,
 };
 use eyre::eyre;
 use futures::StreamExt;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
 use yaevmi_base::{Acc, Int};
 use yaevmi_core::{
-    Call, Head, Tx,
     cache::Cache,
     chain::Chain,
     exe::{CallResult, Executor},
     rpc::Rpc,
     state::State,
-    trace::{Trace, filter},
+    trace::{filter, Trace},
+    Call, Head, Tx,
 };
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -62,8 +62,7 @@ async fn main() -> eyre::Result<()> {
     tracing_subscriber::fmt::init();
     dotenvy::dotenv().ok();
 
-    let rpc_url = std::env::var("YAEVMI_RPC_URL")
-        .map_err(|_| eyre!("YAEVMI_RPC_URL not set"))?;
+    let rpc_url = std::env::var("YAEVMI_RPC_URL").map_err(|_| eyre!("YAEVMI_RPC_URL not set"))?;
     let bind: SocketAddr = std::env::var("YAEVMI_PROXY_BIND")
         .unwrap_or_else(|_| "127.0.0.1:8000".into())
         .parse()?;
@@ -101,13 +100,17 @@ async fn require_auth(
     mut req: Request,
     next: Next,
 ) -> Result<axum::response::Response, AppError> {
-    let token = req.headers()
+    let token = req
+        .headers()
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or_else(|| eyre!("missing Authorization header"))?;
 
-    let addr = state.auth.authenticate(token).await
+    let addr = state
+        .auth
+        .authenticate(token)
+        .await
         .ok_or_else(|| eyre!("invalid or expired session"))?;
 
     req.extensions_mut().insert(Caller(addr));
@@ -123,13 +126,19 @@ async fn auth_verify(
     AxumState(state): AxumState<Shared>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
-    let nonce = body.get("nonce").and_then(|v| v.as_str())
+    let nonce = body
+        .get("nonce")
+        .and_then(|v| v.as_str())
         .ok_or_else(|| eyre!("missing nonce"))?;
-    let signature = body.get("signature").and_then(|v| v.as_str())
+    let signature = body
+        .get("signature")
+        .and_then(|v| v.as_str())
         .ok_or_else(|| eyre!("missing signature"))?;
 
     let (address, token) = state.auth.verify(nonce, signature).await?;
-    Ok(Json(json!({ "address": format!("{address}"), "token": token })))
+    Ok(Json(
+        json!({ "address": format!("{address}"), "token": token }),
+    ))
 }
 
 async fn handle_rpc(
@@ -148,7 +157,9 @@ async fn handle_rpc(
 async fn intercept_send_raw(state: Shared, body: Value) -> Result<Json<Value>, AppError> {
     let id = body.get("id").cloned().unwrap_or(Value::Null);
     let raw = body
-        .get("params").and_then(|p| p.get(0)).and_then(|v| v.as_str())
+        .get("params")
+        .and_then(|p| p.get(0))
+        .and_then(|v| v.as_str())
         .ok_or_else(|| eyre!("missing params[0]"))?
         .to_string();
 
@@ -159,11 +170,20 @@ async fn intercept_send_raw(state: Shared, body: Value) -> Result<Json<Value>, A
 
     {
         let mut pending = state.pending.write().await;
-        pending.insert(hash.clone(), PendingTx {
-            from,
-            raw: raw.clone(),
-            sim: SimResult { status: "pending", error: None, gas_used: None, success: None, traces: vec![] },
-        });
+        pending.insert(
+            hash.clone(),
+            PendingTx {
+                from,
+                raw: raw.clone(),
+                sim: SimResult {
+                    status: "pending",
+                    error: None,
+                    gas_used: None,
+                    success: None,
+                    traces: vec![],
+                },
+            },
+        );
     }
 
     spawn_sim(state, hash.clone(), decoded.call, decoded.tx);
@@ -178,10 +198,22 @@ fn spawn_sim(state: Shared, hash: String, call: Call, tx: Tx) {
         if let Some(entry) = pending.get_mut(&hash) {
             match result {
                 Ok((gas, success, traces)) => {
-                    entry.sim = SimResult { status: "done", error: None, gas_used: Some(gas), success: Some(success), traces };
+                    entry.sim = SimResult {
+                        status: "done",
+                        error: None,
+                        gas_used: Some(gas),
+                        success: Some(success),
+                        traces,
+                    };
                 }
                 Err(e) => {
-                    entry.sim = SimResult { status: "failed", error: Some(e.to_string()), gas_used: None, success: None, traces: vec![] };
+                    entry.sim = SimResult {
+                        status: "failed",
+                        error: Some(e.to_string()),
+                        gas_used: None,
+                        success: None,
+                        traces: vec![],
+                    };
                 }
             }
         }
@@ -195,7 +227,10 @@ async fn run_sim(rpc_url: String, call: Call, tx: Tx) -> eyre::Result<(u64, bool
     rpc.reset(head.number.as_u64(), head.hash);
 
     let (ytx, yrx) = futures::channel::mpsc::channel(1024 * 1024);
-    let mut cache = Cache::with_sender(ytx, filter::MOVE | filter::PUT | filter::FEE | filter::LOG | filter::CREATE);
+    let mut cache = Cache::with_sender(
+        ytx,
+        filter::MOVE | filter::PUT | filter::FEE | filter::LOG | filter::CREATE,
+    );
     cache.set_chain_id(chain_id);
 
     let mut exe = Executor::new(call);
@@ -215,7 +250,8 @@ async fn api_list(
     axum::Extension(Caller(caller)): axum::Extension<Caller>,
 ) -> Json<Value> {
     let pending = state.pending.read().await;
-    let list: Vec<_> = pending.iter()
+    let list: Vec<_> = pending
+        .iter()
         .filter(|(_, p)| p.from == caller)
         .map(|(hash, p)| json!({ "hash": hash, "sim": p.sim }))
         .collect();
@@ -228,7 +264,9 @@ async fn api_get(
     Path(hash): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     let pending = state.pending.read().await;
-    let entry = pending.get(&hash).ok_or_else(|| eyre!("tx not found: {hash}"))?;
+    let entry = pending
+        .get(&hash)
+        .ok_or_else(|| eyre!("tx not found: {hash}"))?;
     if entry.from != caller {
         return Err(eyre!("not your tx").into());
     }
@@ -242,11 +280,16 @@ async fn api_submit(
 ) -> Result<Json<Value>, AppError> {
     let raw = {
         let pending = state.pending.read().await;
-        let entry = pending.get(&hash).ok_or_else(|| eyre!("tx not found: {hash}"))?;
-        if entry.from != caller { return Err(eyre!("not your tx").into()); }
+        let entry = pending
+            .get(&hash)
+            .ok_or_else(|| eyre!("tx not found: {hash}"))?;
+        if entry.from != caller {
+            return Err(eyre!("not your tx").into());
+        }
         entry.raw.clone()
     };
-    let body = json!({ "jsonrpc": "2.0", "method": "eth_sendRawTransaction", "params": [raw], "id": 1 });
+    let body =
+        json!({ "jsonrpc": "2.0", "method": "eth_sendRawTransaction", "params": [raw], "id": 1 });
     let resp = state.client.post(&state.rpc_url).json(&body).send().await?;
     let result: Value = resp.json().await?;
     state.pending.write().await.remove(&hash);
@@ -259,8 +302,12 @@ async fn api_reject(
     Path(hash): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     let mut pending = state.pending.write().await;
-    let entry = pending.get(&hash).ok_or_else(|| eyre!("tx not found: {hash}"))?;
-    if entry.from != caller { return Err(eyre!("not your tx").into()); }
+    let entry = pending
+        .get(&hash)
+        .ok_or_else(|| eyre!("tx not found: {hash}"))?;
+    if entry.from != caller {
+        return Err(eyre!("not your tx").into());
+    }
     pending.remove(&hash);
     Ok(Json(json!({ "rejected": hash })))
 }
@@ -270,8 +317,16 @@ async fn ui() -> Html<&'static str> {
 }
 
 struct AppError(eyre::Report);
-impl From<eyre::Report> for AppError { fn from(e: eyre::Report) -> Self { Self(e) } }
-impl From<reqwest::Error> for AppError { fn from(e: reqwest::Error) -> Self { Self(e.into()) } }
+impl From<eyre::Report> for AppError {
+    fn from(e: eyre::Report) -> Self {
+        Self(e)
+    }
+}
+impl From<reqwest::Error> for AppError {
+    fn from(e: reqwest::Error) -> Self {
+        Self(e.into())
+    }
+}
 impl axum::response::IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
         let body = json!({ "error": self.0.to_string() });

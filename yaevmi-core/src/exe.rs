@@ -592,7 +592,7 @@ impl Executor {
                     self.callstack.pop();
                 }
                 StepResult::Call(call, mode) => {
-                    state.emit(Event::Call(call.clone(), mode.clone()));
+                    state.emit(Event::Call(call.clone(), mode));
                     this.evm.apply(state);
                     let call_to_is_precompile =
                         call.to.map(|to| is_precompile(&to)).unwrap_or_default();
@@ -833,7 +833,10 @@ impl Executor {
                     self.callstack.push(frame);
                 }
                 StepResult::Return(ret) => {
-                    state.emit(Event::Return(ret.clone().into(), this.evm.gas.spent.max(0) as u64));
+                    state.emit(Event::Return(
+                        ret.clone().into(),
+                        this.evm.gas.spent.max(0) as u64,
+                    ));
                     let is_create = this.is_create;
                     result = Some(if is_create {
                         let deploy_cost = CODE_DEPOSIT_GAS * ret.len() as i64;
@@ -868,7 +871,10 @@ impl Executor {
                     self.callstack.pop();
                 }
                 StepResult::Revert(ret) => {
-                    state.emit(Event::Revert(ret.clone().into(), this.evm.gas.spent.max(0) as u64));
+                    state.emit(Event::Revert(
+                        ret.clone().into(),
+                        this.evm.gas.spent.max(0) as u64,
+                    ));
                     state.revert_to(this.checkpoint);
                     let mut gas = this.evm.gas;
                     gas.refund = 0;
@@ -880,7 +886,7 @@ impl Executor {
                     self.callstack.pop();
                 }
                 StepResult::Halt(reason) => {
-                    state.emit(Event::Halt(reason.clone(), this.evm.gas.limit.max(0) as u64));
+                    state.emit(Event::Halt(reason, this.evm.gas.limit.max(0) as u64));
                     this.evm.apply(state);
                     this.evm.gas.drain();
                     state.revert_to(this.checkpoint);

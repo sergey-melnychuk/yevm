@@ -12,11 +12,11 @@ use yaevmi_base::{Acc, Int, int, math::lift};
 use yaevmi_core::{
     cache::Cache,
     call::Receipt,
-    trace::filter,
     chain::{Chain, Fetched},
     exe::{CallResult, Executor, pre_block},
     rpc::Rpc,
     state::{Account, State},
+    trace::filter,
 };
 use yaevmi_misc::hex::parse_vec;
 
@@ -506,11 +506,6 @@ pub struct RevmResult {
 
 // TODO: run embedded database for acc/state storage
 // consider: sqlite, leveldb, rocksdb, sled, yakvdb?
-
-// TODO: for each processed block: generate hermetic env
-// (containing all read storage cells by all transactions)
-// (store it alongsize with block updates to allow reverting)
-// (this allows re-running blocks on-demand without RPC calls)
 
 mod live {
     use alloy_eip7702::{Authorization, SignedAuthorization};

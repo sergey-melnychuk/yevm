@@ -167,7 +167,7 @@ pub const OPS: [&str; 256] = [
     "SHL",
     "SHR",
     "SAR",
-    "CLZ", // TODO: FIXME: make it work for live & test
+    "CLZ",
     // "INVALID/0x1E", // CLZ is not in the Cancun spec
     "INVALID/0x1F",
     // 0x20

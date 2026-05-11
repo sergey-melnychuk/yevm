@@ -189,7 +189,7 @@ pub async fn run(
         ))
         .max_fee_per_gas(max_fee)
         .gas_priority_fee(Some(priority_fee))
-        .authorization_list(vec![]) // TODO: FIXME
+        .authorization_list(vec![]) // This is fine: the module is only used for testing
         .blob_hashes(
             tx.blob_versioned_hashes
                 .iter()

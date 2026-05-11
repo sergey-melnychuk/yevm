@@ -311,10 +311,22 @@ impl State for Cache {
 
     fn create(&mut self, acc: Acc, info: Account) {
         if !info.nonce.is_zero() {
-            self.emit(Event::Put(Target::Nonce { acc, val: Int::ZERO }, info.nonce));
+            self.emit(Event::Put(
+                Target::Nonce {
+                    acc,
+                    val: Int::ZERO,
+                },
+                info.nonce,
+            ));
         }
         if !info.value.is_zero() {
-            self.emit(Event::Put(Target::Value { acc, val: Int::ZERO }, info.value));
+            self.emit(Event::Put(
+                Target::Value {
+                    acc,
+                    val: Int::ZERO,
+                },
+                info.value,
+            ));
         }
         self.emit(Event::Create(acc));
         self.accounts.insert(acc, AccountEntry::new(info));
@@ -381,10 +393,10 @@ impl State for Cache {
             depth: self.depth,
             reverted: false,
         };
-        if self.filter & trace.event.filter_bit() != 0 {
-            if let Some(sender) = self.sender.as_mut() {
-                let _ = sender.try_send(trace.clone());
-            }
+        if self.filter & trace.event.filter_bit() != 0
+            && let Some(sender) = self.sender.as_mut()
+        {
+            let _ = sender.try_send(trace.clone());
         }
         self.events.push(trace);
         id
@@ -503,15 +515,15 @@ impl State for Cache {
             }
         }
 
-        if self.filter & filter::REVERT != 0 {
-            if let Some(sender) = self.sender.as_mut() {
-                let _ = sender.try_send(Trace {
-                    seq: cp,
-                    event: Event::Undo(cp, to),
-                    depth: self.depth,
-                    reverted: true,
-                });
-            }
+        if self.filter & filter::REVERT != 0
+            && let Some(sender) = self.sender.as_mut()
+        {
+            let _ = sender.try_send(Trace {
+                seq: cp,
+                event: Event::Undo(cp, to),
+                depth: self.depth,
+                reverted: true,
+            });
         }
     }
 

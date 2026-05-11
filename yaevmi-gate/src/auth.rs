@@ -28,7 +28,10 @@ impl AuthStore {
 
     pub async fn new_challenge(&self) -> String {
         let nonce = random_hex(32);
-        self.challenges.write().await.insert(nonce.clone(), Instant::now());
+        self.challenges
+            .write()
+            .await
+            .insert(nonce.clone(), Instant::now());
         nonce
     }
 
@@ -36,7 +39,9 @@ impl AuthStore {
         // Check nonce exists and hasn't expired.
         {
             let mut challenges = self.challenges.write().await;
-            let created = challenges.remove(nonce).ok_or_else(|| eyre!("unknown or expired nonce"))?;
+            let created = challenges
+                .remove(nonce)
+                .ok_or_else(|| eyre!("unknown or expired nonce"))?;
             if created.elapsed() > NONCE_TTL {
                 return Err(eyre!("nonce expired"));
             }
@@ -47,14 +52,21 @@ impl AuthStore {
 
         // Issue session token.
         let token = random_hex(32);
-        self.sessions.write().await.insert(token.clone(), (address, Instant::now()));
+        self.sessions
+            .write()
+            .await
+            .insert(token.clone(), (address, Instant::now()));
         Ok((address, token))
     }
 
     pub async fn authenticate(&self, token: &str) -> Option<Acc> {
         let sessions = self.sessions.read().await;
         sessions.get(token).and_then(|(addr, created)| {
-            if created.elapsed() < SESSION_TTL { Some(*addr) } else { None }
+            if created.elapsed() < SESSION_TTL {
+                Some(*addr)
+            } else {
+                None
+            }
         })
     }
 }

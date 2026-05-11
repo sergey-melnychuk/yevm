@@ -12,7 +12,11 @@ mod wasm {
     use yaevmi_core::exe::{CallResult, Executor};
     use yaevmi_core::state::State;
     use yaevmi_core::trace::Trace;
-    use yaevmi_core::{Call, Head, Tx, call::{TxCall, TxFull}, rpc::Rpc};
+    use yaevmi_core::{
+        Call, Head, Tx,
+        call::{TxCall, TxFull},
+        rpc::Rpc,
+    };
 
     #[derive(Debug, thiserror::Error)]
     #[error("{0}")]
@@ -222,11 +226,7 @@ mod wasm {
             let _ = exe.run(prior.tx, head.clone(), &mut cache, &rpc).await;
             cache.reset();
             release().await;
-            let _ = on_progress.call2(
-                &JsValue::NULL,
-                &JsValue::from(i + 1),
-                &JsValue::from(total),
-            );
+            let _ = on_progress.call2(&JsValue::NULL, &JsValue::from(i + 1), &JsValue::from(total));
         }
 
         // Wire up tracing for the target tx, reuse accumulated state.
@@ -240,26 +240,46 @@ mod wasm {
         let _ = cache.sender.take();
 
         let (yevm_status, yevm_gas) = match result {
-            CallResult::Done { status, ret: _, gas } => (status, gas.finalized.into()),
+            CallResult::Done {
+                status,
+                ret: _,
+                gas,
+            } => (status, gas.finalized.into()),
             CallResult::Created { acc, code: _, gas } => (acc.to(), gas.finalized.into()),
         };
         let receipt = rpc.receipt(hash).await?;
         let (rcpt_status, rcpt_gas) = (
-            if let Some(acc) = receipt.contract_address { acc.to() } else { receipt.status },
+            if let Some(acc) = receipt.contract_address {
+                acc.to()
+            } else {
+                receipt.status
+            },
             receipt.gas_used,
         );
-        Ok(Stream { receiver: yrx, tx: hash, rcpt_gas, yevm_gas, rcpt_status, yevm_status })
+        Ok(Stream {
+            receiver: yrx,
+            tx: hash,
+            rcpt_gas,
+            yevm_gas,
+            rcpt_status,
+            yevm_status,
+        })
     }
 
     #[wasm_bindgen]
-    pub async fn simulate(url: JsString, call_json: JsValue, event_filter: u32) -> Result<Stream, Error> {
+    pub async fn simulate(
+        url: JsString,
+        call_json: JsValue,
+        event_filter: u32,
+    ) -> Result<Stream, Error> {
         let mut rpc = Rpc::latest(url.into()).await?;
         let chain_id = rpc.chain_id().await?;
         let head = rpc.block(rpc.block_number).await?.head;
         rpc.reset(head.number.as_u64(), head.hash);
 
         let call: Call = serde_wasm_bindgen::from_value::<TxCall>(call_json)
-            .map_err(|e| eyre!("{e}"))?.into();
+            .map_err(|e| eyre!("{e}"))?
+            .into();
 
         // Synthetic legacy tx: gas_price = base_fee satisfies the >= base_fee check.
         // chain_id left at zero so exe.rs fills it from cache.
@@ -286,7 +306,11 @@ mod wasm {
         let _ = cache.sender.take();
 
         let (yevm_status, yevm_gas) = match result {
-            CallResult::Done { status, ret: _, gas } => (status, gas.finalized.into()),
+            CallResult::Done {
+                status,
+                ret: _,
+                gas,
+            } => (status, gas.finalized.into()),
             CallResult::Created { acc, code: _, gas } => (acc.to(), gas.finalized.into()),
         };
 
@@ -312,29 +336,10 @@ pub use wasm::*;
 /*
 TODO:
 
-Call target: execute call against network block at given height.
-Call target: execute network tx (given block + index OR tx hash).
-Call target: execute network block (given block number/hash).
-
-Call target: bring your own env (bytecode, call, storage, etc).
+Call target: bring your own env (bytecode, call, storage, etc) + state overrides.
 (Fully reproducible hermetic execution environment, demo/PoC/etc)
 
-In-memory (or remote server) cache of account state and storage.
-
-Traces:
-- trace filter (only collect certain event types)
-- trace streaming (ease memory pressure, backpressure/pause)
-
-Result:
-- show affected accounts (balance, nonce) and storage slots
-- show created accounts (if any)
-- show emitted logs (if any)
-- show gas usage per step/frame
-
 Intelligence:
-- resolve function selectors (4byte.directory)
-- resolve function parameters (source code + ABI)
-- for Solidity source code (matching bytecode + srcmap): per-line debugging
 - resolve storage slots based on hash preimage (e.g. ERC-20 token balance for specific address)
 
 ---
@@ -343,7 +348,7 @@ Use Case: Anomaly Detection and Transaction Verification
 
 Re-execute all previous transactions for the given address, collect results (state, value).
 Re-execute target transaction, collect results (state, value) and compare to previous results.
-If significant deviation is detected [TODO: define "significant"], flag and report it.
+If significant deviation is detected, flag and report it.
 
 [This could have prevented "ByBit hack" of Feb'25 $1.5B worth of ETH being stolen].
 https://www.chainalysis.com/blog/bybit-exchange-hack-february-2025-crypto-security-dprk/

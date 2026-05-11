@@ -8,23 +8,23 @@ use crate::{
 };
 
 pub mod filter {
-    pub const NONE:         u32 = 0;
-    pub const STEP:         u32 = 1 << 0;
-    pub const CALL:         u32 = 1 << 1;
-    pub const RETURN:       u32 = 1 << 2;
-    pub const REVERT:       u32 = 1 << 3;
-    pub const HALT:         u32 = 1 << 4;
-    pub const GET:          u32 = 1 << 5;
-    pub const PUT:          u32 = 1 << 6;
-    pub const LOG:          u32 = 1 << 7;
-    pub const CREATE:       u32 = 1 << 8;
-    pub const DELETE:       u32 = 1 << 9;
-    pub const MOVE:         u32 = 1 << 10;
-    pub const FEE:          u32 = 1 << 11;
-    pub const HASH:         u32 = 1 << 12;
-    pub const CODE:         u32 = 1 << 13;
-    pub const ALL:          u32 = u32::MAX;
-    pub const TOP:          u32 = ALL ^ STEP;
+    pub const NONE: u32 = 0;
+    pub const STEP: u32 = 1 << 0;
+    pub const CALL: u32 = 1 << 1;
+    pub const RETURN: u32 = 1 << 2;
+    pub const REVERT: u32 = 1 << 3;
+    pub const HALT: u32 = 1 << 4;
+    pub const GET: u32 = 1 << 5;
+    pub const PUT: u32 = 1 << 6;
+    pub const LOG: u32 = 1 << 7;
+    pub const CREATE: u32 = 1 << 8;
+    pub const DELETE: u32 = 1 << 9;
+    pub const MOVE: u32 = 1 << 10;
+    pub const FEE: u32 = 1 << 11;
+    pub const HASH: u32 = 1 << 12;
+    pub const CODE: u32 = 1 << 13;
+    pub const ALL: u32 = u32::MAX;
+    pub const TOP: u32 = ALL ^ STEP;
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -48,14 +48,14 @@ pub enum Event {
     Code(Buf, Int),
     Log(Vec<Int>, Buf),
     Call(Call, CallMode),
-    Return(Buf, u64),  // (data, gas_used)
-    Revert(Buf, u64),  // (data, gas_used)
+    Return(Buf, u64),      // (data, gas_used)
+    Revert(Buf, u64),      // (data, gas_used)
     Halt(HaltReason, u64), // (reason, gas_used)
-    Undo(usize, usize), // seq range [from, to) that was reverted
+    Undo(usize, usize),    // seq range [from, to) that was reverted
     Create(Acc),
     Delete(Acc),
     Fee(Acc, Int, Int, u64), // (sender, base_burn, tip, gas_used)
-    Blob(u64, Int), // EIP-4844 BLOB carrying txs
+    Blob(u64, Int),          // EIP-4844 BLOB carrying txs
 
     Step(Step),
     // Full(Step, Vec<Int>, Buf),
@@ -78,22 +78,22 @@ pub struct Step {
 impl Event {
     pub fn filter_bit(&self) -> u32 {
         match self {
-            Event::Step(_)    => filter::STEP,
-            Event::Call(..)   => filter::CALL,
+            Event::Step(_) => filter::STEP,
+            Event::Call(..) => filter::CALL,
             Event::Return(..) => filter::RETURN,
             Event::Revert(..) => filter::REVERT,
-            Event::Undo(..)   => filter::REVERT,
-            Event::Halt(..)   => filter::HALT,
-            Event::Get(_)     => filter::GET,
-            Event::Put(..)    => filter::PUT,
-            Event::Log(..)    => filter::LOG,
-            Event::Create(_)  => filter::CREATE,
-            Event::Delete(_)  => filter::DELETE,
-            Event::Move(..)   => filter::MOVE,
-            Event::Fee(..)    => filter::FEE,
-            Event::Hash(..)   => filter::HASH,
-            Event::Code(..)   => filter::CODE,
-            _                 => filter::NONE,
+            Event::Undo(..) => filter::REVERT,
+            Event::Halt(..) => filter::HALT,
+            Event::Get(_) => filter::GET,
+            Event::Put(..) => filter::PUT,
+            Event::Log(..) => filter::LOG,
+            Event::Create(_) => filter::CREATE,
+            Event::Delete(_) => filter::DELETE,
+            Event::Move(..) => filter::MOVE,
+            Event::Fee(..) => filter::FEE,
+            Event::Hash(..) => filter::HASH,
+            Event::Code(..) => filter::CODE,
+            _ => filter::NONE,
         }
     }
 }
@@ -105,7 +105,8 @@ impl PartialEq for Step {
             && self.name == other.name
             && self.data == other.data
             && self.gas == other.gas
-            // && self.stack == other.stack // TODO: revm leaves/pops stack values on halt depending on opcode
+            // revm leaves/pops stack values on halt depending on opcode
+            // && self.stack == other.stack
             && self.memory == other.memory
     }
 }
