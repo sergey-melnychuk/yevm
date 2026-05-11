@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Solenoid: Lessons from Building an Async-First, Wasm-Native EVM in Rust</title>
+  <title>YAEVMI: Lessons from Building an Async-First, Wasm-Native EVM in Rust</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/moon.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/highlight/monokai.css">
@@ -17,6 +17,28 @@
     .slow { color: #e74; }
     .fast { color: #4e4; }
     .dim  { color: #888; }
+
+    /* high-contrast mode (toggle with C) */
+    body.hc { background: #fff; }
+    body.hc .reveal { background: #fff; color: #111; }
+    body.hc .reveal h1, body.hc .reveal h2, body.hc .reveal h3 { color: #000; }
+    body.hc .reveal a { color: #0055cc; }
+    body.hc .reveal .slides section { background: #fff; }
+    body.hc .reveal pre code { background: #f4f4f4; color: #111; }
+    body.hc .reveal .dim { color: #555; }
+    body.hc .reveal .slow { color: #c00; }
+    body.hc .reveal .fast { color: #060; }
+    body.hc .reveal table { color: #111; }
+    /* body.hc .reveal .backgrounds { background: #fff; } */
+
+    #hc-btn {
+      position: fixed; bottom: 12px; left: 12px; z-index: 9999;
+      background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3);
+      color: #fff; font-size: 11px; padding: 3px 8px; border-radius: 4px;
+      cursor: pointer; font-family: monospace; opacity: 0.4;
+    }
+    #hc-btn:hover { opacity: 1; }
+    body.hc #hc-btn { background: rgba(0,0,0,0.1); border-color: rgba(0,0,0,0.3); color: #000; }
   </style>
 </head>
 <body>
@@ -385,48 +407,10 @@ pub fn dispatch&lt;S: State&gt;(
 
   <section class="center">
     <h3>YAEVMI: BALANCE handler</h3>
-    <pre><code class="rust" data-trim data-noescape data-line-numbers>
+    <pre><code class="rust" data-trim data-noescape data-line-numbers="|5-7|2,3">
 pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
     evm.gas_charge(100)?;
     let [acc] = evm.peek()?;
-    let acc: Acc = acc.to();
-    let Some(balance) = state.balance(&acc) else {
-        return Err(EvmYield::Fetch(Fetch::Balance(acc)));
-    };
-    if state.warm_acc(&acc) {
-        evm.gas_charge(2_500)?;
-    }
-    evm.push(balance)?;
-    Ok(())
-}
-    </code></pre>
-  </section>
-
-  <section class="center">
-    <h3>YAEVMI: BALANCE handler</h3>
-    <pre><code class="rust" data-trim data-noescape data-line-numbers="5-7">
-pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
-    evm.gas_charge(100)?;
-    let [acc] = evm.peek()?;
-    let acc: Acc = acc.to();
-    let Some(balance) = state.balance(&acc) else {
-        return Err(EvmYield::Fetch(Fetch::Balance(acc)));
-    };
-    if state.warm_acc(&acc) {
-        evm.gas_charge(2_500)?;
-    }
-    evm.push(balance)?;
-    Ok(())
-}
-    </code></pre>
-  </section>
-
-  <section class="center">
-    <h3>YAEVMI: BALANCE handler</h3>
-    <pre><code class="rust" data-trim data-noescape data-line-numbers="2,3">
-pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
-    evm.gas_charge(100)?;    // state change needs to be reverted on fetch
-    let [acc] = evm.peek()?; // state change needs to be reverted on fetch
     let acc: Acc = acc.to();
     let Some(balance) = state.balance(&acc) else {
         return Err(EvmYield::Fetch(Fetch::Balance(acc)));
@@ -508,7 +492,7 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
 
   <section class="center">
     <h3>YAEVMI: benchmarks</h3>
-    <p>2 random blocks from mainnet</p>
+    <p>3 random blocks from mainnet</p>
     <ul>
       <li>B1: Block 24929490 (373 txs, 32 466 055 gas)</li>
       <li>B2: Block 24929491 (74 txs, 20 653 399 gas)</li>
@@ -524,16 +508,18 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
       </tr>
       <tr><td>MacBook Pro M1</td><td>77</td><td>45</td><td>43</td></tr>
       <tr><td>Intel NUC i7-1260P</td><td>81</td><td>51</td><td>50</td></tr>
-      <tr><td>[some cloud provider]</td><td>130</td><td>81</td><td>80</td></tr>
+      <tr><td>Cloud VM (AMD EPYC)</td><td>130</td><td>81</td><td>80</td></tr>
     </table>
   </section>
 
   <section class="center">
     <h3>YAEVMI in the browser</h3>
     <br>
-    <p>Live demo: simulate a random mainnet transaction</p>
+    <p>Live demo: query USDC balance of vitalik.eth</p>
     <br>
-    <p><a href="https://sergey-melnychuk.github.io/yaevmi/">sergey-melnychuk.github.io/yaevmi</a></p>
+    <p><a href="https://sergey-melnychuk.github.io/yaevmi/?call=eyJmcm9tIjoiMHhkOGRBNkJGMjY5NjRhRjlEN2VFZDllMDNFNTM0MTVEMzdhQTk2MDQ1IiwiZ2FzIjoiMHgxODZhMCIsInZhbHVlIjoiMHgwIiwiaW5wdXQiOiIweDcwYTA4MjMxMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwZDhkQTZCRjI2OTY0YUY5RDdlRWQ5ZTAzRTUzNDE1RDM3YUE5NjA0NSIsInRvIjoiMHhhMGI4Njk5MWM2MjE4YjM2YzFkMTlkNGEyZTllYjBjZTM2MDZlYjQ4In0%3D">yaevmi</a></p>
+    <br>
+    <p><a href="https://etherscan.io/token/0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48?a=0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045#balances">etherscan</a></p>
   </section>
 
   <section class="center">
@@ -547,18 +533,6 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
     <p>ByBit hack: Drain ETH TX (<a href="https://sergey-melnychuk.github.io/yaevmi/?tx=0xb61413c495fdad6114a7aa863a00b2e3c28945979a10885b12b30316ea9f072c">21895251:35</a>)</p>
     <img src="static/tx1y.png" style="max-height: 50vh; max-width: 100%;" />
   </section>
-</section>
-
-<section class="center">
-  <h3>When to choose "simple & async" over "complex & fast"</h3>
-  <ul>
-    <li><strong>Education</strong> — readable vs micro-optimized code</li>
-    <li><strong>Prototyping</strong> — understand the spec deeply</li>
-    <li><strong>Light clients</strong> — correctness over throughput</li>
-    <li><strong>Browser tooling</strong> — wasm is non-negotiable</li>
-  </ul>
-  <br>
-  <p class="dim">For production grade EVM: just use <a href="https://github.com/bluealloy/revm">revm</a> / <a href="https://github.com/paradigmxyz/reth">reth</a>.</p>
 </section>
 
 <section class="center">
@@ -608,11 +582,15 @@ Interesting transactions (EVM edge cases):
 <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/highlight/highlight.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/notes/notes.js"></script>
+<button id="hc-btn" onclick="document.body.classList.toggle('hc')">hc</button>
 <script>
   Reveal.initialize({
     hash: true,
     slideNumber: true,
     plugins: [ RevealHighlight, RevealNotes ]
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'c' && !e.ctrlKey && !e.metaKey) document.body.classList.toggle('hc');
   });
 </script>
 </body>
