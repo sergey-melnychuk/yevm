@@ -201,18 +201,6 @@
     <p class="dim">Simulation could have prevented the <a href="https://bolster.ai/blog/bybit-heist">ByBit</a> <a href="https://trakx.io/resources/news/zero-exposure-to-bybit-hack/">hack</a>!</p>
   </section>
 
-  <section class="center">
-    <h3>Why? - security</h3>
-    <p>ByBit hack: Impl Swap TX (<a href="https://etherscan.io/tx/0x46deef0f52e3a983b67abf4714448a41dd7ffd6d32d32da69d62081c68ad7882">21895238:116</a>)</p>
-    <img src="static/tx0s.png" style="max-height: 50vh; max-width: 100%;" />
-  </section>
-
-  <section class="center">
-    <h3>Why? - security</h3>
-    <p>ByBit hack: Drain ETH TX (<a href="https://etherscan.io/tx/0xb61413c495fdad6114a7aa863a00b2e3c28945979a10885b12b30316ea9f072c">21895251:35</a>)</p>
-    <img src="static/tx1s.png" style="max-height: 50vh; max-width: 100%;" />
-  </section>
-
 </section>
 
 <section class="center">
@@ -243,7 +231,7 @@
       <li>Run the same tx through YAEVMI and revm</li>
       <li>Compare every step: opcode, PC, gas, ...</li>
       <li>Step mismatch → implementations diverge</li>
-      <li>Gas match + Trace match → peace of mind</li>
+      <li>Gas + Trace + State match → peace of mind</li>
     </ul>
   </section>
 
@@ -253,7 +241,7 @@
       <li>Replay real mainnet blocks — 10, then 100, then 300, then 1000</li>
       <li>Each milestone exposed new bugs: EIP-7623, EIP-7702, CREATE2 collision</li>
       <li>Failed txs go into a queue, get fixed, re-replayed</li>
-      <li>1000 consecutive blocks, zero failed transactions — that's the finish line</li>
+      <li>1000 consecutive blocks, zero failed transactions — the finish line</li>
     </ul>
   </section>
 
@@ -515,23 +503,23 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
   <section class="center">
     <h3>YAEVMI in the browser</h3>
     <br>
-    <p>Live demo: query USDC balance of vitalik.eth</p>
+    <p>Live demo: query USDT balance of vitalik.eth</p>
     <br>
-    <p><a href="https://sergey-melnychuk.github.io/yaevmi/?call=eyJmcm9tIjoiMHhkOGRBNkJGMjY5NjRhRjlEN2VFZDllMDNFNTM0MTVEMzdhQTk2MDQ1IiwiZ2FzIjoiMHgxODZhMCIsInZhbHVlIjoiMHgwIiwiaW5wdXQiOiIweDcwYTA4MjMxMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwZDhkQTZCRjI2OTY0YUY5RDdlRWQ5ZTAzRTUzNDE1RDM3YUE5NjA0NSIsInRvIjoiMHhhMGI4Njk5MWM2MjE4YjM2YzFkMTlkNGEyZTllYjBjZTM2MDZlYjQ4In0%3D">yaevmi</a></p>
+    <p><a href="https://sergey-melnychuk.github.io/yaevmi/?call=eyJmcm9tIjoiMHhkOGRBNkJGMjY5NjRhRjlEN2VFZDllMDNFNTM0MTVEMzdhQTk2MDQ1IiwiZ2FzIjoiMHgxODZhMCIsInZhbHVlIjoiMHgwIiwiaW5wdXQiOiIweDcwYTA4MjMxMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwZDhkQTZCRjI2OTY0YUY5RDdlRWQ5ZTAzRTUzNDE1RDM3YUE5NjA0NSIsInRvIjoiMHhkQUMxN0Y5NThEMmVlNTIzYTIyMDYyMDY5OTQ1OTdDMTNEODMxZWM3In0%3D">yaevmi</a></p>
     <br>
-    <p><a href="https://etherscan.io/token/0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48?a=0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045#balances">etherscan</a></p>
+    <p><a href="https://etherscan.io/token/0xdAC17F958D2ee523a2206206994597C13D831ec7?a=0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045#balances">etherscan</a></p>
   </section>
 
   <section class="center">
     <h3>YAEVMI in the browser</h3>
     <p>ByBit hack: Impl Swap TX (<a href="https://sergey-melnychuk.github.io/yaevmi/?tx=0x46deef0f52e3a983b67abf4714448a41dd7ffd6d32d32da69d62081c68ad7882">21895238:116</a>)</p>
-    <img src="static/tx0y.png" style="max-height: 50vh; max-width: 100%;" />
+    <img src="static/tx0.png" style="max-height: 50vh; max-width: 100%;" />
   </section>
 
   <section class="center">
     <h3>YAEVMI in the browser</h3>
     <p>ByBit hack: Drain ETH TX (<a href="https://sergey-melnychuk.github.io/yaevmi/?tx=0xb61413c495fdad6114a7aa863a00b2e3c28945979a10885b12b30316ea9f072c">21895251:35</a>)</p>
-    <img src="static/tx1y.png" style="max-height: 50vh; max-width: 100%;" />
+    <img src="static/tx1.png" style="max-height: 50vh; max-width: 100%;" />
   </section>
 </section>
 
