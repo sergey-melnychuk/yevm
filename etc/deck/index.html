@@ -51,6 +51,11 @@
   <h3>Lessons from Building an<br>Async-First, Wasm-Native EVM in Rust</h3>
   <br>
   <p>Sergey Melnychuk &nbsp;·&nbsp; RustMeet 2026 &nbsp;·&nbsp; Kraków</p>
+  <aside class="notes">
+    Hello everyone, thank you for coming. My name is Sergey and I will be talking about implementing Ethereum VM in Rust.
+
+    The talk was originally titled Solenoid, but Solenoid is now deprecated and archived. Over the last three months I implemented another EVM from scratch in Rust, and it turned out to be a much more interesting topic. Let's dive in.
+  </aside>
 </section>
 
 <section class="center">
@@ -59,6 +64,9 @@
   <p>It's about <strong>Rust</strong> — async, WebAssembly, and implementing a complex spec from scratch.</p>
   <br>
   <p class="dim">No crypto wallet required 🦀</p>
+  <aside class="notes">
+    Quick disclaimer: this talk is not about blockchain. It is about Rust and implementing a complex spec from scratch — covering async and WebAssembly. No crypto wallet required.
+  </aside>
 </section>
 
 <section class="center">
@@ -74,6 +82,9 @@
     <li>Summary</li>
     <li>Q&A</li>
   </ul>
+  <aside class="notes">
+    Here is what we will cover: what, why, and how. We will compare Solenoid to YAEVMI and close with key takeaways.
+  </aside>
 </section>
 
 <section class="center">
@@ -90,6 +101,9 @@
     <li>🛠️ <a href="https://github.com/sergey-melnychuk">https://github.com/sergey-melnychuk</a></li>
     <li>📝 <a href="https://sergey-melnychuk.github.io">https://sergey-melnychuk.github.io</a></li>
   </ul>
+  <aside class="notes">
+    I am based in Warsaw and have been doing software engineering for over sixteen years. I wrote my first line of code in JavaScript 27 years ago — on a piece of paper, because I did not have a computer at home. I started learning Rust in 2018 and got completely fascinated by the performance and ergonomics. If you are at a Rust conference, I suspect you know the feeling.
+  </aside>
 </section>
 
 <section class="center">
@@ -117,6 +131,13 @@
       <td><a href="https://sergey-melnychuk.github.io/yaevmi">Done.</a> It works.</td>
     </tr>
   </table>
+  <aside class="notes">
+    Three projects led from Beerus to YAEVMI with Solenoid as the intermediate stop. Beerus was a StarkNet light client — stateless execution, state pulled from RPC. It is history now.
+
+    Solenoid was my attempt to go as deep into EVM as possible: implementing opcodes, mutating the stack and memory, executing subcalls. It is done, archived. The performance was unsatisfactory, as we will see.
+
+    YAEVMI is yet another EVM implementation from scratch in Rust. It works, it is running live — you can open it in your browser or on your phone and execute Ethereum transactions, querying state slots along the way.
+  </aside>
 </section>
 
 <section class="center">
@@ -129,6 +150,10 @@
     <li>Implementation</li>
   </ul>
   <p>("YAV-mi" /ˈjævmi/)</p>
+  <p class="dim">Naming things is hard.</p>
+  <aside class="notes">
+    YAEVMI: Yet Another Ethereum VM Implementation. Naming things is hard.
+  </aside>
 </section>
 
 <section class="center">
@@ -141,6 +166,11 @@
   </ul>
   <br><br>
   <p class="dim">Why build a new one in 2026?</p>
+  <aside class="notes">
+    Ethereum VM is a simple stack-based VM with flat memory and a 256-bit word size. It is deterministic — same state and same input always produces the same output. State mutations happen in batches: transactions within blocks. The spec lives in the Yellow Paper and EIPs.
+
+    Why build one? Production implementations are world-class but hostile to newcomers, and none of them — to my knowledge — compile cleanly to Wasm without patching. I wanted something that runs in a browser and shows what is happening under the hood.
+  </aside>
 </section>
 
 <section class="center">
@@ -152,6 +182,9 @@
       <li>Target: <strong>browser-based tooling</strong> — IDEs, light clients, simulations</li>
       <li>Goal: deep understanding of how EVM works "under the hood"</li>
     </ul>
+    <aside class="notes">
+      Multiple reasons to build a new one. Production EVMs are hyper-optimized and hard to get into. No clean Wasm-native async-friendly implementation existed. Target: browser-based tooling. Goal: deep understanding of what happens under the hood.
+    </aside>
   </section>
 
   <section class="center">
@@ -167,6 +200,9 @@
         <li>light clients</li>
       </ul>
     </ul>
+    <aside class="notes">
+      WebAssembly is the straightforward path to browser interoperability. Same code runs natively and in the browser. It opens up integration with wallets, IDEs, and light clients.
+    </aside>
   </section>
 
   <section class="center">
@@ -177,6 +213,9 @@
       <li>Sync EVM will fail to run in the browser (blocking the main thread)</li>
       <li>Async-first design makes the browser a first-class target</li>
     </ul>
+    <aside class="notes">
+      Real-world programs do IO. In a browser context, blocking the main thread is simply not allowed. Async-first and Wasm-friendly are essentially the same requirement looked at from two angles.
+    </aside>
   </section>
 
   <section class="center">
@@ -187,6 +226,11 @@
       <li>Useful for: debugging, education, security auditing, simulation UI</li>
       <li>Though full traces might be too much data to handle in browser effectively</li>
     </ul>
+    <aside class="notes">
+      I wanted to turn EVM from a black box into a glass box — fully observable end-to-end. But observability is on-demand: opcode-level traces are far too much for most use cases. YAEVMI captures and emits them only when asked.
+
+      This is useful for dev tooling, debugging, education, transaction simulation, and security.
+    </aside>
   </section>
 
   <section class="center">
@@ -199,6 +243,11 @@
     </ul>
     <br>
     <p class="dim">Simulation could have prevented the <a href="https://bolster.ai/blog/bybit-heist">ByBit</a> <a href="https://trakx.io/resources/news/zero-exposure-to-bybit-hack/">hack</a>!</p>
+    <aside class="notes">
+      The ByBit hack illustrates the problem: even with multisig, no signer could see what they were actually signing — inputs, not side effects. A simulation tool could fix that. I will be modest and say simulation could have prevented the ByBit hack, rather than YAEVMI specifically.
+
+      We will see those transactions in the live demo.
+    </aside>
   </section>
 
 </section>
@@ -211,6 +260,9 @@
       <li>⚖️ A/B — compare step-by-step against revm</li>
       <li>🔁 Trial &amp; error — run real mainnet blocks, fix what breaks</li>
     </ul>
+    <aside class="notes">
+      Three pillars: implement the spec faithfully, A/B test against revm, and run real mainnet blocks until nothing breaks.
+    </aside>
   </section>
 
   <section class="center">
@@ -222,6 +274,13 @@
       <li>Ethereum GeneralStateTests: ~7000 test cases across all opcodes and EIPs</li>
       <li>Getting to 99%+ took fixing ~10 subtle bugs — each one a spec rabbit hole</li>
     </ul>
+    <aside class="notes">
+      The starting point is a fine-grained spec covering all state transitions and opcodes. I started with the spec and ran A/B tests against revm. If gas accounting and opcode-level traces match on every step, the implementation is correct.
+
+      Yellow Paper plus EIPs. The tricky part is EIPs layering on top of each other — hunting a bug where one EIP caps gas differently and the numbers just do not match.
+
+      For correctness, there is the Ethereum general state test suite: thousands of test cases. I reached 99.6% pass rate. The remaining discrepancies were because the suite targets Cancun fork, and there have since been two more forks: Prague and Osaka. It works against mainnet — that is what matters.
+    </aside>
   </section>
 
   <section class="center">
@@ -233,6 +292,11 @@
       <li>Step mismatch → implementations diverge</li>
       <li>Gas + Trace + State match → peace of mind</li>
     </ul>
+    <aside class="notes">
+      Any mismatch gets investigated. The most common case: a revert not applied correctly, causing a wrong jump condition downstream. When gas accounting and opcode traces match at every step, I call it peace of mind.
+
+      I reached 1000 consecutive blocks with 100% match against on-chain receipts. That is when I decided it was time to give a talk.
+    </aside>
   </section>
 
   <section class="center">
@@ -243,6 +307,11 @@
       <li>Failed txs go into a queue, get fixed, re-replayed</li>
       <li>1000 consecutive blocks, zero failed transactions — the finish line</li>
     </ul>
+    <aside class="notes">
+      The hardest bugs came from gas accounting. One bug could take days; the fix was a single line. The subcall gas rule is where I spent the most time. If I see a gas discrepancy of 39, I know it is a subcall.
+
+      Beyond gas, revert was the other tricky one. You only know at the end of subcall execution whether it succeeds, it can fail any moment, and if it does, you need to undo all sub-call side effects precisely. The spec is not hard — it is the accumulated complexity of years of overlapping changes.
+    </aside>
   </section>
 
   <section class="center">
@@ -257,12 +326,18 @@
       <li>🤔 revert impl was tricky to debug</li>
       <li>...</li>
     </ul>
+    <aside class="notes">
+      Each bullet here cost me at least a day. And those ones are the ones I remember, there are many more.
+    </aside>
   </section>
 
   <section class="center">
     <h3>How? - ...</h3>
     <p>Designing and evolving such complex thing is hard</p>
     <img src="static/spec.png" style="max-height: 50vh; max-width: 100%;" />
+    <aside class="notes">
+      This is a small excerpt from the Yellow Paper. It is dense, it is occasionally wrong, and the EIPs layer on top of it. Following the spec is the only way through.
+    </aside>
   </section>
 </section>
 
@@ -288,6 +363,9 @@
       }
   }
     </code></pre>
+    <aside class="notes">
+      Solenoid's design is simple: everything is async. Need to look up a state slot? Do it inside the opcode handler. Straightforward — but the async overhead adds up.
+    </aside>
   </section>
 
   <section class="center">
@@ -304,6 +382,11 @@
       <li>User doesn't notice 10ms vs 100ms</li>
       <li>Wasm portability is worth the tax</li>
     </ul>
+    <aside class="notes">
+      revm executes a transaction in roughly 3 ms. Solenoid took 300 ms. Two orders of magnitude for the same business logic.
+
+      From a user perspective in the browser, 3 ms versus 300 ms is not visible. But it is surprising and unacceptable for essentially identical logic.
+    </aside>
   </section>
 
   <section class="center">
@@ -323,6 +406,11 @@
       <li>🤖 All precompiles implemented by Claude Code</li>
       <li>📊 Aztec L2 4.5M gas txs: <strong>55GB</strong> of opcode traces</li>
     </ul>
+    <aside class="notes">
+      The first external call I tested was Uniswap V3 QuoterV2 — a rather sophisticated call, making it work was a big milestone. All precompiles were implemented by Claude Code, end-to-end with tests. A perfect use case for LLMs: strict spec, clearly defined interface, well-specified outcomes.
+
+      In December I noticed Aztec launched their L2 because my local simulations started running out of disk space: 4.5M gas transactions generating 55 GB of opcode traces per transaction — 110 GB total when comparing two EVMs side by side. That is why traces are opt-in.
+    </aside>
   </section>
 
   <section class="center">
@@ -334,6 +422,11 @@
       <li>Async in hot paths is still very expensive</li>
       <li>Key insight: the VM yields at every <code>.await</code> — what if it didn't?</li>
     </ul>
+    <aside class="notes">
+      Gas accounting is the hardest part end-to-end. Debug output in a hot loop gets expensive fast — allocator round-trips add up. Async in hot paths needs to be avoided.
+
+      That got me thinking: what if instead of the runtime managing yields, I make yield part of the domain model?
+    </aside>
   </section>
 </section>
 
@@ -350,6 +443,11 @@
         <li>but deals with "pending" side-effects</li>
       </ul>
     </ul>
+    <aside class="notes">
+      In YAEVMI, a yield is a situation where the EVM lacks data. It returns and expects the caller to resolve it. Execution and data fetching are fully decoupled. Handlers are sync — no awaits. The executor is async because it needs to fetch state.
+
+      This introduces pending side effects, which need careful management. One complexity traded for another — but worth it, as the benchmarks will show.
+    </aside>
   </section>
 
   <section class="center">
@@ -371,7 +469,11 @@ pub enum EvmYield {
 
 pub type EvmResult&lt;T&gt; = std::result::Result&lt;T, EvmYield&gt;
     </code></pre>
+    <aside class="notes">
+      The Result type is T or Yield. The error variant is a yield, not an error. Idiomatic Rust Result, repurposed as Either.
+    </aside>
   </section>
+
   <section class="center">
     <h3>YAEVMI: dispatch</h3>
     <pre><code class="rust" data-trim data-noescape data-line-numbers>
@@ -391,6 +493,9 @@ pub fn dispatch&lt;S: State&gt;(
     }
 }
     </code></pre>
+    <aside class="notes">
+      Dispatch is a match on opcode, each routing to its sync handler. Simple and fast.
+    </aside>
   </section>
 
   <section class="center">
@@ -410,6 +515,9 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
     Ok(())
 }
     </code></pre>
+    <aside class="notes">
+      The BALANCE handler shows the pattern clearly: if no balance for the account, yield. When retried after the fetch resolves, pending state changes are reverted and reapplied cleanly.
+    </aside>
   </section>
 
   <section class="center">
@@ -420,6 +528,9 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
       <li>applies them on success</li>
       <li>reverts them on fetch</li>
     </ul>
+    <aside class="notes">
+      One complexity traded for another — but worth it. The handler manages its own pending changes: apply on success, revert on yield, retry after fetch.
+    </aside>
   </section>
 <!--
   <section class="center">
@@ -439,6 +550,9 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
       <li>Same observable design, zero memory blowup</li>
       <li>Verified for 5M+ gas transactions with 100k+ steps</li>
     </ul>
+    <aside class="notes">
+      Instead of buffering all traces in memory, YAEVMI streams them out. If you do not subscribe, they are not even captured. Zero memory pressure, zero cost when you do not need them.
+    </aside>
   </section>
 
   <section class="center">
@@ -449,6 +563,9 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
       <li>Needs explicit yields to reduce memory pressure</li>
       <li>🤔</li>
     </ul>
+    <aside class="notes">
+      The challenge: streaming needs to work both natively and in the browser, non-blocking, without sync primitives.
+    </aside>
   </section>
 
   <section class="center">
@@ -458,6 +575,9 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
       <li>See <a href="https://github.com/sergey-melnychuk/sieve">sieve</a> for more details</li>
       <img src="static/sieve.gif" style="max-height: 50vh; max-width: 100%;" />
     </ul>
+    <aside class="notes">
+      The answer is futures::channel::mpsc — a non-blocking channel that works both natively and in the browser. The sieve demo shows it in action. Fifty lines of code.
+    </aside>
   </section>
 </section>
 
@@ -476,6 +596,9 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
         <li>minor code tweaks were still necessary</li>
       </ul>
     </ul>
+    <aside class="notes">
+      99%+ of general state tests passed for Cancun fork. Over 1000 blocks replayed without a single failed transaction. Performance is comparable to production-grade implementations. Wasm is seamlessly supported with minor tweaks for no-std: mostly around time and randomness.
+    </aside>
   </section>
 
   <section class="center">
@@ -498,6 +621,9 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
       <tr><td>Intel NUC i7-1260P</td><td>81</td><td>51</td><td>50</td></tr>
       <tr><td>Cloud VM (AMD EPYC)</td><td>130</td><td>81</td><td>80</td></tr>
     </table>
+    <aside class="notes">
+      Three random mainnet blocks, all state local — no network fetches. Block 1: 373 transactions in 77 ms on a MacBook Pro M1. The numbers are consistent across machines. B2 has fewer but heavier transactions — similar total time.
+    </aside>
   </section>
 
   <section class="center">
@@ -508,18 +634,31 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
     <p><a href="https://sergey-melnychuk.github.io/yaevmi/?call=eyJmcm9tIjoiMHhkOGRBNkJGMjY5NjRhRjlEN2VFZDllMDNFNTM0MTVEMzdhQTk2MDQ1IiwiZ2FzIjoiMHgxODZhMCIsInZhbHVlIjoiMHgwIiwiaW5wdXQiOiIweDcwYTA4MjMxMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwZDhkQTZCRjI2OTY0YUY5RDdlRWQ5ZTAzRTUzNDE1RDM3YUE5NjA0NSIsInRvIjoiMHhkQUMxN0Y5NThEMmVlNTIzYTIyMDYyMDY5OTQ1OTdDMTNEODMxZWM3In0%3D">yaevmi</a></p>
     <br>
     <p><a href="https://etherscan.io/token/0xdAC17F958D2ee523a2206206994597C13D831ec7?a=0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045#balances">etherscan</a></p>
+    <aside class="notes">
+      Here is YAEVMI running in the browser. This call queries the USDT balance of vitalik.eth against the live Ethereum state. [click yaevmi link]
+
+      The EVM executes the balanceOf call against the USDT contract — and here is the result. Let's confirm on Etherscan. [click etherscan link]
+
+      Same number. The EVM running in your browser just queried live Ethereum state.
+    </aside>
   </section>
 
   <section class="center">
     <h3>YAEVMI in the browser</h3>
     <p>ByBit hack: Impl Swap TX (<a href="https://sergey-melnychuk.github.io/yaevmi/?tx=0x46deef0f52e3a983b67abf4714448a41dd7ffd6d32d32da69d62081c68ad7882">21895238:116</a>)</p>
     <img src="static/tx0.png" style="max-height: 50vh; max-width: 100%;" />
+    <aside class="notes">
+      Now the ByBit hack. First transaction: the implementation swap. Three ecRecover calls — three signatures — then a delegatecall that substitutes the proxy destination address. Slot zero gets overwritten. Plain to see in the trace.
+    </aside>
   </section>
 
   <section class="center">
     <h3>YAEVMI in the browser</h3>
     <p>ByBit hack: Drain ETH TX (<a href="https://sergey-melnychuk.github.io/yaevmi/?tx=0xb61413c495fdad6114a7aa863a00b2e3c28945979a10885b12b30316ea9f072c">21895251:35</a>)</p>
     <img src="static/tx1.png" style="max-height: 50vh; max-width: 100%;" />
+    <aside class="notes">
+      Second transaction: the drain. sweepETH is called. 400,000 ETH lands in the attacker's wallet. Exchange drained. This could have been prevented if signers were shown side effects, not intents.
+    </aside>
   </section>
 </section>
 
@@ -539,31 +678,48 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
     <li><a href="https://github.com/sergey-melnychuk/yaevmi">https://github.com/sergey-melnychuk/yaevmi</a></li>
     <li><a href="https://sergey-melnychuk.github.io/2026/03/07/evm-reentrancy/">Solenoid: EVM Reentrancy Attack Simulation</a></li>
   </ul>
+  <aside class="notes">
+    Async and Wasm is a valid architectural choice in Rust.
+    The async tax is real — manage it or it will manage you.
+    Follow the spec if you have one and it is good.
+    A/B testing against revm was absolutely worth it.
+
+    Links are in the deck. Questions?
+  </aside>
 </section>
 
 <section class="center">
   <section class="center">
     <h2>Q&A</h2>
-    <br>
+    <!-- 
+      brew install qrencode
+      qrencode -t SVG -o static/qr.svg 'https://sergey-melnychuk.github.io/yaevmi/deck'
+     -->
+    <img src="static/qr.svg" style="width: 40vh; height: 40vh;" />
     <p class="dim">Thank you!</p>
+    <aside class="notes">
+      Thank you. Questions?
+    </aside>
   </section>
-  <!-- 
+  <!--
   <section class="center">
-    <h3>Q:</h2>
-    <p></p>
-    <h3>A:</h2>
-    <p></p>
+    <p>Q:</p>
+    <br>
+    <p>A:</p>
   </section>
   -->
 </section>
 
-<!---
-Interesting transactions (EVM edge cases):
-- CREATE2 collision: 24984846:70 https://etherscan.io/tx/0x5160e194d799d854b358f9c7692c56e0531f3abe1e1f52fb36dd95b35d37ae28
-- SELFDESTRUCT call: 24985022:92 https://etherscan.io/tx/0x8df37a0246d1cd6c0673082d180c029d000900c93880a755e57de2df6ebd9dce
-- Fails in block, OK in tx: 25000000:11 https://etherscan.io/tx/0x931a9431783998415cf4808ce25fc3561ab0cd406af53c9aa334798737008c60
-- OOG + revert: 25034891:124 https://etherscan.io/tx/0xaa1f07fb1aadd7b0372987c31315a048e47fa2a7aa7068f665c17f264b60285a
--->
+<section class="center">
+  <h3>Extra</h3>
+  <p>EVM edge cases:</p>
+  <ul>
+    <li><a href="https://sergey-melnychuk.github.io/yaevmi/?tx=0x5160e194d799d854b358f9c7692c56e0531f3abe1e1f52fb36dd95b35d37ae28">CREATE2 collision</a></li>
+    <li><a href="https://sergey-melnychuk.github.io/yaevmi/?tx=0x8df37a0246d1cd6c0673082d180c029d000900c93880a755e57de2df6ebd9dce">SELFDESTRUCT</a></li>
+    <li><a href="https://sergey-melnychuk.github.io/yaevmi/?tx=0x931a9431783998415cf4808ce25fc3561ab0cd406af53c9aa334798737008c60">block vs single</a></li>
+    <li><a href="https://sergey-melnychuk.github.io/yaevmi/?tx=0xaa1f07fb1aadd7b0372987c31315a048e47fa2a7aa7068f665c17f264b60285a">OOG & revert</a></li>
+  </ul>
+</section>
 
 </div>
 </div>
