@@ -1191,7 +1191,7 @@ class ResultCard {
 
     this.grid.innerHTML = `
       ${_stat('Events', steps.toLocaleString())}
-      ${_stat('Time',   _fmtMs(ms))}
+      ${_stat('Time <span title="EVM execution time only — excludes network round-trips to fetch state" style="cursor:help;font-size:1em;opacity:0.8">ⓘ</span>', _fmtMs(ms))}
       ${_stat('Gas',    _fmtNum(yGas), gasOk ? 'ok' : 'fail')}
       ${_stat('Status', stOk ? 'OK' : 'FAIL', stOk ? 'ok' : 'fail')}
     `;
