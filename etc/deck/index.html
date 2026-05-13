@@ -564,13 +564,31 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
   <section class="center">
     <h3>YAEVMI: streaming</h3>
     <ul>
-      <li><code>futures::channel::mpsc</code> FTW!</li>
+      <li>Problem solved: <code>futures::channel::mpsc</code></li>
       <li>Needs explicit yields to reduce memory pressure</li>
       <li>See <a href="https://github.com/sergey-melnychuk/sieve">sieve</a> for more details</li>
     </ul>
     <img src="static/sieve.gif" style="max-height: 50vh; max-width: 100%;" />
     <aside class="notes">
       The answer is futures::channel::mpsc — a non-blocking channel that works both natively and in the browser. The sieve demo shows it in action. Check it out on GitHub if you are curious.
+    </aside>
+  </section>
+
+  <section class="center">
+    <h3>YAEVMI: streaming</h3>
+    <!-- TX:0x13e5261de634e59cc3f61254009db5d187f3f1642b29e1c31b4fc4d7105b5c5e -->
+    <img src="static/sim11k.png" style="max-height: 50vh; max-width: 100%;" />
+    <aside class="notes">
+      Transaction with around 11000 steps is executed with sub-second latency, not really a challenge for the streaming pipeline.
+    </aside>
+  </section>
+
+    <section class="center">
+    <h3>YAEVMI: streaming</h3>
+    <!-- TX:0x2264e99de2d4e4ffac4f197b55129216ec58860f11add0bd448949de2fcfce2a -->
+    <img src="static/sim1M.png" style="max-height: 50vh; max-width: 100%;" />
+    <aside class="notes">
+      Big transaction with 17 dollars gas fee that is having more than 7 million gas and close to million steps, it takes almost a minute to complete, but still does not make the page unresponsive and browser does not complain nor runs out of memory. Streaming approach works well here.
     </aside>
   </section>
 </section>
@@ -616,18 +634,20 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
       <tr><td>Cloud VM (AMD EPYC)</td><td>130</td><td>81</td><td>80</td></tr>
     </table>
     <aside class="notes">
-      Three random mainnet blocks. Block 1 with 373 transactions completes in 77 ms on a laptop. The numbers are consistent across machines. This is the result with debug info collection disabled and all the state local — no network fetches, no significant performance optimizations performed beyound very obvious ones. Solid numbers, with no significant optimizations applied — plenty of headroom.
+      Three random mainnet blocks. Block 1 with 373 transactions completes in 77 ms on a laptop. The numbers are consistent across machines. This is the result with debug info collection disabled and all the state local — no network fetches, no significant performance optimizations performed beyond very obvious ones. Solid numbers, plenty of headroom.
     </aside>
   </section>
 
   <section class="center">
     <h3>YAEVMI in the browser</h3>
-    <br>
-    <p>Live demo: query USDT balance of vitalik.eth</p>
-    <br>
+    <p>Live demo: check vitalik.eth USDT balance</p>
+
     <p><a href="https://sergey-melnychuk.github.io/yaevmi/?call=eyJmcm9tIjoiMHhkOGRBNkJGMjY5NjRhRjlEN2VFZDllMDNFNTM0MTVEMzdhQTk2MDQ1IiwiZ2FzIjoiMHgxODZhMCIsInZhbHVlIjoiMHgwIiwiaW5wdXQiOiIweDcwYTA4MjMxMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwZDhkQTZCRjI2OTY0YUY5RDdlRWQ5ZTAzRTUzNDE1RDM3YUE5NjA0NSIsInRvIjoiMHhkQUMxN0Y5NThEMmVlNTIzYTIyMDYyMDY5OTQ1OTdDMTNEODMxZWM3In0%3D">yaevmi</a></p>
-    <br>
+    <img src="static/usdt1.png" style="width: 100%; max-width: 500px; border-radius: 10px; margin: 20px auto;" />
+
     <p><a href="https://etherscan.io/token/0xdAC17F958D2ee523a2206206994597C13D831ec7?a=0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045#balances">etherscan</a></p>
+    <img src="static/usdt2.png" style="width: 100%; max-width: 500px; border-radius: 10px; margin: 20px auto;" />
+
     <aside class="notes">
       Here is YAEVMI running in the browser. This call queries the USDT balance of vitalik.eth against the live Ethereum state.
 
@@ -685,7 +705,7 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
     <h2>Q&A</h2>
     <!-- 
       brew install qrencode
-      qrencode -t SVG -o static/qr.svg 'https://sergey-melnychuk.github.io/yaevmi/deck'
+      qrencode -t SVG -o static/qr.svg 'https://sergey-melnychuk.github.io/yaevmi'
      -->
     <img src="static/qr.svg" style="width: 40vh; height: 40vh;" />
     <p class="dim">Thank you!</p>
@@ -703,6 +723,7 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
   -->
 </section>
 
+<!--
 <section class="center">
   <h3>Extra</h3>
   <p>EVM edge cases:</p>
@@ -713,6 +734,7 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
     <li><a href="https://sergey-melnychuk.github.io/yaevmi/?tx=0xaa1f07fb1aadd7b0372987c31315a048e47fa2a7aa7068f665c17f264b60285a">OOG & revert</a></li>
   </ul>
 </section>
+ -->
 
 </div>
 </div>
