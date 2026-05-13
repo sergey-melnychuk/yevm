@@ -494,7 +494,7 @@ pub fn dispatch&lt;S: State&gt;(
 
   <section class="center">
     <h3>YAEVMI: BALANCE handler</h3>
-    <pre><code class="rust" data-trim data-noescape data-line-numbers="|5-7|2,3">
+    <pre><code class="rust" data-trim data-noescape data-line-numbers="2-3,5-7">
 pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
     evm.gas_charge(100)?;
     let [acc] = evm.peek()?;
