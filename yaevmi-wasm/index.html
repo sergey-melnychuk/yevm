@@ -811,7 +811,7 @@
 </footer>
 
 <script type="module">
-import init, { pick, run, run_with_block, simulate } from './pkg/yaevmi_wasm.js';
+import init, { pick, empty, run, run_with_block, simulate } from './pkg/yaevmi_wasm.js';
 await init();
 
 /* ── Filter constants (mirror trace::filter) ──────────────── */
@@ -1750,12 +1750,14 @@ class App {
     this.inpTxn      = document.getElementById('txn-inp');
 
     this.running = false;
+    this._fetches = empty();
   }
 
   init() {
     this.btnRun.onclick      = () => this._run();
     this.btnEndpoint.onclick = () => this.modal.show();
     this.btnRnd.onclick      = () => this._random().then(() => this._run());
+    this.chkBlock.onchange   = () => { this._fetches = empty(); };
     this.btnCall.onclick     = () => this.callModal.show();
 
     const params    = new URLSearchParams(location.search);
@@ -1800,6 +1802,7 @@ class App {
     this.btnEndpoint.disabled = true;
     this.btnCall.disabled     = true;
     this.chkBlock.disabled    = true;
+    this._fetches = empty();
     try {
       const tx = await pick(url);
       this.inpTxn.value = tx;
@@ -1833,14 +1836,16 @@ class App {
     try {
       const withBlock = document.getElementById('chk-block').checked;
       let stream;
+      const t0 = performance.now();
       if (withBlock) {
-        stream = await run_with_block(url, txn, F.TOP,
+        stream = await run_with_block(url, txn, F.TOP, this._fetches,
           (i, total) => this.status.progress(i, total));
         this.status.show('Running…');
       } else {
-        stream = await run(url, txn, F.TOP);
+        stream = await run(url, txn, F.TOP, this._fetches);
       }
-      await this._consume(stream);
+      this._fetches = stream.fetches();
+      await this._consume(stream, t0);
     } catch (e) {
       console.error(e);
       this.status.hide();
@@ -1875,11 +1880,10 @@ class App {
     }
   }
 
-  async _consume(stream) {
+  async _consume(stream, t0 = performance.now()) {
     const counts = {};
     let steps = 0;
     const UPDATE_INTERVAL = 200;
-    const t0 = performance.now();
     let lastUpdate = t0;
     let trace;
 

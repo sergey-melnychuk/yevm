@@ -8,15 +8,11 @@ mod wasm {
     use yaevmi_base::int;
     use yaevmi_core::Int;
     use yaevmi_core::cache::Cache;
-    use yaevmi_core::chain::Chain;
+    use yaevmi_core::chain::{Chain, Fetched};
     use yaevmi_core::exe::{CallResult, Executor};
     use yaevmi_core::state::State;
     use yaevmi_core::trace::Trace;
-    use yaevmi_core::{
-        Call, Head, Tx,
-        call::{TxCall, TxFull},
-        rpc::Rpc,
-    };
+    use yaevmi_core::{Call, Tx, call::TxCall, rpc::Rpc};
 
     #[derive(Debug, thiserror::Error)]
     #[error("{0}")]
@@ -41,6 +37,14 @@ mod wasm {
     }
 
     #[wasm_bindgen]
+    pub struct FetchCache(Vec<Fetched>);
+
+    #[wasm_bindgen]
+    pub fn empty() -> FetchCache {
+        FetchCache(vec![])
+    }
+
+    #[wasm_bindgen]
     pub fn hello(name: JsString) -> JsString {
         JsString::from(format!("Hello, {name}").as_str())
     }
@@ -59,6 +63,7 @@ mod wasm {
         yevm_gas: Int,
         rcpt_status: Int,
         yevm_status: Int,
+        fetches: Vec<Fetched>,
     }
 
     #[wasm_bindgen]
@@ -75,6 +80,10 @@ mod wasm {
             };
             release().await;
             result
+        }
+
+        pub fn fetches(&mut self) -> FetchCache {
+            FetchCache(std::mem::take(&mut self.fetches))
         }
 
         pub fn check(&self) -> JsString {
@@ -120,7 +129,12 @@ mod wasm {
     }
 
     #[wasm_bindgen]
-    pub async fn run(url: JsString, txn: JsString, event_filter: u32) -> Result<Stream, Error> {
+    pub async fn run(
+        url: JsString,
+        txn: JsString,
+        event_filter: u32,
+        fetches: FetchCache,
+    ) -> Result<Stream, Error> {
         let mut rpc = Rpc::latest(url.into()).await?;
         let chain_id = rpc.chain_id().await?;
         let txn: String = txn.into();
@@ -138,11 +152,11 @@ mod wasm {
             return Err(eyre!("invalid tx selector").into());
         };
 
-        let (call, tx, head): (Call, Tx, Head) = {
+        let (call, tx, head, block_data) = {
             let block = rpc.block(block).await?;
             let tx = &block.txs[index];
             let call = tx.call.clone().into();
-            (call, tx.tx.clone(), block.head)
+            (call, tx.tx.clone(), block.head.clone(), block)
         };
         let hash = tx.hash;
         rpc.reset(head.number.as_u64() - 1, head.parent_hash);
@@ -150,6 +164,14 @@ mod wasm {
         let (ytx, yrx) = mpsc::channel(1024 * 1024);
         let mut cache = Cache::with_sender(ytx, event_filter);
         cache.set_chain_id(chain_id);
+
+        let FetchCache(fetched) = fetches;
+        if fetched.len() > 0 {
+            cache.prefetched(fetched);
+        } else {
+            cache.fetched.push(Fetched::ChainId(chain_id));
+            cache.fetched.push(Fetched::Block(block_data));
+        }
 
         let mut exe = Executor::new(call);
         let result = exe.run(tx, head, &mut cache, &rpc).await?;
@@ -179,6 +201,7 @@ mod wasm {
             yevm_gas,
             rcpt_status,
             yevm_status,
+            fetches: cache.fetched,
         })
     }
 
@@ -187,6 +210,7 @@ mod wasm {
         url: JsString,
         txn: JsString,
         event_filter: u32,
+        fetches: FetchCache,
         on_progress: Function,
     ) -> Result<Stream, Error> {
         let mut rpc = Rpc::latest(url.into()).await?;
@@ -207,11 +231,17 @@ mod wasm {
             return Err(eyre!("invalid tx selector").into());
         };
 
-        let (call, tx, head, prior_txs): (Call, _, _, Vec<TxFull>) = {
+        let (call, tx, head, prior_txs, block_data) = {
             let b = rpc.block(block).await?;
             let full = &b.txs[index];
             let prior = b.txs[..index].to_vec();
-            (full.call.clone().into(), full.tx.clone(), b.head, prior)
+            (
+                full.call.clone().into(),
+                full.tx.clone(),
+                b.head.clone(),
+                prior,
+                b,
+            )
         };
         let hash = tx.hash;
         rpc.reset(head.number.as_u64() - 1, head.parent_hash);
@@ -219,6 +249,15 @@ mod wasm {
         // Pre-execute prior txs: no tracing (filter=0, no sender), state accumulates.
         let mut cache = Cache::new();
         cache.set_chain_id(chain_id);
+
+        let FetchCache(fetched) = fetches;
+        if fetched.len() > 0 {
+            cache.prefetched(fetched);
+        } else {
+            cache.fetched.push(Fetched::ChainId(chain_id));
+            cache.fetched.push(Fetched::Block(block_data));
+        }
+
         let total = prior_txs.len();
         for (i, prior) in prior_txs.into_iter().enumerate() {
             let prior_call: Call = prior.call.into();
@@ -263,6 +302,7 @@ mod wasm {
             yevm_gas,
             rcpt_status,
             yevm_status,
+            fetches: cache.fetched,
         })
     }
 
@@ -321,6 +361,7 @@ mod wasm {
             yevm_gas,
             rcpt_status: yevm_status,
             yevm_status,
+            fetches: cache.fetched,
         })
     }
 
