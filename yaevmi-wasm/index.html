@@ -663,6 +663,48 @@
       margin: 6px 0;
     }
 
+    /* ── Analysis card ────────────────────────────── */
+    #analysis-card { display: none; }
+    #analysis-card.visible { display: block; }
+
+    .an-section { margin-bottom: 14px; }
+    .an-section:last-child { margin-bottom: 0; }
+    .an-section-title {
+      font-size: 0.68em;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 6px;
+    }
+    .an-row {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      padding: 9px 12px;
+      border-radius: var(--radius-sm);
+      font-family: var(--mono);
+      font-size: 0.78em;
+      margin-bottom: 4px;
+    }
+    .an-row.warn    { background: rgba(248,113,113,0.08); border: 1px solid rgba(248,113,113,0.3); }
+    .an-row.caution { background: rgba(251,191,36,0.07);  border: 1px solid rgba(251,191,36,0.25); }
+    .an-row.neutral { background: rgba(0,0,0,0.2);        border: 1px solid var(--border); }
+    .an-label {
+      font-size: 0.72em;
+      font-weight: 700;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+    .an-label.red  { color: var(--bad); }
+    .an-label.yel  { color: var(--warn); }
+    .an-label.dim  { color: var(--text-dim); }
+    .an-addr  { color: var(--text-dim); }
+    .an-val   { color: var(--text-b); }
+    .an-val.new { color: var(--bad); }
+    .an-pos   { color: var(--good); }
+    .an-neg   { color: var(--bad); }
+
     /* ── Footer ────────────────────────────────────── */
     footer {
       position: fixed;
@@ -799,6 +841,12 @@
     <div class="result-grid" id="result-grid"></div>
   </div>
 
+  <!-- Side-effect analysis -->
+  <div class="card" id="analysis-card">
+    <div class="card-title">Side Effects</div>
+    <div id="analysis-content"></div>
+  </div>
+
   <!-- Opcode frequency -->
   <div class="card" id="ops-card">
     <div class="card-title">Opcodes <span id="ops-steps"></span></div>
@@ -833,6 +881,10 @@ const F = {
 };
 F.TOP        = F.CALL | F.RETURN | F.REVERT | F.HALT | F.CREATE | F.DELETE | F.LOG | F.FEE | F.GET | F.PUT | F.HASH | F.CODE;
 F.ALL        = 0xFFFFFFFF;
+
+/* ── ERC-20 log topics ─────────────────────────────────────── */
+const TOPIC_TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+const TOPIC_APPROVAL = '0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925';
 
 /* ── Known addresses ───────────────────────────────────────── */
 const KNOWN_ADDRS = {
@@ -1740,6 +1792,7 @@ class App {
     this.errCard  = new ErrorCard();
     this.result   = new ResultCard();
     this.evLog    = new EventsLog();
+    this.analysis = new AnalysisCard();
     this.ops      = new OpsCard();
 
     this.btnRun      = document.getElementById('btn-run');
@@ -1749,8 +1802,9 @@ class App {
     this.chkBlock    = document.getElementById('chk-block');
     this.inpTxn      = document.getElementById('txn-inp');
 
-    this.running = false;
+    this.running  = false;
     this._fetches = empty();
+    this._lastTxn = null;
   }
 
   init() {
@@ -1824,11 +1878,13 @@ class App {
     const url = this.modal.url;
     const txn = this.inpTxn.value.trim();
     if (!url || !txn) return;
+    if (txn !== this._lastTxn) { this._fetches = empty(); this._lastTxn = txn; }
 
     this._setRunning(true);
     this.errCard.hide();
     this.result.hide();
     this.evLog.hide();
+    this.analysis.hide();
     this.ops.hide();
     this.status.show('Running…');
     history.replaceState(null, '', `?tx=${encodeURIComponent(txn)}`);
@@ -1864,6 +1920,7 @@ class App {
     this.errCard.hide();
     this.result.hide();
     this.evLog.hide();
+    this.analysis.hide();
     this.ops.hide();
     this.status.show('Simulating…');
     history.replaceState(null, '', `?call=${encodeURIComponent(btoa(JSON.stringify(callJson)))}`);
@@ -1909,12 +1966,326 @@ class App {
     this.status.hide();
     this.result.show(stream.check(), this.evLog._rows.length, ms);
     this.evLog.flush();
+    this.analysis.show(analyse(this.evLog._rows));
     if (steps > 0) this.ops.show(counts, steps);
   }
 
   _showError(e) {
     this.errCard.show(e?.message ?? String(e));
   }
+}
+
+/* ── analyse(rows) ─────────────────────────────────────────── */
+function _isSlot0(key) {
+  try { return BigInt(key) === 0n; } catch { return false; }
+}
+
+function _slotToAddr(val) {
+  const h = typeof val === 'string' && val.startsWith('0x') ? val.slice(2) : String(val);
+  return '0x' + h.slice(-40).toLowerCase();
+}
+
+function _topicToAddr(topic) {
+  const h = typeof topic === 'string' && topic.startsWith('0x') ? topic.slice(2) : String(topic);
+  return '0x' + h.slice(-40).toLowerCase();
+}
+
+function _fmtDelta(delta) {
+  const abs = delta < 0n ? -delta : delta;
+  return _fmtValue('0x' + abs.toString(16));
+}
+
+function analyse(rows) {
+  // ── Pass 1: hash preimage map ───────────────────────────────────────────
+  // keccak256(abi.encode(address, uint256)) covers ERC-20 balance and allowance keys.
+  // 64-byte input: 12 zero bytes (address ABI padding) + 20-byte address + 32-byte slot.
+  const preimages = new Map(); // '0x'+hash -> { addr: '0x'+addr20, slot: hex64-no-prefix }
+  for (const { kind, data } of rows) {
+    if (kind !== 'Hash' || !data) continue;
+    const [input, output] = data;
+    if (!input || !output) continue;
+    const hex = (typeof input === 'string' && input.startsWith('0x') ? input.slice(2) : String(input)).toLowerCase();
+    if (hex.length !== 128 || !hex.startsWith('000000000000000000000000')) continue;
+    const key = (typeof output === 'string' && output.startsWith('0x') ? output : '0x' + output).toLowerCase();
+    preimages.set(key, { addr: '0x' + hex.slice(24, 64), slot: hex.slice(64) });
+  }
+
+  // ── Accumulators ────────────────────────────────────────────────────────
+  const proxySwaps      = [];
+  const ethChanges      = [];
+  const erc20Transfers  = [];
+  const erc20Approvals  = [];
+  const erc721Transfers = []; // emitted directly from state; log only adds tokenId
+  const forgedTransfers = [];
+  let   feeInfo         = null;
+
+  // balance writes per contract: [{holderAddr, mappingSlot, delta, _logMatched}]
+  const balanceWrites = new Map();
+
+  const ctxStack = [];
+  function execAddr() { return ctxStack.length ? ctxStack[ctxStack.length - 1] : null; }
+
+  // Returns a 20-byte Ethereum address from a 32-byte storage value if the upper 12 bytes
+  // are exactly zero, otherwise null.
+  function _asStorageAddr(val) {
+    try {
+      const h = (typeof val === 'string' && val.startsWith('0x') ? val.slice(2) : String(val)).toLowerCase();
+      if (h.length !== 64 || !h.startsWith('000000000000000000000000')) return null;
+      return '0x' + h.slice(24);
+    } catch { return null; }
+  }
+
+  // > 0xffffn: excludes reentrancy guards / counters for proxy swap detection.
+  const _isAddrLike = a => { try { return BigInt(a) > 0xffffn; } catch { return false; } };
+  // > 2^144: 18-byte position IDs (e.g. Uniswap v4) max out at < 2^144;
+  // real 20-byte addresses have at least 1 non-zero byte in the upper 2 bytes → ≥ 2^144.
+  const _isAddrTopic = a => { try { return BigInt(a) > (1n << 144n); } catch { return false; } };
+
+  // ── Pass 3: main loop ───────────────────────────────────────────────────
+  for (const row of rows) {
+    const { kind, data, reverted } = row;
+    switch (kind) {
+
+      case 'Call': {
+        const [call, mode] = data;
+        const modeKey = typeof mode === 'string' ? mode : Object.keys(mode)[0];
+        let addr;
+        if (modeKey === 'Delegate' || modeKey === 'CallCode') {
+          addr = execAddr() ?? call.by;
+        } else if (modeKey === 'Create' || modeKey === 'Create2') {
+          addr = typeof mode === 'object' ? mode[modeKey] : null;
+        } else {
+          addr = call.to;
+        }
+        ctxStack.push(addr);
+        break;
+      }
+
+      case 'Return':
+      case 'Revert':
+      case 'Halt':
+        ctxStack.pop();
+        break;
+
+      case 'Put': {
+        if (reverted || !data) break;
+        const tkey = Object.keys(data[0])[0];
+        const t    = data[0][tkey];
+        const newV = data[1];
+
+        if (tkey === 'Store') {
+          // Proxy swap: slot[0] write where both values are properly ABI-encoded addresses
+          // (12 zero bytes + 20-byte address) and look like real contract addresses (> 0xffff).
+          if (_isSlot0(t.key)) {
+            const oldAddr = _asStorageAddr(t.val);
+            const newAddr = _asStorageAddr(newV);
+            if (oldAddr !== null && newAddr !== null && oldAddr !== newAddr
+                && _isAddrLike(oldAddr) && _isAddrLike(newAddr)) {
+              proxySwaps.push({ proxy: t.acc, from: oldAddr, to: newAddr });
+            }
+          }
+
+          const contract = (t.acc?.toLowerCase?.() ?? String(t.acc));
+          const keyLow   = (typeof t.key === 'string' ? t.key : ('0x' + BigInt(t.key).toString(16))).toLowerCase();
+
+          // ERC-721 ownerOf write: value changes from one address to another.
+          // ERC-20 balance write: key matches a single-level hash preimage.
+          const pre = preimages.get(keyLow);
+          if (pre) {
+            let delta;
+            try { delta = BigInt(newV) - BigInt(t.val); } catch { break; }
+            if (delta !== 0n) {
+              if (!balanceWrites.has(contract)) balanceWrites.set(contract, []);
+              balanceWrites.get(contract).push({ holderAddr: pre.addr, mappingSlot: pre.slot, delta, _logMatched: false });
+            }
+          }
+        }
+
+        if (tkey === 'Value') {
+          try {
+            const delta = BigInt(newV) - BigInt(t.val);
+            const ETH   = 10n ** 18n;
+            const sane  = v => { try { return BigInt(v) / ETH <= _MAX_SANE_ETH; } catch { return false; } };
+            if (delta !== 0n && sane(t.val) && sane(newV)) ethChanges.push({ acc: t.acc, delta });
+          } catch {}
+        }
+        break;
+      }
+
+      case 'Fee': {
+        if (!data || reverted) break;
+        const [acc, , tip] = data;
+        feeInfo = { sender: acc?.toLowerCase?.() ?? acc, tip };
+        break;
+      }
+
+      case 'Log': {
+        // Logs are secondary: enrich state-derived events or flag forgeries.
+        if (reverted || !data) break;
+        const [topics, payload] = data;
+        if (!topics?.length) break;
+        const t0         = topics[0]?.toLowerCase?.();
+        const emitter    = execAddr();
+        const emitterKey = emitter?.toLowerCase?.() ?? emitter;
+
+        if (t0 === TOPIC_TRANSFER && topics.length === 4 && (!payload || payload === '0x')) {
+          // ERC-721 Transfer: enrich state-derived entry with tokenId if found.
+          // If no state match, emit from log — but only if from/to look like real addresses.
+          // Protocols like Uniswap v4 PositionManager reuse the ERC-721 Transfer signature
+          // with position identifiers in the topics, not wallet addresses.
+          const ZERO = '0x0000000000000000000000000000000000000000';
+          const from = _topicToAddr(topics[1]);
+          const to   = _topicToAddr(topics[2]);
+          if (!from || !to) break;
+          const entry = erc721Transfers.find(e =>
+            e.token?.toLowerCase?.() === emitterKey && e.from === from && e.to === to && !e._logMatched);
+          if (entry) {
+            entry._logMatched = true;
+            try { entry.tokenId = BigInt(topics[3]); } catch {}
+          } else if (_isAddrTopic(from) || from === ZERO || _isAddrTopic(to) || to === ZERO) {
+            let tokenId = null;
+            try { tokenId = BigInt(topics[3]); } catch {}
+            erc721Transfers.push({ token: emitter, from, to, tokenId, _logMatched: true });
+          }
+
+        } else if (t0 === TOPIC_TRANSFER && topics.length === 3) {
+          // ERC-20 Transfer: log provides from/to pairing; state write is required to confirm.
+          const from   = _topicToAddr(topics[1]);
+          const to     = _topicToAddr(topics[2]);
+          const writes = balanceWrites.get(emitterKey) ?? [];
+          const fromW  = writes.find(w => !w._logMatched && w.holderAddr === from && w.delta < 0n);
+          const toW    = writes.find(w => !w._logMatched && w.holderAddr === to   && w.delta > 0n);
+          if (fromW || toW) {
+            if (fromW) fromW._logMatched = true;
+            if (toW)   toW._logMatched   = true;
+            let amount = null;
+            try { amount = BigInt(payload); } catch {}
+            erc20Transfers.push({ token: emitter, from, to, amount });
+          } else {
+            forgedTransfers.push({ token: emitter, from, to, kind: 'ERC-20' });
+          }
+
+        } else if (t0 === TOPIC_APPROVAL && topics.length >= 3) {
+          const owner   = _topicToAddr(topics[1]);
+          const spender = _topicToAddr(topics[2]);
+          let allowance = null;
+          try { allowance = BigInt(payload); } catch {}
+          erc20Approvals.push({ token: emitter, owner, spender, allowance });
+        }
+        break;
+      }
+    }
+  }
+
+  return { proxySwaps, ethChanges, erc20Transfers, erc20Approvals, erc721Transfers, forgedTransfers, feeInfo };
+}
+
+/* ── AnalysisCard ──────────────────────────────────────────── */
+class AnalysisCard {
+  constructor() {
+    this.el      = document.getElementById('analysis-card');
+    this.content = document.getElementById('analysis-content');
+  }
+
+  show(r) {
+    const { proxySwaps, ethChanges, erc20Transfers, erc20Approvals, erc721Transfers, forgedTransfers, feeInfo } = r;
+    const sections = [];
+
+    if (proxySwaps.length) {
+      sections.push(proxySwaps.map(s => `
+        <div class="an-row warn">
+          <span class="an-label red">⚠ Proxy implementation replaced</span>
+          <span class="an-addr">${_lbl(s.proxy) || _short(s.proxy)}</span>
+          <span><span class="an-val">${s.from}</span> → <span class="an-val new">${s.to}</span></span>
+        </div>`).join(''));
+    }
+
+    if (ethChanges.length) {
+      const byAcc = new Map();
+      for (const c of ethChanges) {
+        const key = c.acc?.toLowerCase?.() ?? c.acc;
+        byAcc.set(key, { acc: c.acc, delta: (byAcc.get(key)?.delta ?? 0n) + c.delta });
+      }
+
+      // identify coinbase: address whose net delta equals the tip
+      let coinbase = null;
+      if (feeInfo?.tip) {
+        try {
+          const tip = BigInt(feeInfo.tip);
+          if (tip > 0n) {
+            for (const [key, c] of byAcc) if (c.delta === tip) { coinbase = key; break; }
+          }
+        } catch {}
+      }
+
+      const rows = [...byAcc.values()].filter(c => c.delta !== 0n).map(c => {
+        const key = c.acc?.toLowerCase?.() ?? c.acc;
+        const role = key === feeInfo?.sender ? 'sender'
+                   : key === coinbase        ? 'coinbase'
+                   : null;
+        const pos = c.delta > 0n;
+        return `
+          <div class="an-row neutral">
+            <span class="an-label dim">ETH${role ? `  <span style="color:var(--text-dim);font-weight:400;text-transform:none;letter-spacing:0">${role}</span>` : ''}</span>
+            <span class="an-addr">${_lbl(c.acc) || _short(c.acc)}</span>
+            <span class="${pos ? 'an-pos' : 'an-neg'}">${pos ? '+' : '−'}${_fmtDelta(c.delta)}</span>
+          </div>`;
+      }).join('');
+      if (rows) sections.push(`<div class="an-section"><div class="an-section-title">ETH balance changes</div>${rows}</div>`);
+    }
+
+    if (erc20Transfers.length) {
+      const rows = erc20Transfers.map(t => `
+        <div class="an-row neutral">
+          <span class="an-label dim">${_lbl(t.token) || _short(t.token)}</span>
+          <span class="an-addr">${_lbl(t.from) || _short(t.from)} → ${_lbl(t.to) || _short(t.to)}</span>
+          <span class="an-val">${t.amount != null ? t.amount.toLocaleString() : '?'}</span>
+        </div>`).join('');
+      sections.push(`<div class="an-section"><div class="an-section-title">ERC-20 transfers</div>${rows}</div>`);
+    }
+
+    if (erc721Transfers.length) {
+      const rows = erc721Transfers.map(t => `
+        <div class="an-row neutral">
+          <span class="an-label dim">${_lbl(t.token) || _short(t.token)}</span>
+          <span class="an-addr">${_lbl(t.from) || _short(t.from)} → ${_lbl(t.to) || _short(t.to)}</span>
+          <span class="an-val">Token ID: ${t.tokenId != null ? t.tokenId.toLocaleString() : '?'}</span>
+        </div>`).join('');
+      sections.push(`<div class="an-section"><div class="an-section-title">ERC-721 transfers</div>${rows}</div>`);
+    }
+
+    if (erc20Approvals.length) {
+      const MAX_UINT256 = (1n << 256n) - 1n;
+      const rows = erc20Approvals.map(a => {
+        const revoke   = a.allowance === 0n;
+        const unlimited = a.allowance === MAX_UINT256;
+        const valStr   = a.allowance == null ? '?' : unlimited ? 'Unlimited' : a.allowance.toLocaleString();
+        return `
+          <div class="an-row ${revoke ? 'neutral' : 'caution'}">
+            <span class="an-label ${revoke ? 'dim' : 'yel'}">${_lbl(a.token) || _short(a.token)}</span>
+            <span class="an-addr">${_lbl(a.owner) || _short(a.owner)} → ${_lbl(a.spender) || _short(a.spender)}</span>
+            <span class="an-val">${valStr}</span>
+          </div>`;
+      }).join('');
+      sections.push(`<div class="an-section"><div class="an-section-title">ERC-20 approvals</div>${rows}</div>`);
+    }
+
+    if (forgedTransfers.length) {
+      const rows = forgedTransfers.map(t => `
+        <div class="an-row warn">
+          <span class="an-label red">⚠ Forged transfer (log without state change)</span>
+          <span class="an-addr">${t.kind}  ${_lbl(t.token) || _short(t.token)}</span>
+          <span class="an-addr">${_lbl(t.from) || _short(t.from)} → ${_lbl(t.to) || _short(t.to)}</span>
+        </div>`).join('');
+      sections.push(`<div class="an-section">${rows}</div>`);
+    }
+
+    if (!sections.length) return;
+    this.content.innerHTML = sections.join('');
+    this.el.classList.add('visible');
+  }
+
+  hide() { this.el.classList.remove('visible'); this.content.innerHTML = ''; }
 }
 
 new App().init();
