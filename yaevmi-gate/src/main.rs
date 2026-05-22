@@ -3,7 +3,6 @@ mod db;
 mod decode;
 
 use auth::AuthStore;
-use sqlx::SqlitePool;
 use axum::{
     extract::{Path, Request, State as AxumState},
     middleware::{self, Next},
@@ -14,6 +13,7 @@ use axum::{
 use eyre::eyre;
 use futures::StreamExt;
 use serde_json::{json, Value};
+use sqlx::SqlitePool;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
 use yaevmi_base::{Acc, Int};
@@ -72,7 +72,8 @@ async fn main() -> eyre::Result<()> {
         .parse()?;
     let admin: Option<Acc> = std::env::var("YAEVMI_ADMIN").ok().map(|s| {
         let s = s.trim().strip_prefix("0x").unwrap_or(&s);
-        let bytes = hex::decode(s).unwrap_or_else(|_| panic!("YAEVMI_ADMIN is not a valid address: {s}"));
+        let bytes =
+            hex::decode(s).unwrap_or_else(|_| panic!("YAEVMI_ADMIN is not a valid address: {s}"));
         Acc::from(bytes.as_slice())
     });
     if let Some(a) = &admin {
@@ -196,7 +197,14 @@ async fn intercept_send_raw(state: Shared, body: Value) -> Result<Json<Value>, A
     db::insert(&state.pool, &hash, &from, &raw, &sim_init).await?;
     {
         let mut pending = state.pending.write().await;
-        pending.insert(hash.clone(), PendingTx { from, raw: raw.clone(), sim: sim_init });
+        pending.insert(
+            hash.clone(),
+            PendingTx {
+                from,
+                raw: raw.clone(),
+                sim: sim_init,
+            },
+        );
     }
 
     spawn_sim(state, hash.clone(), decoded.call, decoded.tx);
@@ -262,7 +270,7 @@ async fn api_list(
     AxumState(state): AxumState<Shared>,
     axum::Extension(Caller(caller)): axum::Extension<Caller>,
 ) -> Json<Value> {
-    let is_admin = state.admin.map_or(false, |a| a == caller);
+    let is_admin = state.admin == Some(caller);
     let pending = state.pending.read().await;
     let list: Vec<_> = pending
         .iter()
@@ -277,7 +285,7 @@ async fn api_get(
     axum::Extension(Caller(caller)): axum::Extension<Caller>,
     Path(hash): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let is_admin = state.admin.map_or(false, |a| a == caller);
+    let is_admin = state.admin == Some(caller);
     let pending = state.pending.read().await;
     let entry = pending
         .get(&hash)
@@ -285,7 +293,9 @@ async fn api_get(
     if !is_admin && entry.from != caller {
         return Err(eyre!("not your tx").into());
     }
-    Ok(Json(json!({ "hash": hash, "from": format!("{}", entry.from), "sim": entry.sim })))
+    Ok(Json(
+        json!({ "hash": hash, "from": format!("{}", entry.from), "sim": entry.sim }),
+    ))
 }
 
 async fn api_submit(
@@ -293,7 +303,7 @@ async fn api_submit(
     axum::Extension(Caller(caller)): axum::Extension<Caller>,
     Path(hash): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let is_admin = state.admin.map_or(false, |a| a == caller);
+    let is_admin = state.admin == Some(caller);
     let raw = {
         let pending = state.pending.read().await;
         let entry = pending
@@ -318,7 +328,7 @@ async fn api_reject(
     axum::Extension(Caller(caller)): axum::Extension<Caller>,
     Path(hash): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let is_admin = state.admin.map_or(false, |a| a == caller);
+    let is_admin = state.admin == Some(caller);
     let pending = state.pending.write().await;
     let entry = pending
         .get(&hash)

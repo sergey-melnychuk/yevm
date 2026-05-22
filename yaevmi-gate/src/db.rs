@@ -30,8 +30,7 @@ pub async fn load_all(pool: &SqlitePool) -> Result<HashMap<String, PendingTx>> {
 
     let mut map = HashMap::new();
     for (hash, from_addr, raw, sim_json) in rows {
-        let from_bytes = hex::decode(from_addr.trim_start_matches("0x"))
-            .unwrap_or_default();
+        let from_bytes = hex::decode(from_addr.trim_start_matches("0x")).unwrap_or_default();
         let from = Acc::from(from_bytes.as_slice());
         let sim: SimResult = match serde_json::from_str(&sim_json) {
             Ok(s) => s,
@@ -45,16 +44,24 @@ pub async fn load_all(pool: &SqlitePool) -> Result<HashMap<String, PendingTx>> {
     Ok(map)
 }
 
-pub async fn insert(pool: &SqlitePool, hash: &str, from: &Acc, raw: &str, sim: &SimResult) -> Result<()> {
+pub async fn insert(
+    pool: &SqlitePool,
+    hash: &str,
+    from: &Acc,
+    raw: &str,
+    sim: &SimResult,
+) -> Result<()> {
     let from_str = format!("{from}");
     let sim_json = serde_json::to_string(sim)?;
-    sqlx::query("INSERT OR IGNORE INTO pending_txs (hash, from_addr, raw, sim) VALUES (?, ?, ?, ?)")
-        .bind(hash)
-        .bind(&from_str)
-        .bind(raw)
-        .bind(&sim_json)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "INSERT OR IGNORE INTO pending_txs (hash, from_addr, raw, sim) VALUES (?, ?, ?, ?)",
+    )
+    .bind(hash)
+    .bind(&from_str)
+    .bind(raw)
+    .bind(&sim_json)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 

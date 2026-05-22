@@ -261,7 +261,13 @@ pub fn finalized(
     }
 
     let base_burn = mul([Int::from(final_gas), head.base_fee]);
-    state.emit(Event::Fee(call.by, head.coinbase, base_burn, tip, final_gas));
+    state.emit(Event::Fee(
+        call.by,
+        head.coinbase,
+        base_burn,
+        tip,
+        final_gas,
+    ));
 
     final_gas as i64
 }

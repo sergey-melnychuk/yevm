@@ -55,7 +55,7 @@ pub enum Event {
     Create(Acc),
     Delete(Acc),
     Fee(Acc, Acc, Int, Int, u64), // (sender, coinbase, base_burn, tip, gas_used)
-    Blob(u64, Int),          // EIP-4844 BLOB carrying txs
+    Blob(u64, Int),               // EIP-4844 BLOB carrying txs
 
     Step(Step),
     // Full(Step, Vec<Int>, Buf),

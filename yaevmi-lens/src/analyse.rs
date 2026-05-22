@@ -3,7 +3,7 @@ use yaevmi_core::trace::{Event, Target, Trace};
 use yaevmi_misc::buf::Buf;
 
 use crate::{
-    Alerts, EthChange, Erc20Approval, Erc20Transfer, Erc721Transfer, FeeInfo, ForgedTransfer,
+    Alerts, Erc20Approval, Erc20Transfer, Erc721Transfer, EthChange, FeeInfo, ForgedTransfer,
     ProxySwap,
 };
 
@@ -17,8 +17,12 @@ const TOPIC_APPROVAL: [u8; 32] =
 // ABI-encoded address: 12 zero bytes + 20-byte address
 fn abi_addr(int: &Int) -> Option<Acc> {
     let b = int.as_ref();
-    if b.len() != 32 { return None; }
-    if b[..12] != [0u8; 12] { return None; }
+    if b.len() != 32 {
+        return None;
+    }
+    if b[..12] != [0u8; 12] {
+        return None;
+    }
     Some(Acc::from(&b[12..]))
 }
 
@@ -27,8 +31,12 @@ fn abi_addr(int: &Int) -> Option<Acc> {
 // have 12+ leading zero bytes when stored as 32-byte words.
 fn storage_addr(val: &Int) -> Option<Acc> {
     let b = val.as_ref();
-    if b[..12] != [0u8; 12] { return None; }
-    if b[12] == 0 { return None; } // rejects small integers that pad with extra zeros
+    if b[..12] != [0u8; 12] {
+        return None;
+    }
+    if b[12] == 0 {
+        return None;
+    } // rejects small integers that pad with extra zeros
     Some(Acc::from(&b[12..]))
 }
 
@@ -36,9 +44,13 @@ fn storage_addr(val: &Int) -> Option<Acc> {
 // Filters out 18-byte position IDs (Uniswap v4 etc.) which max out below 2^144.
 fn is_addr_topic(int: &Int) -> bool {
     let b = int.as_ref();
-    if b.len() != 32 { return false; }
+    if b.len() != 32 {
+        return false;
+    }
     // bytes 12..32 must not all be zero (non-null address)
-    if b[12..] == [0u8; 20] { return false; }
+    if b[12..] == [0u8; 20] {
+        return false;
+    }
     // the first non-zero byte must be at position 12 (12 leading zero bytes)
     b[..12] == [0u8; 12]
 }
@@ -62,18 +74,22 @@ pub fn analyse(traces: &[Trace]) -> Alerts {
     let mut preimages: std::collections::HashMap<Int, (Acc, Int)> = Default::default();
     let mut interacted: std::collections::HashSet<Acc> = Default::default();
     for t in traces {
-        if t.reverted { continue; }
+        if t.reverted {
+            continue;
+        }
         match &t.event {
             Event::Hash(input, output) => {
                 let b = input.as_slice();
                 if b.len() == 64 && b[..12] == [0u8; 12] {
                     let holder = Acc::from(&b[12..32]);
                     let slot = Int::from(&b[32..64]);
-                    preimages.insert(output.clone(), (holder, slot));
+                    preimages.insert(*output, (holder, slot));
                 }
             }
             Event::Call(call, _) => {
-                if let Some(to) = call.to { interacted.insert(to); }
+                if let Some(to) = call.to {
+                    interacted.insert(to);
+                }
             }
             Event::Get(Target::Code { acc, .. }) => {
                 interacted.insert(*acc);
@@ -120,7 +136,7 @@ pub fn analyse(traces: &[Trace]) -> Alerts {
                             if old_impl != new_impl && interacted.contains(&old_impl) {
                                 alerts.proxy_swaps.push(ProxySwap {
                                     proxy: *acc,
-                                    slot: key.clone(),
+                                    slot: *key,
                                     old_impl,
                                     new_impl,
                                 });
@@ -141,23 +157,26 @@ pub fn analyse(traces: &[Trace]) -> Alerts {
                         }
                     }
 
-                    Target::Value { acc, val } => {
+                    Target::Value { acc, val }
                         // ETH balance change (skip fee-only dust moves)
-                        if val != next {
+                        if val != next => {
                             alerts.eth_changes.push(EthChange {
                                 acc: *acc,
-                                before: val.clone(),
-                                after: next.clone(),
+                                before: *val,
+                                after: *next,
                             });
                         }
-                    }
 
                     _ => {}
                 }
             }
 
             Event::Fee(sender, coinbase, _, _, gas) => {
-                alerts.fee = Some(FeeInfo { sender: *sender, coinbase: *coinbase, gas_used: *gas });
+                alerts.fee = Some(FeeInfo {
+                    sender: *sender,
+                    coinbase: *coinbase,
+                    gas_used: *gas,
+                });
             }
 
             Event::Log(topics, payload) => {
@@ -177,12 +196,18 @@ pub fn analyse(traces: &[Trace]) -> Alerts {
                     let to = abi_addr(&topics[2]);
                     if let (Some(from), Some(to)) = (from, to) {
                         let zero = Acc::default();
-                        if is_addr_topic(&topics[1]) || from == zero
-                            || is_addr_topic(&topics[2]) || to == zero
+                        if is_addr_topic(&topics[1])
+                            || from == zero
+                            || is_addr_topic(&topics[2])
+                            || to == zero
                         {
                             let token_id = {
                                 let b = topics[3].as_ref();
-                                if b.len() <= 32 { Some(topics[3].clone()) } else { None }
+                                if b.len() <= 32 {
+                                    Some(topics[3])
+                                } else {
+                                    None
+                                }
                             };
                             alerts.erc721_transfers.push(Erc721Transfer {
                                 token: emitter,
@@ -203,16 +228,23 @@ pub fn analyse(traces: &[Trace]) -> Alerts {
                         let amount = buf_to_int(payload);
                         // Find matching balance writes to confirm state change
                         let from_w = balance_writes.iter_mut().find(|w| {
-                            !w.log_matched && w.contract == emitter && w.holder == from && w.delta < 0
+                            !w.log_matched
+                                && w.contract == emitter
+                                && w.holder == from
+                                && w.delta < 0
                         });
                         let has_from = from_w.is_some();
-                        if let Some(w) = from_w { w.log_matched = true; }
+                        if let Some(w) = from_w {
+                            w.log_matched = true;
+                        }
 
                         let to_w = balance_writes.iter_mut().find(|w| {
                             !w.log_matched && w.contract == emitter && w.holder == to && w.delta > 0
                         });
                         let has_to = to_w.is_some();
-                        if let Some(w) = to_w { w.log_matched = true; }
+                        if let Some(w) = to_w {
+                            w.log_matched = true;
+                        }
 
                         if has_from || has_to {
                             alerts.erc20_transfers.push(Erc20Transfer {
@@ -222,7 +254,11 @@ pub fn analyse(traces: &[Trace]) -> Alerts {
                                 amount,
                             });
                         } else {
-                            alerts.forged_transfers.push(ForgedTransfer { token: emitter, from, to });
+                            alerts.forged_transfers.push(ForgedTransfer {
+                                token: emitter,
+                                from,
+                                to,
+                            });
                         }
                     }
                     continue;
@@ -256,7 +292,9 @@ fn val_to_u128(v: &Int) -> u128 {
 
 fn buf_to_int(b: &Buf) -> Option<Int> {
     let s = b.as_slice();
-    if s.is_empty() || s.len() > 32 { return None; }
+    if s.is_empty() || s.len() > 32 {
+        return None;
+    }
     Some(Int::from(s))
 }
 
@@ -294,11 +332,21 @@ mod tests {
     use yaevmi_misc::buf::Buf;
 
     fn trace(seq: usize, event: Event) -> Trace {
-        Trace { seq, event, depth: 0, reverted: false }
+        Trace {
+            seq,
+            event,
+            depth: 0,
+            reverted: false,
+        }
     }
 
     fn reverted(seq: usize, event: Event) -> Trace {
-        Trace { seq, event, depth: 0, reverted: true }
+        Trace {
+            seq,
+            event,
+            depth: 0,
+            reverted: true,
+        }
     }
 
     fn addr(hex: &str) -> Acc {
@@ -315,12 +363,20 @@ mod tests {
 
     fn call_ctx(by: Acc, to: Acc) -> Event {
         Event::Call(
-            yaevmi_core::Call { by, to: Some(to), gas: 100_000, eth: Int::ZERO, data: Buf::default() },
+            yaevmi_core::Call {
+                by,
+                to: Some(to),
+                gas: 100_000,
+                eth: Int::ZERO,
+                data: Buf::default(),
+            },
             CallMode::Call(0, 0),
         )
     }
 
-    fn ret() -> Event { Event::Return(Buf::default(), 21_000) }
+    fn ret() -> Event {
+        Event::Return(Buf::default(), 21_000)
+    }
 
     fn addr_as_storage(a: &Acc) -> Int {
         let mut v = [0u8; 32];
@@ -332,15 +388,28 @@ mod tests {
     fn detects_proxy_swap() {
         let old_impl = addr("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         let new_impl = addr("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-        let proxy    = addr("0xcccccccccccccccccccccccccccccccccccccccc");
+        let proxy = addr("0xcccccccccccccccccccccccccccccccccccccccc");
 
         // A real proxy upgrade: the old impl is called (or code-loaded) before the slot changes.
         let traces = vec![
-            trace(0, Event::Get(Target::Code { acc: old_impl, hash: Int::ZERO })),
-            trace(1, Event::Put(
-                Target::Store { acc: proxy, key: Int::from(0u64), val: addr_as_storage(&old_impl) },
-                addr_as_storage(&new_impl),
-            )),
+            trace(
+                0,
+                Event::Get(Target::Code {
+                    acc: old_impl,
+                    hash: Int::ZERO,
+                }),
+            ),
+            trace(
+                1,
+                Event::Put(
+                    Target::Store {
+                        acc: proxy,
+                        key: Int::from(0u64),
+                        val: addr_as_storage(&old_impl),
+                    },
+                    addr_as_storage(&new_impl),
+                ),
+            ),
         ];
 
         let alerts = analyse(&traces);
@@ -354,13 +423,20 @@ mod tests {
     fn no_proxy_swap_without_interaction() {
         let old_impl = addr("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         let new_impl = addr("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-        let proxy    = addr("0xcccccccccccccccccccccccccccccccccccccccc");
+        let proxy = addr("0xcccccccccccccccccccccccccccccccccccccccc");
 
         // Old impl never called or code-fetched → plain state update, not a proxy swap.
-        let traces = vec![trace(0, Event::Put(
-            Target::Store { acc: proxy, key: Int::from(0u64), val: addr_as_storage(&old_impl) },
-            addr_as_storage(&new_impl),
-        ))];
+        let traces = vec![trace(
+            0,
+            Event::Put(
+                Target::Store {
+                    acc: proxy,
+                    key: Int::from(0u64),
+                    val: addr_as_storage(&old_impl),
+                },
+                addr_as_storage(&new_impl),
+            ),
+        )];
 
         assert_eq!(analyse(&traces).proxy_swaps.len(), 0);
     }
@@ -369,22 +445,36 @@ mod tests {
     fn no_proxy_swap_when_not_changing() {
         let proxy = addr("0xcccccccccccccccccccccccccccccccccccccccc");
         let impl_addr = addr("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-        let traces = vec![trace(0, Event::Put(
-            Target::Store { acc: proxy, key: Int::from(0u64), val: addr_as_storage(&impl_addr) },
-            addr_as_storage(&impl_addr), // same → no swap
-        ))];
+        let traces = vec![trace(
+            0,
+            Event::Put(
+                Target::Store {
+                    acc: proxy,
+                    key: Int::from(0u64),
+                    val: addr_as_storage(&impl_addr),
+                },
+                addr_as_storage(&impl_addr), // same → no swap
+            ),
+        )];
         assert_eq!(analyse(&traces).proxy_swaps.len(), 0);
     }
 
     #[test]
     fn skips_reverted_traces() {
-        let proxy    = addr("0xcccccccccccccccccccccccccccccccccccccccc");
+        let proxy = addr("0xcccccccccccccccccccccccccccccccccccccccc");
         let old_impl = addr("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         let new_impl = addr("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-        let traces = vec![reverted(0, Event::Put(
-            Target::Store { acc: proxy, key: Int::from(0u64), val: addr_as_storage(&old_impl) },
-            addr_as_storage(&new_impl),
-        ))];
+        let traces = vec![reverted(
+            0,
+            Event::Put(
+                Target::Store {
+                    acc: proxy,
+                    key: Int::from(0u64),
+                    val: addr_as_storage(&old_impl),
+                },
+                addr_as_storage(&new_impl),
+            ),
+        )];
         assert_eq!(analyse(&traces).proxy_swaps.len(), 0);
     }
 
@@ -394,12 +484,22 @@ mod tests {
         let mut preimage = [0u8; 64];
         preimage[12..32].copy_from_slice(holder.as_ref());
         let slot_hash = Int::from(keccak256(&preimage).as_ref());
-        let hash_trace = trace(*seq, Event::Hash(Buf::from(preimage.to_vec()), slot_hash.clone()));
+        let hash_trace = trace(
+            *seq,
+            Event::Hash(Buf::from(preimage.to_vec()), slot_hash),
+        );
         *seq += 1;
-        let put_trace = trace(*seq, Event::Put(
-            Target::Store { acc: token, key: slot_hash, val: Int::from(old) },
-            Int::from(new),
-        ));
+        let put_trace = trace(
+            *seq,
+            Event::Put(
+                Target::Store {
+                    acc: token,
+                    key: slot_hash,
+                    val: Int::from(old),
+                },
+                Int::from(new),
+            ),
+        );
         *seq += 1;
         vec![hash_trace, put_trace]
     }
@@ -407,46 +507,64 @@ mod tests {
     fn transfer_log(seq: usize, from: &Acc, to: &Acc, amount: u64) -> Trace {
         let mut payload = [0u8; 32];
         payload[24..].copy_from_slice(&amount.to_be_bytes());
-        trace(seq, Event::Log(
-            vec![Int::from(TOPIC_TRANSFER.as_ref()), topic(from), topic(to)],
-            Buf::from(payload.to_vec()),
-        ))
+        trace(
+            seq,
+            Event::Log(
+                vec![Int::from(TOPIC_TRANSFER.as_ref()), topic(from), topic(to)],
+                Buf::from(payload.to_vec()),
+            ),
+        )
     }
 
     fn transfer4_log(seq: usize, from: &Acc, to: &Acc, token_id: u64) -> Trace {
-        trace(seq, Event::Log(
-            vec![
-                Int::from(TOPIC_TRANSFER.as_ref()),
-                topic(from),
-                topic(to),
-                Int::from(token_id),
-            ],
-            Buf::default(),
-        ))
+        trace(
+            seq,
+            Event::Log(
+                vec![
+                    Int::from(TOPIC_TRANSFER.as_ref()),
+                    topic(from),
+                    topic(to),
+                    Int::from(token_id),
+                ],
+                Buf::default(),
+            ),
+        )
     }
 
     fn approval_log(seq: usize, owner: &Acc, spender: &Acc, allowance: &Int) -> Trace {
-        trace(seq, Event::Log(
-            vec![Int::from(TOPIC_APPROVAL.as_ref()), topic(owner), topic(spender)],
-            Buf::from(allowance.as_ref().to_vec()),
-        ))
+        trace(
+            seq,
+            Event::Log(
+                vec![
+                    Int::from(TOPIC_APPROVAL.as_ref()),
+                    topic(owner),
+                    topic(spender),
+                ],
+                Buf::from(allowance.as_ref().to_vec()),
+            ),
+        )
     }
 
     #[test]
     fn detects_erc20_transfer_with_state() {
         let token = addr("0x1111111111111111111111111111111111111111");
-        let from  = addr("0x2222222222222222222222222222222222222222");
-        let to    = addr("0x3333333333333333333333333333333333333333");
+        let from = addr("0x2222222222222222222222222222222222222222");
+        let to = addr("0x3333333333333333333333333333333333333333");
 
         let mut seq = 0;
         let mut traces = vec![trace(seq, call_ctx(from, token))];
         seq += 1;
         traces.extend(balance_traces(&mut seq, token, from, 2000, 1000)); // delta < 0
-        traces.push(transfer_log(seq, &from, &to, 1000)); seq += 1;
+        traces.push(transfer_log(seq, &from, &to, 1000));
+        seq += 1;
         traces.push(trace(seq, ret()));
 
         let alerts = analyse(&traces);
-        assert_eq!(alerts.erc20_transfers.len(), 1, "expected 1 ERC-20 transfer");
+        assert_eq!(
+            alerts.erc20_transfers.len(),
+            1,
+            "expected 1 ERC-20 transfer"
+        );
         assert_eq!(alerts.forged_transfers.len(), 0);
         let t = &alerts.erc20_transfers[0];
         assert_eq!(t.token, token);
@@ -458,15 +576,16 @@ mod tests {
     #[test]
     fn detects_erc20_transfer_both_sides() {
         let token = addr("0x1111111111111111111111111111111111111111");
-        let from  = addr("0x2222222222222222222222222222222222222222");
-        let to    = addr("0x3333333333333333333333333333333333333333");
+        let from = addr("0x2222222222222222222222222222222222222222");
+        let to = addr("0x3333333333333333333333333333333333333333");
 
         let mut seq = 0;
         let mut traces = vec![trace(seq, call_ctx(from, token))];
         seq += 1;
         traces.extend(balance_traces(&mut seq, token, from, 5000, 4000)); // sender loses 1000
-        traces.extend(balance_traces(&mut seq, token, to,   1000, 2000)); // receiver gains 1000
-        traces.push(transfer_log(seq, &from, &to, 1000)); seq += 1;
+        traces.extend(balance_traces(&mut seq, token, to, 1000, 2000)); // receiver gains 1000
+        traces.push(transfer_log(seq, &from, &to, 1000));
+        seq += 1;
         traces.push(trace(seq, ret()));
 
         let alerts = analyse(&traces);
@@ -477,8 +596,8 @@ mod tests {
     #[test]
     fn flags_forged_transfer() {
         let token = addr("0x1111111111111111111111111111111111111111");
-        let from  = addr("0x2222222222222222222222222222222222222222");
-        let to    = addr("0x3333333333333333333333333333333333333333");
+        let from = addr("0x2222222222222222222222222222222222222222");
+        let to = addr("0x3333333333333333333333333333333333333333");
 
         let traces = vec![
             trace(0, call_ctx(from, token)),
@@ -494,8 +613,8 @@ mod tests {
 
     #[test]
     fn detects_erc20_approval() {
-        let token   = addr("0x1111111111111111111111111111111111111111");
-        let owner   = addr("0x2222222222222222222222222222222222222222");
+        let token = addr("0x1111111111111111111111111111111111111111");
+        let owner = addr("0x2222222222222222222222222222222222222222");
         let spender = addr("0x3333333333333333333333333333333333333333");
         let allowance = Int::from(500u64);
 
@@ -516,8 +635,8 @@ mod tests {
 
     #[test]
     fn detects_erc20_approval_unlimited() {
-        let token   = addr("0x1111111111111111111111111111111111111111");
-        let owner   = addr("0x2222222222222222222222222222222222222222");
+        let token = addr("0x1111111111111111111111111111111111111111");
+        let owner = addr("0x2222222222222222222222222222222222222222");
         let spender = addr("0x3333333333333333333333333333333333333333");
 
         let traces = vec![
@@ -532,9 +651,9 @@ mod tests {
 
     #[test]
     fn detects_erc721_mint() {
-        let nft    = addr("0x1111111111111111111111111111111111111111");
+        let nft = addr("0x1111111111111111111111111111111111111111");
         let minter = addr("0x2222222222222222222222222222222222222222");
-        let zero   = Acc::default();
+        let zero = Acc::default();
 
         let traces = vec![
             trace(0, call_ctx(minter, nft)),
@@ -553,9 +672,9 @@ mod tests {
 
     #[test]
     fn detects_erc721_transfer() {
-        let nft  = addr("0x1111111111111111111111111111111111111111");
+        let nft = addr("0x1111111111111111111111111111111111111111");
         let from = addr("0x2222222222222222222222222222222222222222");
-        let to   = addr("0x3333333333333333333333333333333333333333");
+        let to = addr("0x3333333333333333333333333333333333333333");
 
         let traces = vec![
             trace(0, call_ctx(from, nft)),
@@ -565,7 +684,10 @@ mod tests {
 
         let alerts = analyse(&traces);
         assert_eq!(alerts.erc721_transfers.len(), 1);
-        assert_eq!(alerts.erc721_transfers[0].token_id, Some(Int::from(9999u64)));
+        assert_eq!(
+            alerts.erc721_transfers[0].token_id,
+            Some(Int::from(9999u64))
+        );
         assert_eq!(alerts.erc721_transfers[0].from, from);
         assert_eq!(alerts.erc721_transfers[0].to, to);
     }
@@ -573,25 +695,43 @@ mod tests {
     #[test]
     fn detects_eth_change() {
         let acc = addr("0x2222222222222222222222222222222222222222");
-        let traces = vec![trace(0, Event::Put(
-            Target::Value { acc, val: Int::from(1_000_000_000_000_000_000u64) },
-            Int::from(2_000_000_000_000_000_000u64),
-        ))];
+        let traces = vec![trace(
+            0,
+            Event::Put(
+                Target::Value {
+                    acc,
+                    val: Int::from(1_000_000_000_000_000_000u64),
+                },
+                Int::from(2_000_000_000_000_000_000u64),
+            ),
+        )];
         let alerts = analyse(&traces);
         assert_eq!(alerts.eth_changes.len(), 1);
         assert_eq!(alerts.eth_changes[0].acc, acc);
-        assert_eq!(alerts.eth_changes[0].before, Int::from(1_000_000_000_000_000_000u64));
-        assert_eq!(alerts.eth_changes[0].after,  Int::from(2_000_000_000_000_000_000u64));
+        assert_eq!(
+            alerts.eth_changes[0].before,
+            Int::from(1_000_000_000_000_000_000u64)
+        );
+        assert_eq!(
+            alerts.eth_changes[0].after,
+            Int::from(2_000_000_000_000_000_000u64)
+        );
     }
 
     #[test]
     fn no_eth_change_when_unchanged() {
         let acc = addr("0x2222222222222222222222222222222222222222");
         let val = Int::from(1_000u64);
-        let traces = vec![trace(0, Event::Put(
-            Target::Value { acc, val: val.clone() },
-            val,
-        ))];
+        let traces = vec![trace(
+            0,
+            Event::Put(
+                Target::Value {
+                    acc,
+                    val,
+                },
+                val,
+            ),
+        )];
         assert_eq!(analyse(&traces).eth_changes.len(), 0);
     }
 
@@ -599,7 +739,10 @@ mod tests {
     fn captures_fee_info() {
         let sender = addr("0x2222222222222222222222222222222222222222");
         let coinbase = addr("0x3333333333333333333333333333333333333333");
-        let traces = vec![trace(0, Event::Fee(sender, coinbase, Int::ZERO, Int::ZERO, 21_000))];
+        let traces = vec![trace(
+            0,
+            Event::Fee(sender, coinbase, Int::ZERO, Int::ZERO, 21_000),
+        )];
         let alerts = analyse(&traces);
         assert!(alerts.fee.is_some());
         let fee = alerts.fee.unwrap();
@@ -610,17 +753,26 @@ mod tests {
 
     #[test]
     fn delegatecall_emitter_is_caller_not_implementation() {
-        let proxy          = addr("0x1111111111111111111111111111111111111111");
+        let proxy = addr("0x1111111111111111111111111111111111111111");
         let implementation = addr("0x2222222222222222222222222222222222222222");
-        let user           = addr("0x3333333333333333333333333333333333333333");
-        let spender        = addr("0x4444444444444444444444444444444444444444");
+        let user = addr("0x3333333333333333333333333333333333333333");
+        let spender = addr("0x4444444444444444444444444444444444444444");
 
         let traces = vec![
             trace(0, call_ctx(user, proxy)),
-            trace(1, Event::Call(
-                yaevmi_core::Call { by: proxy, to: Some(implementation), gas: 80_000, eth: Int::ZERO, data: Buf::default() },
-                CallMode::Delegate(0, 0),
-            )),
+            trace(
+                1,
+                Event::Call(
+                    yaevmi_core::Call {
+                        by: proxy,
+                        to: Some(implementation),
+                        gas: 80_000,
+                        eth: Int::ZERO,
+                        data: Buf::default(),
+                    },
+                    CallMode::Delegate(0, 0),
+                ),
+            ),
             // Approval emitted inside delegatecall — token must be proxy, not implementation
             approval_log(2, &user, &spender, &Int::from(100u64)),
             trace(3, ret()),

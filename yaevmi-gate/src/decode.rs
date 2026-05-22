@@ -316,7 +316,10 @@ fn decode_access_list(raw_list: &[u8]) -> Result<Vec<AccessListItem>> {
                     Ok(to_int(&key_bytes))
                 })
                 .collect::<Result<Vec<_>>>()?;
-            Ok(AccessListItem { address, storage_keys })
+            Ok(AccessListItem {
+                address,
+                storage_keys,
+            })
         })
         .collect()
 }
@@ -334,7 +337,10 @@ fn decode_authorization_list(raw_list: &[u8]) -> Result<Vec<AuthorizationListIte
         .map(|entry_raw| {
             let f = rlp_list(entry_raw)?;
             if f.len() < 6 {
-                return Err(eyre!("authorization entry: expected 6 fields, got {}", f.len()));
+                return Err(eyre!(
+                    "authorization entry: expected 6 fields, got {}",
+                    f.len()
+                ));
             }
             Ok(AuthorizationListItem {
                 chain_id: to_int(&f[0]),
