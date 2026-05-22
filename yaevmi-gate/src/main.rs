@@ -1,7 +1,9 @@
 mod auth;
+mod db;
 mod decode;
 
 use auth::AuthStore;
+use sqlx::SqlitePool;
 use axum::{
     extract::{Path, Request, State as AxumState},
     middleware::{self, Next},
@@ -25,10 +27,10 @@ use yaevmi_core::{
     Call, Head, Tx,
 };
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SimResult {
-    pub status: &'static str,
+    pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -49,6 +51,8 @@ struct AppState {
     rpc_url: String,
     client: reqwest::Client,
     auth: Arc<AuthStore>,
+    admin: Option<Acc>,
+    pool: SqlitePool,
     pending: RwLock<HashMap<String, PendingTx>>,
 }
 
@@ -66,12 +70,26 @@ async fn main() -> eyre::Result<()> {
     let bind: SocketAddr = std::env::var("YAEVMI_PROXY_BIND")
         .unwrap_or_else(|_| "127.0.0.1:8000".into())
         .parse()?;
+    let admin: Option<Acc> = std::env::var("YAEVMI_ADMIN").ok().map(|s| {
+        let s = s.trim().strip_prefix("0x").unwrap_or(&s);
+        let bytes = hex::decode(s).unwrap_or_else(|_| panic!("YAEVMI_ADMIN is not a valid address: {s}"));
+        Acc::from(bytes.as_slice())
+    });
+    if let Some(a) = &admin {
+        tracing::info!("admin: {a}");
+    }
+
+    let db_path = std::env::var("YAEVMI_DB").unwrap_or_else(|_| "gate.db".into());
+    let pool = db::open(&db_path).await?;
+    let pending_init = db::load_all(&pool).await?;
 
     let state: Shared = Arc::new(AppState {
         rpc_url,
         client: reqwest::Client::new(),
         auth: AuthStore::new(),
-        pending: RwLock::new(HashMap::new()),
+        admin,
+        pool,
+        pending: RwLock::new(pending_init),
     });
 
     let api = Router::new()
@@ -126,16 +144,16 @@ async fn auth_verify(
     AxumState(state): AxumState<Shared>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
-    let nonce = body
-        .get("nonce")
+    let message = body
+        .get("message")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| eyre!("missing nonce"))?;
+        .ok_or_else(|| eyre!("missing message"))?;
     let signature = body
         .get("signature")
         .and_then(|v| v.as_str())
         .ok_or_else(|| eyre!("missing signature"))?;
 
-    let (address, token) = state.auth.verify(nonce, signature).await?;
+    let (address, token) = state.auth.verify(message, signature).await?;
     Ok(Json(
         json!({ "address": format!("{address}"), "token": token }),
     ))
@@ -168,22 +186,17 @@ async fn intercept_send_raw(state: Shared, body: Value) -> Result<Json<Value>, A
     tracing::info!("intercepted tx hash={hash} from={}", decoded.call.by);
     let from = decoded.call.by;
 
+    let sim_init = SimResult {
+        status: "pending".into(),
+        error: None,
+        gas_used: None,
+        success: None,
+        traces: vec![],
+    };
+    db::insert(&state.pool, &hash, &from, &raw, &sim_init).await?;
     {
         let mut pending = state.pending.write().await;
-        pending.insert(
-            hash.clone(),
-            PendingTx {
-                from,
-                raw: raw.clone(),
-                sim: SimResult {
-                    status: "pending",
-                    error: None,
-                    gas_used: None,
-                    success: None,
-                    traces: vec![],
-                },
-            },
-        );
+        pending.insert(hash.clone(), PendingTx { from, raw: raw.clone(), sim: sim_init });
     }
 
     spawn_sim(state, hash.clone(), decoded.call, decoded.tx);
@@ -194,28 +207,28 @@ fn spawn_sim(state: Shared, hash: String, call: Call, tx: Tx) {
     let rpc_url = state.rpc_url.clone();
     tokio::spawn(async move {
         let result = run_sim(rpc_url, call, tx).await;
+        let sim = match result {
+            Ok((gas, success, traces)) => SimResult {
+                status: "done".into(),
+                error: None,
+                gas_used: Some(gas),
+                success: Some(success),
+                traces,
+            },
+            Err(e) => SimResult {
+                status: "failed".into(),
+                error: Some(e.to_string()),
+                gas_used: None,
+                success: None,
+                traces: vec![],
+            },
+        };
+        if let Err(e) = db::update_sim(&state.pool, &hash, &sim).await {
+            tracing::warn!("db update_sim failed: {e}");
+        }
         let mut pending = state.pending.write().await;
         if let Some(entry) = pending.get_mut(&hash) {
-            match result {
-                Ok((gas, success, traces)) => {
-                    entry.sim = SimResult {
-                        status: "done",
-                        error: None,
-                        gas_used: Some(gas),
-                        success: Some(success),
-                        traces,
-                    };
-                }
-                Err(e) => {
-                    entry.sim = SimResult {
-                        status: "failed",
-                        error: Some(e.to_string()),
-                        gas_used: None,
-                        success: None,
-                        traces: vec![],
-                    };
-                }
-            }
+            entry.sim = sim;
         }
     });
 }
@@ -249,11 +262,12 @@ async fn api_list(
     AxumState(state): AxumState<Shared>,
     axum::Extension(Caller(caller)): axum::Extension<Caller>,
 ) -> Json<Value> {
+    let is_admin = state.admin.map_or(false, |a| a == caller);
     let pending = state.pending.read().await;
     let list: Vec<_> = pending
         .iter()
-        .filter(|(_, p)| p.from == caller)
-        .map(|(hash, p)| json!({ "hash": hash, "sim": p.sim }))
+        .filter(|(_, p)| is_admin || p.from == caller)
+        .map(|(hash, p)| json!({ "hash": hash, "from": format!("{}", p.from), "sim": p.sim }))
         .collect();
     Json(json!(list))
 }
@@ -263,14 +277,15 @@ async fn api_get(
     axum::Extension(Caller(caller)): axum::Extension<Caller>,
     Path(hash): Path<String>,
 ) -> Result<Json<Value>, AppError> {
+    let is_admin = state.admin.map_or(false, |a| a == caller);
     let pending = state.pending.read().await;
     let entry = pending
         .get(&hash)
         .ok_or_else(|| eyre!("tx not found: {hash}"))?;
-    if entry.from != caller {
+    if !is_admin && entry.from != caller {
         return Err(eyre!("not your tx").into());
     }
-    Ok(Json(json!({ "hash": hash, "sim": entry.sim })))
+    Ok(Json(json!({ "hash": hash, "from": format!("{}", entry.from), "sim": entry.sim })))
 }
 
 async fn api_submit(
@@ -278,12 +293,13 @@ async fn api_submit(
     axum::Extension(Caller(caller)): axum::Extension<Caller>,
     Path(hash): Path<String>,
 ) -> Result<Json<Value>, AppError> {
+    let is_admin = state.admin.map_or(false, |a| a == caller);
     let raw = {
         let pending = state.pending.read().await;
         let entry = pending
             .get(&hash)
             .ok_or_else(|| eyre!("tx not found: {hash}"))?;
-        if entry.from != caller {
+        if !is_admin && entry.from != caller {
             return Err(eyre!("not your tx").into());
         }
         entry.raw.clone()
@@ -292,6 +308,7 @@ async fn api_submit(
         json!({ "jsonrpc": "2.0", "method": "eth_sendRawTransaction", "params": [raw], "id": 1 });
     let resp = state.client.post(&state.rpc_url).json(&body).send().await?;
     let result: Value = resp.json().await?;
+    db::delete(&state.pool, &hash).await?;
     state.pending.write().await.remove(&hash);
     Ok(Json(result))
 }
@@ -301,14 +318,17 @@ async fn api_reject(
     axum::Extension(Caller(caller)): axum::Extension<Caller>,
     Path(hash): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let mut pending = state.pending.write().await;
+    let is_admin = state.admin.map_or(false, |a| a == caller);
+    let pending = state.pending.write().await;
     let entry = pending
         .get(&hash)
         .ok_or_else(|| eyre!("tx not found: {hash}"))?;
-    if entry.from != caller {
+    if !is_admin && entry.from != caller {
         return Err(eyre!("not your tx").into());
     }
-    pending.remove(&hash);
+    drop(pending);
+    db::delete(&state.pool, &hash).await?;
+    state.pending.write().await.remove(&hash);
     Ok(Json(json!({ "rejected": hash })))
 }
 

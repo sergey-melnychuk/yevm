@@ -859,7 +859,7 @@
 </footer>
 
 <script type="module">
-import init, { pick, empty, run, run_with_block, simulate } from './pkg/yaevmi_wasm.js';
+import init, { pick, empty, run, run_with_block, simulate, analyse as wasm_analyse } from './pkg/yaevmi_wasm.js';
 await init();
 
 /* ── Filter constants (mirror trace::filter) ──────────────── */
@@ -1943,6 +1943,7 @@ class App {
     const UPDATE_INTERVAL = 200;
     let lastUpdate = t0;
     let trace;
+    const traces = [];
 
     while ((trace = await stream.next()) !== null) {
       if (trace.event == null) { console.error('bad trace:', JSON.stringify(trace)); break; }
@@ -1952,6 +1953,13 @@ class App {
         counts[step.name] = (counts[step.name] ?? 0) + 1;
         steps++;
       } else {
+        if (kind === 'Undo') {
+          const [from, to] = trace.event.Undo;
+          for (const t of traces) {
+            if (t.seq >= from && t.seq < to) t.reverted = true;
+          }
+        }
+        traces.push(trace);
         this.evLog.push(trace);
       }
 
@@ -1966,7 +1974,11 @@ class App {
     this.status.hide();
     this.result.show(stream.check(), this.evLog._rows.length, ms);
     this.evLog.flush();
-    this.analysis.show(analyse(this.evLog._rows));
+    try {
+      this.analysis.show(analyse(traces));
+    } catch (e) {
+      console.error('analyse failed:', e);
+    }
     if (steps > 0) this.ops.show(counts, steps);
   }
 
@@ -1995,11 +2007,14 @@ function _fmtDelta(delta) {
   return _fmtValue('0x' + abs.toString(16));
 }
 
-function analyse(rows) {
+function analyse(traces) {
+  return wasm_analyse(traces);
+}
+
+// kept for reference during transition — remove after validation
+function _analyse_js_unused(rows) {
   // ── Pass 1: hash preimage map ───────────────────────────────────────────
-  // keccak256(abi.encode(address, uint256)) covers ERC-20 balance and allowance keys.
-  // 64-byte input: 12 zero bytes (address ABI padding) + 20-byte address + 32-byte slot.
-  const preimages = new Map(); // '0x'+hash -> { addr: '0x'+addr20, slot: hex64-no-prefix }
+  const preimages = new Map();
   for (const { kind, data } of rows) {
     if (kind !== 'Hash' || !data) continue;
     const [input, output] = data;
@@ -2188,7 +2203,7 @@ class AnalysisCard {
   }
 
   show(r) {
-    const { proxySwaps, ethChanges, erc20Transfers, erc20Approvals, erc721Transfers, forgedTransfers, feeInfo } = r;
+    const { proxySwaps, ethChanges, erc20Transfers, erc20Approvals, erc721Transfers, forgedTransfers, fee } = r;
     const sections = [];
 
     if (proxySwaps.length) {
@@ -2196,7 +2211,7 @@ class AnalysisCard {
         <div class="an-row warn">
           <span class="an-label red">⚠ Proxy implementation replaced</span>
           <span class="an-addr">${_lbl(s.proxy) || _short(s.proxy)}</span>
-          <span><span class="an-val">${s.from}</span> → <span class="an-val new">${s.to}</span></span>
+          <span><span class="an-val">${s.oldImpl}</span> → <span class="an-val new">${s.newImpl}</span></span>
         </div>`).join(''));
     }
 
@@ -2204,25 +2219,15 @@ class AnalysisCard {
       const byAcc = new Map();
       for (const c of ethChanges) {
         const key = c.acc?.toLowerCase?.() ?? c.acc;
-        byAcc.set(key, { acc: c.acc, delta: (byAcc.get(key)?.delta ?? 0n) + c.delta });
+        const delta = BigInt(c.after) - BigInt(c.before);
+        byAcc.set(key, { acc: c.acc, delta: (byAcc.get(key)?.delta ?? 0n) + delta });
       }
 
-      // identify coinbase: address whose net delta equals the tip
-      let coinbase = null;
-      if (feeInfo?.tip) {
-        try {
-          const tip = BigInt(feeInfo.tip);
-          if (tip > 0n) {
-            for (const [key, c] of byAcc) if (c.delta === tip) { coinbase = key; break; }
-          }
-        } catch {}
-      }
-
+      const sender   = fee?.sender?.toLowerCase?.()   ?? fee?.sender;
+      const coinbase = fee?.coinbase?.toLowerCase?.() ?? fee?.coinbase;
       const rows = [...byAcc.values()].filter(c => c.delta !== 0n).map(c => {
         const key = c.acc?.toLowerCase?.() ?? c.acc;
-        const role = key === feeInfo?.sender ? 'sender'
-                   : key === coinbase        ? 'coinbase'
-                   : null;
+        const role = key === sender ? 'sender' : key === coinbase ? 'coinbase' : null;
         const pos = c.delta > 0n;
         return `
           <div class="an-row neutral">
@@ -2239,7 +2244,7 @@ class AnalysisCard {
         <div class="an-row neutral">
           <span class="an-label dim">${_lbl(t.token) || _short(t.token)}</span>
           <span class="an-addr">${_lbl(t.from) || _short(t.from)} → ${_lbl(t.to) || _short(t.to)}</span>
-          <span class="an-val">${t.amount != null ? t.amount.toLocaleString() : '?'}</span>
+          <span class="an-val">${t.amount != null ? BigInt(t.amount).toLocaleString() : '?'}</span>
         </div>`).join('');
       sections.push(`<div class="an-section"><div class="an-section-title">ERC-20 transfers</div>${rows}</div>`);
     }
@@ -2249,7 +2254,7 @@ class AnalysisCard {
         <div class="an-row neutral">
           <span class="an-label dim">${_lbl(t.token) || _short(t.token)}</span>
           <span class="an-addr">${_lbl(t.from) || _short(t.from)} → ${_lbl(t.to) || _short(t.to)}</span>
-          <span class="an-val">Token ID: ${t.tokenId != null ? t.tokenId.toLocaleString() : '?'}</span>
+          <span class="an-val">Token ID: ${t.tokenId != null ? BigInt(t.tokenId).toLocaleString() : '?'}</span>
         </div>`).join('');
       sections.push(`<div class="an-section"><div class="an-section-title">ERC-721 transfers</div>${rows}</div>`);
     }
@@ -2257,9 +2262,10 @@ class AnalysisCard {
     if (erc20Approvals.length) {
       const MAX_UINT256 = (1n << 256n) - 1n;
       const rows = erc20Approvals.map(a => {
-        const revoke   = a.allowance === 0n;
-        const unlimited = a.allowance === MAX_UINT256;
-        const valStr   = a.allowance == null ? '?' : unlimited ? 'Unlimited' : a.allowance.toLocaleString();
+        const val      = a.allowance != null ? BigInt(a.allowance) : null;
+        const revoke   = val === 0n;
+        const unlimited = val === MAX_UINT256;
+        const valStr   = val == null ? '?' : unlimited ? 'Unlimited' : val.toLocaleString();
         return `
           <div class="an-row ${revoke ? 'neutral' : 'caution'}">
             <span class="an-label ${revoke ? 'dim' : 'yel'}">${_lbl(a.token) || _short(a.token)}</span>
@@ -2274,7 +2280,7 @@ class AnalysisCard {
       const rows = forgedTransfers.map(t => `
         <div class="an-row warn">
           <span class="an-label red">⚠ Forged transfer (log without state change)</span>
-          <span class="an-addr">${t.kind}  ${_lbl(t.token) || _short(t.token)}</span>
+          <span class="an-addr">ERC-20  ${_lbl(t.token) || _short(t.token)}</span>
           <span class="an-addr">${_lbl(t.from) || _short(t.from)} → ${_lbl(t.to) || _short(t.to)}</span>
         </div>`).join('');
       sections.push(`<div class="an-section">${rows}</div>`);

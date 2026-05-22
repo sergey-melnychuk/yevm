@@ -54,7 +54,7 @@ pub enum Event {
     Undo(usize, usize),    // seq range [from, to) that was reverted
     Create(Acc),
     Delete(Acc),
-    Fee(Acc, Int, Int, u64), // (sender, base_burn, tip, gas_used)
+    Fee(Acc, Acc, Int, Int, u64), // (sender, coinbase, base_burn, tip, gas_used)
     Blob(u64, Int),          // EIP-4844 BLOB carrying txs
 
     Step(Step),

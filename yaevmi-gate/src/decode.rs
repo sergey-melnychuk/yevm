@@ -1,7 +1,7 @@
 use eyre::{eyre, Result};
 use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
 use yaevmi_base::{Acc, Int};
-use yaevmi_core::call::{Call, Tx};
+use yaevmi_core::call::{AccessListItem, AuthorizationListItem, Call, Tx};
 use yaevmi_misc::{buf::Buf, hex::Hex, keccak256};
 
 pub struct DecodedTx {
@@ -19,6 +19,8 @@ pub fn decode_raw(raw: &str) -> Result<DecodedTx> {
         b if b >= 0xc0 => decode_legacy(&bytes, hash),
         0x01 => decode_type1(&bytes[1..], hash),
         0x02 => decode_type2(&bytes[1..], hash),
+        0x03 => decode_type3(&bytes[1..], hash),
+        0x04 => decode_type4(&bytes[1..], hash),
         t => Err(eyre!("unsupported tx type: 0x{t:02x}")),
     }
 }
@@ -113,6 +115,7 @@ fn decode_type1(bytes: &[u8], hash: Int) -> Result<DecodedTx> {
     let signing_hash = keccak256(&sig_payload);
 
     let from = ecrecover(signing_hash.as_ref(), v, &r, &s)?;
+    let access_list = decode_access_list(&raw[7])?;
     Ok(DecodedTx {
         call: Call {
             by: from,
@@ -127,7 +130,7 @@ fn decode_type1(bytes: &[u8], hash: Int) -> Result<DecodedTx> {
             gas_price: to_int(&gas_price),
             max_fee_per_gas: Int::ZERO,
             max_priority_fee_per_gas: Int::ZERO,
-            access_list: vec![],
+            access_list,
             authorization_list: vec![],
             blob_versioned_hashes: vec![],
             max_fee_per_blob_gas: None,
@@ -161,6 +164,7 @@ fn decode_type2(bytes: &[u8], hash: Int) -> Result<DecodedTx> {
     let signing_hash = keccak256(&sig_payload);
 
     let from = ecrecover(signing_hash.as_ref(), v, &r, &s)?;
+    let access_list = decode_access_list(&raw[8])?;
     Ok(DecodedTx {
         call: Call {
             by: from,
@@ -175,7 +179,7 @@ fn decode_type2(bytes: &[u8], hash: Int) -> Result<DecodedTx> {
             gas_price: to_int(&max_fee),
             max_fee_per_gas: to_int(&max_fee),
             max_priority_fee_per_gas: to_int(&max_priority),
-            access_list: vec![],
+            access_list,
             authorization_list: vec![],
             blob_versioned_hashes: vec![],
             max_fee_per_blob_gas: None,
@@ -183,6 +187,165 @@ fn decode_type2(bytes: &[u8], hash: Int) -> Result<DecodedTx> {
             index: Int::ZERO,
         },
     })
+}
+
+// EIP-4844 (type 3): chain_id, nonce, maxPriority, maxFee, gasLimit, to, value, data, accessList, maxFeePerBlobGas, blobVersionedHashes, v, r, s
+fn decode_type3(bytes: &[u8], hash: Int) -> Result<DecodedTx> {
+    let items = rlp_list(bytes)?;
+    let raw = rlp_raw_items(bytes)?;
+    if items.len() < 14 {
+        return Err(eyre!("type3 tx: expected 14 fields, got {}", items.len()));
+    }
+    let chain_id = be_u64(&items[0])?;
+    let nonce = be_u64(&items[1])?;
+    let max_priority = items[2].clone();
+    let max_fee = items[3].clone();
+    let gas_limit = be_u64(&items[4])?;
+    let to = to_addr(&items[5])?;
+    let value = items[6].clone();
+    let data = items[7].clone();
+    // items[8]  = access_list
+    // items[9]  = max_fee_per_blob_gas
+    // items[10] = blob_versioned_hashes
+    let v = be_u64(&items[11])? as u8;
+    let r = items[12].clone();
+    let s = items[13].clone();
+
+    let mut sig_payload = vec![0x03u8];
+    sig_payload.extend(rlp_list_raw(&raw[..11]));
+    let signing_hash = keccak256(&sig_payload);
+
+    let from = ecrecover(signing_hash.as_ref(), v, &r, &s)?;
+    let access_list = decode_access_list(&raw[8])?;
+    let blob_versioned_hashes = decode_hash_list(&raw[10])?;
+
+    Ok(DecodedTx {
+        call: Call {
+            by: from,
+            to,
+            gas: gas_limit,
+            eth: to_int(&value),
+            data: Buf::from(data),
+        },
+        tx: Tx {
+            chain_id: Hex::from(&be_bytes(chain_id)[..]),
+            nonce: Int::from(nonce),
+            gas_price: to_int(&max_fee),
+            max_fee_per_gas: to_int(&max_fee),
+            max_priority_fee_per_gas: to_int(&max_priority),
+            access_list,
+            authorization_list: vec![],
+            blob_versioned_hashes,
+            max_fee_per_blob_gas: Some(to_int(&items[9])),
+            hash,
+            index: Int::ZERO,
+        },
+    })
+}
+
+// EIP-7702 (type 4): chain_id, nonce, maxPriority, maxFee, gasLimit, to, value, data, accessList, authorizationList, v, r, s
+fn decode_type4(bytes: &[u8], hash: Int) -> Result<DecodedTx> {
+    let items = rlp_list(bytes)?;
+    let raw = rlp_raw_items(bytes)?;
+    if items.len() < 13 {
+        return Err(eyre!("type4 tx: expected 13 fields, got {}", items.len()));
+    }
+    let chain_id = be_u64(&items[0])?;
+    let nonce = be_u64(&items[1])?;
+    let max_priority = items[2].clone();
+    let max_fee = items[3].clone();
+    let gas_limit = be_u64(&items[4])?;
+    let to = to_addr(&items[5])?;
+    let value = items[6].clone();
+    let data = items[7].clone();
+    // items[8] = access_list
+    // items[9] = authorization_list
+    let v = be_u64(&items[10])? as u8;
+    let r = items[11].clone();
+    let s = items[12].clone();
+
+    let mut sig_payload = vec![0x04u8];
+    sig_payload.extend(rlp_list_raw(&raw[..10]));
+    let signing_hash = keccak256(&sig_payload);
+
+    let from = ecrecover(signing_hash.as_ref(), v, &r, &s)?;
+    let access_list = decode_access_list(&raw[8])?;
+    let authorization_list = decode_authorization_list(&raw[9])?;
+
+    Ok(DecodedTx {
+        call: Call {
+            by: from,
+            to,
+            gas: gas_limit,
+            eth: to_int(&value),
+            data: Buf::from(data),
+        },
+        tx: Tx {
+            chain_id: Hex::from(&be_bytes(chain_id)[..]),
+            nonce: Int::from(nonce),
+            gas_price: to_int(&max_fee),
+            max_fee_per_gas: to_int(&max_fee),
+            max_priority_fee_per_gas: to_int(&max_priority),
+            access_list,
+            authorization_list,
+            blob_versioned_hashes: vec![],
+            max_fee_per_blob_gas: None,
+            hash,
+            index: Int::ZERO,
+        },
+    })
+}
+
+fn decode_access_list(raw_list: &[u8]) -> Result<Vec<AccessListItem>> {
+    let entry_raws = rlp_raw_items(raw_list)?;
+    entry_raws
+        .iter()
+        .map(|entry_raw| {
+            let field_raws = rlp_raw_items(entry_raw)?;
+            if field_raws.len() < 2 {
+                return Err(eyre!("access list entry: expected 2 fields"));
+            }
+            let (addr_bytes, _) = rlp_item(&field_raws[0])?;
+            let address =
+                to_addr(&addr_bytes)?.ok_or_else(|| eyre!("access list: missing address"))?;
+            let key_raws = rlp_raw_items(&field_raws[1])?;
+            let storage_keys = key_raws
+                .iter()
+                .map(|kr| {
+                    let (key_bytes, _) = rlp_item(kr)?;
+                    Ok(to_int(&key_bytes))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(AccessListItem { address, storage_keys })
+        })
+        .collect()
+}
+
+fn decode_hash_list(raw_list: &[u8]) -> Result<Vec<Int>> {
+    let items = rlp_list(raw_list)?;
+    Ok(items.iter().map(|b| to_int(b)).collect())
+}
+
+// Authorization item: [chain_id, address, nonce, y_parity, r, s]
+fn decode_authorization_list(raw_list: &[u8]) -> Result<Vec<AuthorizationListItem>> {
+    let entry_raws = rlp_raw_items(raw_list)?;
+    entry_raws
+        .iter()
+        .map(|entry_raw| {
+            let f = rlp_list(entry_raw)?;
+            if f.len() < 6 {
+                return Err(eyre!("authorization entry: expected 6 fields, got {}", f.len()));
+            }
+            Ok(AuthorizationListItem {
+                chain_id: to_int(&f[0]),
+                address: to_addr(&f[1])?.ok_or_else(|| eyre!("authorization: missing address"))?,
+                nonce: to_int(&f[2]),
+                y_parity: to_int(&f[3]),
+                r: to_int(&f[4]),
+                s: to_int(&f[5]),
+            })
+        })
+        .collect()
 }
 
 fn ecrecover(hash: &[u8], recovery_id: u8, r: &[u8], s: &[u8]) -> Result<Acc> {
@@ -404,6 +567,160 @@ mod tests {
         assert_eq!(
             format!("{}", decoded.tx.hash),
             "0x1322a406eb0afdd59438c6876fa15e7ae73f834b311906ab8f0a2ac0a9838981",
+        );
+    }
+
+    #[test]
+    fn roundtrip_type3_known_key() {
+        use k256::ecdsa::SigningKey;
+        use yaevmi_misc::keccak256;
+
+        let privkey =
+            hex::decode("ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
+                .unwrap();
+        let signing_key = SigningKey::from_slice(&privkey).unwrap();
+
+        let to_bytes = hex::decode("d3cda913deb6f4967b2ef3aa68f5a843aaba4cc3").unwrap();
+        let chain_id_enc = rlp_encode_bytes(&be_bytes(1u64));
+        let nonce_enc = rlp_encode_bytes(&be_bytes(5u64));
+        let max_pri_enc = rlp_encode_bytes(&be_bytes(1_000_000_000u64));
+        let max_fee_enc = rlp_encode_bytes(&be_bytes(20_000_000_000u64));
+        let gas_limit_enc = rlp_encode_bytes(&be_bytes(21_000u64));
+        let to_enc = rlp_encode_bytes(&to_bytes);
+        let value_enc = rlp_encode_bytes(&be_bytes(0u64));
+        let data_enc = rlp_encode_bytes(&[]);
+        let access_list_enc = vec![0xc0u8];
+        let max_fee_blob_enc = rlp_encode_bytes(&be_bytes(10u64));
+        // two fake blob hashes
+        let blob_hash1 = [0x01u8; 32];
+        let blob_hash2 = [0x02u8; 32];
+        let blob_hashes_enc = {
+            let h1 = rlp_encode_bytes(&blob_hash1);
+            let h2 = rlp_encode_bytes(&blob_hash2);
+            let mut combined = h1;
+            combined.extend(h2);
+            let mut out = encode_length(combined.len(), 0xc0);
+            out.extend(combined);
+            out
+        };
+
+        let unsigned = vec![
+            chain_id_enc.clone(),
+            nonce_enc.clone(),
+            max_pri_enc.clone(),
+            max_fee_enc.clone(),
+            gas_limit_enc.clone(),
+            to_enc.clone(),
+            value_enc.clone(),
+            data_enc.clone(),
+            access_list_enc.clone(),
+            max_fee_blob_enc.clone(),
+            blob_hashes_enc.clone(),
+        ];
+        let mut signing_payload = vec![0x03u8];
+        signing_payload.extend(rlp_list_raw(&unsigned));
+        let signing_hash = keccak256(&signing_payload);
+
+        let (sig, rid) = signing_key
+            .sign_prehash_recoverable(signing_hash.as_ref())
+            .unwrap();
+        let sig_bytes = sig.to_bytes();
+        let v = rid.to_byte() as u64;
+
+        let mut all_items = unsigned;
+        all_items.push(rlp_encode_bytes(&be_bytes(v)));
+        all_items.push(rlp_encode_bytes(&sig_bytes[..32]));
+        all_items.push(rlp_encode_bytes(&sig_bytes[32..]));
+
+        let mut raw_tx = vec![0x03u8];
+        raw_tx.extend(rlp_list_raw(&all_items));
+        let raw_hex = format!("0x{}", hex::encode(&raw_tx));
+
+        let decoded = decode_raw(&raw_hex).expect("decode_raw failed");
+        assert_eq!(
+            format!("{}", decoded.call.by),
+            "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+        );
+        assert_eq!(decoded.tx.blob_versioned_hashes.len(), 2);
+        assert_eq!(decoded.tx.max_fee_per_blob_gas, Some(Int::from(10u64)));
+    }
+
+    #[test]
+    fn roundtrip_type4_known_key() {
+        use k256::ecdsa::SigningKey;
+        use yaevmi_misc::keccak256;
+
+        let privkey =
+            hex::decode("ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
+                .unwrap();
+        let signing_key = SigningKey::from_slice(&privkey).unwrap();
+
+        let to_bytes = hex::decode("d3cda913deb6f4967b2ef3aa68f5a843aaba4cc3").unwrap();
+        let auth_addr = hex::decode("1111111111111111111111111111111111111111").unwrap();
+        let chain_id_enc = rlp_encode_bytes(&be_bytes(1u64));
+        let nonce_enc = rlp_encode_bytes(&be_bytes(7u64));
+        let max_pri_enc = rlp_encode_bytes(&be_bytes(1_000_000_000u64));
+        let max_fee_enc = rlp_encode_bytes(&be_bytes(20_000_000_000u64));
+        let gas_limit_enc = rlp_encode_bytes(&be_bytes(50_000u64));
+        let to_enc = rlp_encode_bytes(&to_bytes);
+        let value_enc = rlp_encode_bytes(&be_bytes(0u64));
+        let data_enc = rlp_encode_bytes(&[]);
+        let access_list_enc = vec![0xc0u8];
+        // one authorization: [chain_id=1, address, nonce=0, y_parity=0, r=1, s=1]
+        let auth_item = rlp_list_raw(&[
+            rlp_encode_bytes(&be_bytes(1u64)),
+            rlp_encode_bytes(&auth_addr),
+            rlp_encode_bytes(&be_bytes(0u64)),
+            rlp_encode_bytes(&be_bytes(0u64)),
+            rlp_encode_bytes(&[0x01u8; 32]),
+            rlp_encode_bytes(&[0x01u8; 32]),
+        ]);
+        let auth_list_enc = {
+            let mut out = encode_length(auth_item.len(), 0xc0);
+            out.extend(auth_item);
+            out
+        };
+
+        let unsigned = vec![
+            chain_id_enc.clone(),
+            nonce_enc.clone(),
+            max_pri_enc.clone(),
+            max_fee_enc.clone(),
+            gas_limit_enc.clone(),
+            to_enc.clone(),
+            value_enc.clone(),
+            data_enc.clone(),
+            access_list_enc.clone(),
+            auth_list_enc.clone(),
+        ];
+        let mut signing_payload = vec![0x04u8];
+        signing_payload.extend(rlp_list_raw(&unsigned));
+        let signing_hash = keccak256(&signing_payload);
+
+        let (sig, rid) = signing_key
+            .sign_prehash_recoverable(signing_hash.as_ref())
+            .unwrap();
+        let sig_bytes = sig.to_bytes();
+        let v = rid.to_byte() as u64;
+
+        let mut all_items = unsigned;
+        all_items.push(rlp_encode_bytes(&be_bytes(v)));
+        all_items.push(rlp_encode_bytes(&sig_bytes[..32]));
+        all_items.push(rlp_encode_bytes(&sig_bytes[32..]));
+
+        let mut raw_tx = vec![0x04u8];
+        raw_tx.extend(rlp_list_raw(&all_items));
+        let raw_hex = format!("0x{}", hex::encode(&raw_tx));
+
+        let decoded = decode_raw(&raw_hex).expect("decode_raw failed");
+        assert_eq!(
+            format!("{}", decoded.call.by),
+            "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+        );
+        assert_eq!(decoded.tx.authorization_list.len(), 1);
+        assert_eq!(
+            format!("{}", decoded.tx.authorization_list[0].address),
+            "0x1111111111111111111111111111111111111111",
         );
     }
 

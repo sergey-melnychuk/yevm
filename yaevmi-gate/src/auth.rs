@@ -35,22 +35,28 @@ impl AuthStore {
         nonce
     }
 
-    pub async fn verify(&self, nonce: &str, signature: &str) -> Result<(Acc, String)> {
-        // Check nonce exists and hasn't expired.
+    // Verify an EIP-4361 (SIWE) message + signature.
+    pub async fn verify(&self, message: &str, signature: &str) -> Result<(Acc, String)> {
+        let nonce = siwe_field(message, "Nonce: ")?;
+
         {
             let mut challenges = self.challenges.write().await;
             let created = challenges
-                .remove(nonce)
+                .remove(&nonce)
                 .ok_or_else(|| eyre!("unknown or expired nonce"))?;
             if created.elapsed() > NONCE_TTL {
                 return Err(eyre!("nonce expired"));
             }
         }
 
-        let nonce_bytes = hex::decode(nonce).map_err(|e| eyre!("invalid nonce hex: {e}"))?;
-        let address = recover_personal_sign(&nonce_bytes, signature)?;
+        let address = recover_personal_sign(message.as_bytes(), signature)?;
 
-        // Issue session token.
+        // Address in the message must match the recovered signer.
+        let msg_addr = siwe_address(message)?;
+        if format!("{address}").to_lowercase() != msg_addr.to_lowercase() {
+            return Err(eyre!("address mismatch"));
+        }
+
         let token = random_hex(32);
         self.sessions
             .write()
@@ -69,6 +75,24 @@ impl AuthStore {
             }
         })
     }
+}
+
+// Extract a named field value from a SIWE message, e.g. "Nonce: abc123" -> "abc123".
+fn siwe_field(message: &str, prefix: &str) -> Result<String> {
+    message
+        .lines()
+        .find(|l| l.starts_with(prefix))
+        .map(|l| l[prefix.len()..].trim().to_string())
+        .ok_or_else(|| eyre!("SIWE message missing field: {prefix}"))
+}
+
+// The address is on the second line of a SIWE message.
+fn siwe_address(message: &str) -> Result<String> {
+    message
+        .lines()
+        .nth(1)
+        .map(|l| l.trim().to_string())
+        .ok_or_else(|| eyre!("SIWE message too short"))
 }
 
 // Recover address from a MetaMask personal_sign signature.

@@ -11,7 +11,8 @@
   #addr { color: #475569; font-size: 0.82em; margin-bottom: 20px; min-height: 1.2em; }
   #list { display: flex; flex-direction: column; gap: 12px; }
   .card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 14px 16px; }
-  .hash { color: #94a3b8; font-size: 0.85em; margin-bottom: 8px; word-break: break-all; }
+  .hash { color: #94a3b8; font-size: 0.85em; margin-bottom: 4px; word-break: break-all; }
+  .from { color: #64748b; font-size: 0.78em; margin-bottom: 8px; }
   .status { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; font-weight: 600; margin-bottom: 8px; }
   .status.pending { background: rgba(251,191,36,0.15);  color: #fbbf24; }
   .status.done    { background: rgba(74,222,128,0.15);  color: #4ade80; }
@@ -54,18 +55,36 @@ async function connect() {
 
   const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
   const account = accounts[0];
+  const chainId = parseInt(await window.ethereum.request({ method: 'eth_chainId' }), 16);
 
   const { nonce } = await fetch('/auth/challenge').then(r => r.json());
 
+  const now = new Date();
+  const exp = new Date(now.getTime() + 60_000);
+  const message = [
+    `${location.host} wants you to sign in with your Ethereum account:`,
+    account,
+    '',
+    'Sign in to yaevmi-gate',
+    '',
+    `URI: ${location.origin}`,
+    'Version: 1',
+    `Chain ID: ${chainId}`,
+    `Nonce: ${nonce}`,
+    `Issued At: ${now.toISOString()}`,
+    `Expiration Time: ${exp.toISOString()}`,
+  ].join('\n');
+
+  const msgHex = '0x' + Array.from(new TextEncoder().encode(message), b => b.toString(16).padStart(2, '0')).join('');
   const signature = await window.ethereum.request({
     method: 'personal_sign',
-    params: ['0x' + nonce, account],
+    params: [msgHex, account],
   });
 
   const res = await fetch('/auth/verify', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ nonce, signature }),
+    body: JSON.stringify({ message, signature }),
   });
 
   if (!res.ok) { alert('Auth failed: ' + (await res.json()).error); return; }
@@ -115,12 +134,14 @@ async function load() {
     return;
   }
 
-  el.innerHTML = list.map(({ hash, sim }) => {
+  el.innerHTML = list.map(({ hash, from, sim }) => {
     const meta = sim.status === 'done'
       ? `<span>gas: ${sim.gasUsed}</span><span class="${sim.success ? 'ok' : 'bad'}">${sim.success ? 'success' : 'reverted'}</span>`
       : sim.status === 'failed'
       ? `<span class="bad">${sim.error}</span>`
       : '<span>simulating…</span>';
+    const fromLine = from && from.toLowerCase() !== (address || '').toLowerCase()
+      ? `<div class="from">from: ${from}</div>` : '';
     const actions = sim.status !== 'pending' ? `
       <div class="actions">
         <button class="btn" onclick="submit('${hash}')">Submit</button>
@@ -128,6 +149,7 @@ async function load() {
       </div>` : '';
     return `<div class="card">
       <div class="hash">${hash}</div>
+      ${fromLine}
       <div class="status ${sim.status}">${sim.status.toUpperCase()}</div>
       <div class="meta">${meta}</div>
       ${renderTraces(sim.traces)}

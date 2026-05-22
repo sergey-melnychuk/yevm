@@ -10,6 +10,7 @@ crate-type = ["cdylib", "rlib"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies] ## comment-out this line for development
 yaevmi-core.workspace = true
+yaevmi-lens.workspace = true
 yaevmi-base.workspace = true
 futures.workspace = true
 thiserror.workspace = true

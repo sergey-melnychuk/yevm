@@ -307,6 +307,13 @@ mod wasm {
     }
 
     #[wasm_bindgen]
+    pub fn analyse(traces_js: JsValue) -> Result<JsValue, JsError> {
+        let traces: Vec<yaevmi_core::trace::Trace> = serde_wasm_bindgen::from_value(traces_js)?;
+        let alerts = yaevmi_lens::analyse(&traces);
+        Ok(serde_wasm_bindgen::to_value(&alerts)?)
+    }
+
+    #[wasm_bindgen]
     pub async fn simulate(
         url: JsString,
         call_json: JsValue,
