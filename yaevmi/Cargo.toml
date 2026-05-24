@@ -1,6 +1,0 @@
-[package]
-name = "yaevmi-full"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]

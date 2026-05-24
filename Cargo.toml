@@ -1,14 +1,14 @@
 [workspace]
 resolver = "3"
 members = [
-    "yaevmi",
-    "yaevmi-base",
-    "yaevmi-core",
-    "yaevmi-gate",
-    "yaevmi-lens",
-    "yaevmi-misc",
-    "yaevmi-test",
-    "yaevmi-wasm",
+    "yevm",
+    "yevm-base",
+    "yevm-core",
+    "yevm-gate",
+    "yevm-lens",
+    "yevm-misc",
+    "yevm-test",
+    "yevm-wasm",
 ]
 
 [profile.release]
@@ -30,7 +30,8 @@ reqwest = { version = "0.13", features = ["json"] }
 k256 = { version = "0.13", features = ["ecdsa"] }
 futures = "0.3"
 ahash = "0.8"
-yaevmi-base = { version = "0.1.0", path = "./yaevmi-base" }
-yaevmi-core = { version = "0.1.0", path = "./yaevmi-core" }
-yaevmi-lens = { version = "0.1.0", path = "./yaevmi-lens" }
-yaevmi-misc = { version = "0.1.0", path = "./yaevmi-misc" }
+yevm-base = { version = "0.1.0", path = "./yevm-base" }
+yevm-core = { version = "0.1.0", path = "./yevm-core" }
+yevm-lens = { version = "0.1.0", path = "./yevm-lens" }
+yevm-misc = { version = "0.1.0", path = "./yevm-misc" }
+yevm-wasm = { version = "0.1.0", path = "./yevm-wasm" }

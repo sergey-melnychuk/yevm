@@ -1,0 +1,14 @@
+[package]
+name = "yevm-base"
+version = "0.1.0"
+edition = "2024"
+description = "Primitive types (address, uint256, transaction, block header) for the YEVM Ethereum VM."
+license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
+repository = "https://github.com/sergey-melnychuk/yevm"
+keywords = ["ethereum", "evm", "blockchain", "web3"]
+categories = ["cryptography::cryptocurrencies"]
+
+[dependencies]
+hex.workspace = true
+yevm-misc.workspace = true
+ruint.workspace = true

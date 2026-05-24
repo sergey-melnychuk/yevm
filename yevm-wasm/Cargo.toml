@@ -1,0 +1,35 @@
+[package]
+name = "yevm-wasm"
+version = "0.1.0"
+edition = "2024"
+description = "WebAssembly bindings for YEVM — run pre-broadcast Ethereum transaction simulation entirely in the browser."
+license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
+repository = "https://github.com/sergey-melnychuk/yevm"
+keywords = ["ethereum", "evm", "wasm", "browser", "blockchain"]
+categories = ["cryptography::cryptocurrencies", "wasm"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+yevm-core.workspace = true
+yevm-lens.workspace = true
+yevm-base.workspace = true
+futures.workspace = true
+thiserror.workspace = true
+eyre.workspace = true
+
+serde = { version = "1.0", features = ["derive"] }
+serde-wasm-bindgen = "0.4"
+
+js-sys = "0.3"
+web-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+
+## Each transitive `getrandom` needs '{wasm_},js' feature enabled
+## (Read more here: https://docs.rs/getrandom/latest/getrandom/)
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }

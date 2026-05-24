@@ -1,0 +1,18 @@
+[package]
+name = "yevm"
+version = "0.1.0"
+edition = "2024"
+description = "Async, WASM-native Ethereum VM in Rust. Top-level integration crate re-exporting the YEVM sub-crates as a single API surface."
+license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
+repository = "https://github.com/sergey-melnychuk/yevm"
+keywords = ["ethereum", "evm", "wasm", "blockchain", "web3"]
+categories = ["cryptography::cryptocurrencies", "wasm"]
+
+[dependencies]
+yevm-base = { workspace = true }
+yevm-core = { workspace = true }
+yevm-lens = { workspace = true }
+yevm-misc = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+yevm-wasm = { workspace = true }

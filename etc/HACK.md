@@ -268,9 +268,9 @@ Pre-execution side-effect attestation requires:
 Steps 1–3 are exactly what an EVM execution trace provides. The implementation is a matter of
 connecting trace output to a signing policy engine.
 
-### This Is Precisely What YAEVMI Enables
+### This Is Precisely What YEVM Enables
 
-YAEVMI (Yet Another EVM Implementation) produces full execution traces — opcode-level, with complete
+YEVM (Yet Another EVM Implementation) produces full execution traces — opcode-level, with complete
 storage read/write records — in-browser, against any RPC-accessible chain state. No backend, no
 trusted third party, no additional attack surface.
 

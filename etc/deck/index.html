@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>YAEVMI: Lessons from Building an Async-First, Wasm-Native EVM in Rust</title>
+  <title>YEVM: Lessons from Building an Async-First, Wasm-Native EVM in Rust</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/moon.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/highlight/monokai.css">
@@ -47,7 +47,7 @@
 
 <!-- TITLE -->
 <section class="center">
-  <h2><span style="text-decoration: line-through #e03030;">Solenoid</span> <span style="color: #e03030;">YAEVMI</span></h2>
+  <h2><span style="text-decoration: line-through #e03030;">Solenoid</span> <span style="color: #e03030;">YEVM</span></h2>
   <h3>Lessons from Building an<br>Async-First, Wasm-Native EVM in Rust</h3>
   <br>
   <p>Sergey Melnychuk &nbsp;·&nbsp; RustMeet 2026 &nbsp;·&nbsp; Kraków</p>
@@ -73,17 +73,17 @@
   <h3>Agenda</h3>
   <ul>
     <li>About me</li>
-    <li>Beerus → Solenoid → YAEVMI </li>
+    <li>Beerus → Solenoid → YEVM </li>
     <li>What? - EVM</li>
     <li>Why? - wasm, async, observability</li>
     <li>How? - spec, A/B, trial & error</li>
     <li>Solenoid</li>
-    <li>YAEVMI</li>
+    <li>YEVM</li>
     <li>Summary</li>
     <li>Q&A</li>
   </ul>
   <aside class="notes">
-    Here is what we will cover: what, why, and how. We will compare Solenoid to YAEVMI and close with key takeaways.
+    Here is what we will cover: what, why, and how. We will compare Solenoid to YEVM and close with key takeaways.
   </aside>
 </section>
 
@@ -126,33 +126,32 @@
       <td><a href="https://sergey-melnychuk.github.io/2025/12/30/solenoid-evm/">Done.</a> Works too slow. Now archived.</td>
     </tr>
     <tr>
-      <td><a href="https://github.com/sergey-melnychuk/yaevmi">YAEVMI</a></td>
+      <td><a href="https://github.com/sergey-melnychuk/yevm">YEVM</a></td>
       <td>Observable <strong>and fast</strong> async + wasm EVM, learn from Solenoid</td>
-      <td><a href="https://sergey-melnychuk.github.io/yaevmi">Done.</a> It works.</td>
+      <td><a href="https://sergey-melnychuk.github.io/yevm">Done.</a> It works.</td>
     </tr>
   </table>
   <aside class="notes">
-    Three projects led from Beerus to YAEVMI with Solenoid as the intermediate stop. Beerus was a StarkNet light client — stateless execution, state pulled from RPC. It is history now.
+    Three projects led from Beerus to YEVM with Solenoid as the intermediate stop. Beerus was a StarkNet light client — stateless execution, state pulled from RPC. It is history now.
 
     Solenoid was my attempt to go as deep into EVM as possible: implementing opcodes, mutating the stack and memory, executing subcalls. It is done, archived. The performance was unsatisfactory, as we will see.
 
-    YAEVMI is yet another EVM implementation from scratch in Rust. It works, it is fast, it is available online — you can open it in your browser or on your phone and execute Ethereum transactions.
+    YEVM is yet another EVM implementation from scratch in Rust. It works, it is fast, it is available online — you can open it in your browser or on your phone and execute Ethereum transactions.
   </aside>
 </section>
 
 <section class="center">
   <h3>What? - EVM</h3>
-  <p>YAEVMI</p>
+  <p>YEVM</p>
   <ul>
     <li>Yet</li>
-    <li>Another</li>
+    <li>another</li>
     <li>EVM</li>
-    <li>Implementation</li>
+    <li>implementation</li>
   </ul>
-  <p>("YAV-mi" /ˈjævmi/)</p>
   <p class="dim">Naming things is hard.</p>
   <aside class="notes">
-    YAEVMI: Yet Another Ethereum VM Implementation. Because naming things is hard.
+    YEVM: Yet another Ethereum VM implementation. Because naming things is hard.
   </aside>
 </section>
 
@@ -225,7 +224,7 @@
       <li>Though full traces might be too much data to handle in browser effectively</li>
     </ul>
     <aside class="notes">
-      I wanted to turn EVM from a black box into a glass box — fully observable end-to-end. But observability is on-demand: opcode-level traces are far too much for most use cases. YAEVMI captures and emits them only when asked.
+      I wanted to turn EVM from a black box into a glass box — fully observable end-to-end. But observability is on-demand: opcode-level traces are far too much for most use cases. YEVM captures and emits them only when asked.
 
       This can be useful for dev tooling, debugging, education, transaction simulation, and security.
     </aside>
@@ -242,7 +241,7 @@
     <br>
     <p class="dim">Simulation could have prevented the <a href="https://bolster.ai/blog/bybit-heist">ByBit</a> <a href="https://trakx.io/resources/news/zero-exposure-to-bybit-hack/">hack</a>!</p>
     <aside class="notes">
-      The ByBit hack illustrates the problem: even with multisig, no signer could see what they were actually signing — inputs, not side effects. A simulation tool like YAEVMI could have fixed that.
+      The ByBit hack illustrates the problem: even with multisig, no signer could see what they were actually signing — inputs, not side effects. A simulation tool like YEVM could have fixed that.
 
       We will see those transactions in the live demo.
     </aside>
@@ -275,7 +274,7 @@
     <aside class="notes">
       The starting point is a fine-grained spec covering all state transitions and opcodes. I started with the spec: Yellow Paper plus EIPs. The tricky part is EIPs layering on top of each other at different forks.
 
-      Ethereum GeneralStateTests suite has thousands of test cases. I reached 99.6% pass rate. However, the suite targets Cancun fork, and there have since been two more forks: Prague and Osaka. YAEVMI targets the most recent fork. Now it works against mainnet — that is what matters.
+      Ethereum GeneralStateTests suite has thousands of test cases. I reached 99.6% pass rate. However, the suite targets Cancun fork, and there have since been two more forks: Prague and Osaka. YEVM targets the most recent fork. Now it works against mainnet — that is what matters.
     </aside>
   </section>
 
@@ -283,13 +282,13 @@
     <h3>How? - A/B against revm</h3>
     <ul>
       <li>The revm trace is the source of truth*</li>
-      <li>Run the same tx through YAEVMI and revm</li>
+      <li>Run the same tx through YEVM and revm</li>
       <li>Compare every step: opcode, PC, gas, ...</li>
       <li>Step mismatch → implementations diverge</li>
       <li>Gas + Trace + State match → peace of mind</li>
     </ul>
     <aside class="notes">
-      Each transaction is run through revm and YAEVMI. Then results are compared against onchain tx recipt (gas consumption) and revm trace (at opcode-level) and also revm final tx state. Any mismatch gets investigated. Multiple bugs were found this way, and were fixed in a consistent and reliable way. When all of gas accounting, opcode traces at every step and final state match, I call it peace of mind, as there is nothing more to check.
+      Each transaction is run through revm and YEVM. Then results are compared against onchain tx recipt (gas consumption) and revm trace (at opcode-level) and also revm final tx state. Any mismatch gets investigated. Multiple bugs were found this way, and were fixed in a consistent and reliable way. When all of gas accounting, opcode traces at every step and final state match, I call it peace of mind, as there is nothing more to check.
     </aside>
   </section>
 
@@ -426,10 +425,10 @@
 
 <section class="center">
   <section class="center">
-    <h3>YAEVMI: make yield part of the design</h3>
+    <h3>YEVM: make yield part of the design</h3>
     <ul>
       <li>Solenoid yields to the executor on async fetches</li>
-      <li>YAEVMI returns fetch request, sync execution</li>
+      <li>YEVM returns fetch request, sync execution</li>
       <li>Execution and fetching are decoupled:</li>
       <ul>
         <li>opcode handler is sync (no <code>.await</code>s)</li>
@@ -438,14 +437,14 @@
       </ul>
     </ul>
     <aside class="notes">
-      In YAEVMI, a yield is a situation where the EVM lacks the data it needs. It returns fetch-request and expects the caller to resolve it. So execution and data fetching are fully decoupled. Handlers are sync — no awaits. The executor is async because it needs to actually handle fetch requests to provide necessary data.
+      In YEVM, a yield is a situation where the EVM lacks the data it needs. It returns fetch-request and expects the caller to resolve it. So execution and data fetching are fully decoupled. Handlers are sync — no awaits. The executor is async because it needs to actually handle fetch requests to provide necessary data.
 
       This introduces pending side effects, which need careful management. One complexity traded for another — but worth it, as the benchmarks will show.
     </aside>
   </section>
 
   <section class="center">
-    <h3>YAEVMI: model</h3>
+    <h3>YEVM: model</h3>
     <pre><code class="rust" data-trim data-noescape data-line-numbers="5,12">
 pub struct Call {...} // from, to, gas, data, value
 
@@ -469,7 +468,7 @@ pub type EvmResult&lt;T&gt; = std::result::Result&lt;T, EvmYield&gt;
   </section>
 
   <section class="center">
-    <h3>YAEVMI: dispatch</h3>
+    <h3>YEVM: dispatch</h3>
     <pre><code class="rust" data-trim data-noescape data-line-numbers>
 pub fn dispatch&lt;S: State&gt;(
     op: u8,
@@ -493,7 +492,7 @@ pub fn dispatch&lt;S: State&gt;(
   </section>
 
   <section class="center">
-    <h3>YAEVMI: BALANCE handler</h3>
+    <h3>YEVM: BALANCE handler</h3>
     <pre><code class="rust" data-trim data-noescape data-line-numbers="2-3,5-7">
 pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
     evm.gas_charge(100)?;
@@ -515,7 +514,7 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
   </section>
 
   <section class="center">
-    <h3>YAEVMI: pending state</h3>
+    <h3>YEVM: pending state</h3>
     <p>Opcode handler:</p>
     <ul>
       <li>stores pending state changes</li>
@@ -528,7 +527,7 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
   </section>
 <!--
   <section class="center">
-    <h3>YAEVMI: code</h3>
+    <h3>YEVM: code</h3>
     <pre><code class="rust" data-trim data-noescape data-line-numbers>
     </code></pre>
   </section>
@@ -537,20 +536,20 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
 
 <section class="center">
   <section class="center">
-    <h3>YAEVMI: streaming traces</h3>
+    <h3>YEVM: streaming traces</h3>
     <ul>
       <li>Solenoid collected full per-opcode traces in memory → 55GB for Aztec rollup txs</li>
-      <li>YAEVMI emits trace events as a <strong>stream</strong> — consumer decides what to keep</li>
+      <li>YEVM emits trace events as a <strong>stream</strong> — consumer decides what to keep</li>
       <li>Same observable design, zero memory blowup</li>
       <li>Verified for 5M+ gas transactions with 100k+ steps</li>
     </ul>
     <aside class="notes">
-      Instead of buffering all traces in memory, YAEVMI streams them out. If you do not subscribe, they are not even captured. Zero memory pressure, zero cost when you do not need them.
+      Instead of buffering all traces in memory, YEVM streams them out. If you do not subscribe, they are not even captured. Zero memory pressure, zero cost when you do not need them.
     </aside>
   </section>
 
   <section class="center">
-    <h3>YAEVMI: streaming</h3>
+    <h3>YEVM: streaming</h3>
     <ul>
       <li>Same code needs to work natively and in a browser</li>
       <li>Has to be non-blocking and not use any sync primitives</li>
@@ -562,7 +561,7 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
   </section>
 
   <section class="center">
-    <h3>YAEVMI: streaming</h3>
+    <h3>YEVM: streaming</h3>
     <ul>
       <li>Problem solved: <code>futures::channel::mpsc</code></li>
       <li>Needs explicit yields to reduce memory pressure</li>
@@ -575,7 +574,7 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
   </section>
 
   <section class="center">
-    <h3>YAEVMI: streaming</h3>
+    <h3>YEVM: streaming</h3>
     <!-- TX:0x13e5261de634e59cc3f61254009db5d187f3f1642b29e1c31b4fc4d7105b5c5e -->
     <img src="static/sim11k.png" style="max-height: 50vh; max-width: 100%;" />
     <aside class="notes">
@@ -584,7 +583,7 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
   </section>
 
     <section class="center">
-    <h3>YAEVMI: streaming</h3>
+    <h3>YEVM: streaming</h3>
     <!-- TX:0x2264e99de2d4e4ffac4f197b55129216ec58860f11add0bd448949de2fcfce2a -->
     <img src="static/sim1M.png" style="max-height: 50vh; max-width: 100%;" />
     <aside class="notes">
@@ -595,7 +594,7 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
 
 <section class="center">
   <section class="center">
-    <h3>YAEVMI: results</h3>
+    <h3>YEVM: results</h3>
     <ul>
       <li>99%+ of Ethereum GeneralStateTests (Cancun fork) passing</li>
       <ul>
@@ -614,7 +613,7 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
   </section>
 
   <section class="center">
-    <h3>YAEVMI: benchmarks</h3>
+    <h3>YEVM: benchmarks</h3>
     <p>3 random blocks from mainnet</p>
     <ul>
       <li>B1: Block 24929490 (373 txs, 32 466 055 gas)</li>
@@ -639,17 +638,17 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
   </section>
 
   <section class="center">
-    <h3>YAEVMI in the browser</h3>
+    <h3>YEVM in the browser</h3>
     <p>Live demo: check vitalik.eth USDT balance</p>
 
-    <p><a href="https://sergey-melnychuk.github.io/yaevmi/?call=eyJmcm9tIjoiMHhkOGRBNkJGMjY5NjRhRjlEN2VFZDllMDNFNTM0MTVEMzdhQTk2MDQ1IiwiZ2FzIjoiMHgxODZhMCIsInZhbHVlIjoiMHgwIiwiaW5wdXQiOiIweDcwYTA4MjMxMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwZDhkQTZCRjI2OTY0YUY5RDdlRWQ5ZTAzRTUzNDE1RDM3YUE5NjA0NSIsInRvIjoiMHhkQUMxN0Y5NThEMmVlNTIzYTIyMDYyMDY5OTQ1OTdDMTNEODMxZWM3In0%3D">yaevmi</a></p>
+    <p><a href="https://sergey-melnychuk.github.io/yevm/?call=eyJmcm9tIjoiMHhkOGRBNkJGMjY5NjRhRjlEN2VFZDllMDNFNTM0MTVEMzdhQTk2MDQ1IiwiZ2FzIjoiMHgxODZhMCIsInZhbHVlIjoiMHgwIiwiaW5wdXQiOiIweDcwYTA4MjMxMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwZDhkQTZCRjI2OTY0YUY5RDdlRWQ5ZTAzRTUzNDE1RDM3YUE5NjA0NSIsInRvIjoiMHhkQUMxN0Y5NThEMmVlNTIzYTIyMDYyMDY5OTQ1OTdDMTNEODMxZWM3In0%3D">yevm</a></p>
     <img src="static/usdt1.png" style="width: 100%; max-width: 500px; border-radius: 10px; margin: 20px auto;" />
 
     <p><a href="https://etherscan.io/token/0xdAC17F958D2ee523a2206206994597C13D831ec7?a=0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045#balances">etherscan</a></p>
     <img src="static/usdt2.png" style="width: 100%; max-width: 500px; border-radius: 10px; margin: 20px auto;" />
 
     <aside class="notes">
-      Here is YAEVMI running in the browser. This call queries the USDT balance of vitalik.eth against the live Ethereum state.
+      Here is YEVM running in the browser. This call queries the USDT balance of vitalik.eth against the live Ethereum state.
 
       The EVM executes the balanceOf call against the USDT contract — and here is the result. Let's confirm on Etherscan.
 
@@ -658,8 +657,8 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
   </section>
 
   <section class="center">
-    <h3>YAEVMI in the browser</h3>
-    <p>ByBit hack: Impl Swap TX (<a href="https://sergey-melnychuk.github.io/yaevmi/?tx=0x46deef0f52e3a983b67abf4714448a41dd7ffd6d32d32da69d62081c68ad7882">21895238:116</a>)</p>
+    <h3>YEVM in the browser</h3>
+    <p>ByBit hack: Impl Swap TX (<a href="https://sergey-melnychuk.github.io/yevm/?tx=0x46deef0f52e3a983b67abf4714448a41dd7ffd6d32d32da69d62081c68ad7882">21895238:116</a>)</p>
     <img src="static/tx0.png" style="max-height: 50vh; max-width: 100%;" />
     <aside class="notes">
       Now the ByBit hack. First transaction: the implementation swap. Three ecRecover calls — three signatures — then a delegatecall that substitutes the proxy destination address. Slot zero gets overwritten. Plain to see in the trace. This is actually 'game over', but the actual drain happens in the second transaction.
@@ -667,8 +666,8 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
   </section>
 
   <section class="center">
-    <h3>YAEVMI in the browser</h3>
-    <p>ByBit hack: Drain ETH TX (<a href="https://sergey-melnychuk.github.io/yaevmi/?tx=0xb61413c495fdad6114a7aa863a00b2e3c28945979a10885b12b30316ea9f072c">21895251:35</a>)</p>
+    <h3>YEVM in the browser</h3>
+    <p>ByBit hack: Drain ETH TX (<a href="https://sergey-melnychuk.github.io/yevm/?tx=0xb61413c495fdad6114a7aa863a00b2e3c28945979a10885b12b30316ea9f072c">21895251:35</a>)</p>
     <img src="static/tx1.png" style="max-height: 50vh; max-width: 100%;" />
     <aside class="notes">
       Second transaction: the drain. sweepETH is called. 400,000 ETH lands in the attacker's wallet. Exchange drained. All of this could have been prevented if signers were shown side effects, not intents.
@@ -689,7 +688,7 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
   <p>Learn more</p>
   <ul>
     <li><a href="https://www.evm.codes">EVM.codes</a></li>
-    <li><a href="https://github.com/sergey-melnychuk/yaevmi">https://github.com/sergey-melnychuk/yaevmi</a></li>
+    <li><a href="https://github.com/sergey-melnychuk/yevm">https://github.com/sergey-melnychuk/yevm</a></li>
     <li><a href="https://sergey-melnychuk.github.io/2026/03/07/evm-reentrancy/">Solenoid: EVM Reentrancy Attack Simulation</a></li>
   </ul>
   <aside class="notes">
@@ -705,7 +704,7 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
     <h2>Q&A</h2>
     <!-- 
       brew install qrencode
-      qrencode -t SVG -o static/qr.svg 'https://sergey-melnychuk.github.io/yaevmi'
+      qrencode -t SVG -o static/qr.svg 'https://sergey-melnychuk.github.io/yevm'
      -->
     <img src="static/qr.svg" style="width: 40vh; height: 40vh;" />
     <p class="dim">Thank you!</p>
@@ -728,10 +727,10 @@ pub fn balance&lt;S: State&gt;(evm: &mut Evm, state: &mut S) -> EvmResult<()> {
   <h3>Extra</h3>
   <p>EVM edge cases:</p>
   <ul>
-    <li><a href="https://sergey-melnychuk.github.io/yaevmi/?tx=0x5160e194d799d854b358f9c7692c56e0531f3abe1e1f52fb36dd95b35d37ae28">CREATE2 collision</a></li>
-    <li><a href="https://sergey-melnychuk.github.io/yaevmi/?tx=0x8df37a0246d1cd6c0673082d180c029d000900c93880a755e57de2df6ebd9dce">SELFDESTRUCT</a></li>
-    <li><a href="https://sergey-melnychuk.github.io/yaevmi/?tx=0x931a9431783998415cf4808ce25fc3561ab0cd406af53c9aa334798737008c60">block vs single</a></li>
-    <li><a href="https://sergey-melnychuk.github.io/yaevmi/?tx=0xaa1f07fb1aadd7b0372987c31315a048e47fa2a7aa7068f665c17f264b60285a">OOG & revert</a></li>
+    <li><a href="https://sergey-melnychuk.github.io/yevm/?tx=0x5160e194d799d854b358f9c7692c56e0531f3abe1e1f52fb36dd95b35d37ae28">CREATE2 collision</a></li>
+    <li><a href="https://sergey-melnychuk.github.io/yevm/?tx=0x8df37a0246d1cd6c0673082d180c029d000900c93880a755e57de2df6ebd9dce">SELFDESTRUCT</a></li>
+    <li><a href="https://sergey-melnychuk.github.io/yevm/?tx=0x931a9431783998415cf4808ce25fc3561ab0cd406af53c9aa334798737008c60">block vs single</a></li>
+    <li><a href="https://sergey-melnychuk.github.io/yevm/?tx=0xaa1f07fb1aadd7b0372987c31315a048e47fa2a7aa7068f665c17f264b60285a">OOG & revert</a></li>
   </ul>
 </section>
  -->

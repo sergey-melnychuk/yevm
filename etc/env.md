@@ -24,11 +24,11 @@ sudo apt install -y build-essential libssl-dev pkg-config
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 . "$HOME/.cargo/env"
 
-git clone https://github.com/sergey-melnychuk/yaevmi.git -b wtf
-cd yaevmi
+git clone https://github.com/sergey-melnychuk/yevm.git -b wtf
+cd yevm
 
 export URL=
-echo "YAEVMI_RPC_URL=$URL" > .env
+echo "YEVM_RPC_URL=$URL" > .env
 
 cargo build --release --bin replay
 cargo build --release --bin bench

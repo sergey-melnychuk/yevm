@@ -1,0 +1,28 @@
+[package]
+name = "yevm-gate"
+version = "0.1.0"
+edition = "2024"
+description = "Local RPC proxy that intercepts eth_sendRawTransaction, simulates locally with YEVM, and holds the transaction until the owner approves the decoded side effects."
+license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
+repository = "https://github.com/sergey-melnychuk/yevm"
+keywords = ["ethereum", "evm", "security", "wallet", "rpc"]
+categories = ["cryptography::cryptocurrencies", "web-programming::http-server"]
+
+[dependencies]
+yevm-base = { workspace = true }
+yevm-core = { workspace = true }
+yevm-misc = { workspace = true }
+eyre = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+hex = { workspace = true }
+k256 = { workspace = true }
+futures = { workspace = true }
+tokio = { version = "1", features = ["full"] }
+rand = "0.8"
+axum = "0.8"
+dotenvy = "0.15"
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "macros"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -1,0 +1,30 @@
+[package]
+name = "yevm-test"
+version = "0.1.0"
+edition = "2024"
+description = "Internal test harness and revm cross-validation for YEVM."
+license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
+repository = "https://github.com/sergey-melnychuk/yevm"
+publish = false
+
+[dependencies]
+eyre.workspace = true
+async-trait.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+yevm-base.workspace = true
+yevm-core.workspace = true
+yevm-misc.workspace = true
+
+revm = { version = "36.0", features = ["alloydb"] }
+alloy-eip7702 = { version = "0.6.3", features = ["k256"] }
+alloy-primitives = { version = "1.5", default-features = false, features = ["rlp"] }
+alloy-provider = { version = "1.0", default-features = true }
+tokio = { version = "1.50", features = ["full"] }
+futures = "0.3"
+dotenv = "0.15"
+
+[dev-dependencies]
+k256 = { version = "0.13", features = ["ecdsa"] }
+pretty_assertions = "1.4"

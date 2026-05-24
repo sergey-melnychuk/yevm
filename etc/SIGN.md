@@ -23,7 +23,7 @@ Dapp
   ▼
 dryrun (mobile app)
   ├── WalletConnect session management
-  ├── yaevmi-core (via UniFFI) ← simulation engine
+  ├── yevm-core (via UniFFI) ← simulation engine
   │     └── full EVM execution against live chain state (RPC)
   ├── simulation UI (side-effects: storage, balances, logs, reverts)
   └── key management (BIP39/BIP32, Keychain/Keystore)
@@ -35,11 +35,11 @@ dryrun (mobile app)
 ## Stack
 
 - **App**: React Native (iOS + Android from one codebase)
-- **Simulation engine**: `yaevmi-core` compiled via UniFFI → Swift/Kotlin bindings
+- **Simulation engine**: `yevm-core` compiled via UniFFI → Swift/Kotlin bindings
 - **Dapp connectivity**: WalletConnect v2 (`@walletconnect/web3wallet`)
 - **Key management**: `coins-bip39` + `coins-bip32` + `k256` (Rust)
 - **Secure storage**: iOS Keychain / Android Keystore (platform-native, hardware-backed)
-- **RPC**: user-configured endpoint (same as yaevmi browser tool)
+- **RPC**: user-configured endpoint (same as yevm browser tool)
 
 ## Key Management
 
@@ -56,7 +56,7 @@ Signing happens in Rust (k256), keys never cross the UniFFI boundary in plaintex
 
 1. Dapp sends `eth_sendTransaction` params via WalletConnect
 2. dryrun receives unsigned `{from, to, value, data, gas}`
-3. yaevmi-core simulates against current chain state (RPC fetch)
+3. yevm-core simulates against current chain state (RPC fetch)
 4. UI shows full side-effects:
    - Storage slot changes (address, slot, old → new)
    - Balance deltas (ETH + ERC-20)
@@ -81,7 +81,7 @@ Signing happens in Rust (k256), keys never cross the UniFFI boundary in plaintex
 - [ ] Forward to sign + broadcast after approval
 
 ### Phase 3 — Simulation
-- [ ] yaevmi-core compiled for iOS (`aarch64-apple-ios`) and Android (`aarch64-linux-android`)
+- [ ] yevm-core compiled for iOS (`aarch64-apple-ios`) and Android (`aarch64-linux-android`)
 - [ ] UniFFI simulation interface: `simulate(rpc_url, tx_params) → SideEffects`
 - [ ] Simulation UI: storage diffs, balance changes, call tree, logs
 - [ ] Revert detection and reason decoding

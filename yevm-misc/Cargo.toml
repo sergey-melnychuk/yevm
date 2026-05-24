@@ -1,0 +1,23 @@
+[package]
+name = "yevm-misc"
+version = "0.1.0"
+edition = "2024"
+description = "Utilities (keccak256, hex, HTTP client, byte buffer) shared across the YEVM crates."
+license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
+repository = "https://github.com/sergey-melnychuk/yevm"
+keywords = ["ethereum", "evm", "utility"]
+categories = ["cryptography::cryptocurrencies"]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+keccak-asm.workspace = true
+eyre.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+tiny-keccak.workspace = true
+eyre.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true

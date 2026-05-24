@@ -41,14 +41,14 @@ jobs:
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: Build WASM
-        run: wasm-pack build --release --target web yaevmi-wasm
+        run: wasm-pack build --release --target web yevm-wasm
 
       - name: Assemble deploy directory
         run: |
           mkdir -p public/pkg
-          cp yaevmi-wasm/index.html public/
-          cp yaevmi-wasm/pkg/yaevmi_wasm.js public/pkg/
-          cp yaevmi-wasm/pkg/yaevmi_wasm_bg.wasm public/pkg/
+          cp yevm-wasm/index.html public/
+          cp yevm-wasm/pkg/yevm_wasm.js public/pkg/
+          cp yevm-wasm/pkg/yevm_wasm_bg.wasm public/pkg/
 
       - name: Include deck (public branch only)
         if: github.ref_name == 'public'

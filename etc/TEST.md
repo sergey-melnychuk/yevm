@@ -3,7 +3,7 @@
 cargo test
 
 ## Run GeneralStateTests suite (release)
-cargo test -p yaevmi-test --release --tests eth -- --ignored
+cargo test -p yevm-test --release --tests eth -- --ignored
 ```
 
 ```

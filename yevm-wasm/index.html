@@ -1,0 +1,2300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YEVM — EVM Simulator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    /* ── Tokens ────────────────────────────────────── */
+    :root {
+      --bg:         #07090f;
+      --surface:    rgba(255,255,255,0.04);
+      --surface2:   rgba(255,255,255,0.07);
+      --border:     rgba(255,255,255,0.09);
+      --primary:    #FF6B35;
+      --secondary:  #7C3AED;
+      --accent:     #06B6D4;
+      --good:       #4ADE80;
+      --bad:        #F87171;
+      --warn:       #FBBF24;
+      --text:       #CBD5E1;
+      --text-dim:   #475569;
+      --text-b:     #F1F5F9;
+      --radius:     12px;
+      --radius-sm:  6px;
+      --font:       'Inter', system-ui, sans-serif;
+      --mono:       'JetBrains Mono', monospace;
+    }
+
+    /* ── Reset ─────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    /* Ambient blobs */
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background:
+        radial-gradient(ellipse 60% 50% at 10% 0%,   rgba(124,58,237,0.12) 0%, transparent 60%),
+        radial-gradient(ellipse 50% 40% at 90% 100%,  rgba(255,107,53,0.09) 0%, transparent 60%),
+        radial-gradient(ellipse 40% 50% at 55% 50%,   rgba(6,182,212,0.05) 0%, transparent 60%);
+      pointer-events: none; z-index: 0;
+    }
+
+    body::after {
+      content: '';
+      position: fixed; inset: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.011) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.011) 1px, transparent 1px);
+      background-size: 60px 60px;
+      pointer-events: none; z-index: 0;
+    }
+
+    /* ── Layout ────────────────────────────────────── */
+    #app {
+      position: relative; z-index: 1;
+      max-width: 860px;
+      margin: 0 auto;
+      padding: clamp(16px, 4vw, 40px) clamp(12px, 4vw, 24px) 80px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* ── Card ──────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      padding: clamp(16px, 3vw, 28px);
+      box-shadow: 0 24px 48px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.07);
+    }
+
+    /* ── Header ────────────────────────────────────── */
+    .header {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .header h1 {
+      font-size: clamp(1.4em, 3.5vw, 1.9em);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      color: var(--text-b);
+    }
+
+    .header h1 span { color: var(--primary); }
+
+    /* ── Form ──────────────────────────────────────── */
+    .form-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    label {
+      font-size: 0.75em;
+      font-weight: 600;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+    }
+
+    input[type="text"], input[type="url"] {
+      background: rgba(0,0,0,0.35);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text-b);
+      font-family: var(--mono);
+      font-size: 0.82em;
+      padding: 10px 14px;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      width: 100%;
+    }
+
+    input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(6,182,212,0.15);
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .btn-main {
+      width: 100px;
+    }
+
+
+    button {
+      font-family: var(--font);
+      font-size: 0.85em;
+      font-weight: 600;
+      border: none;
+      border-radius: var(--radius-sm);
+      padding: 10px 22px;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s;
+      user-select: none;
+    }
+
+    button:active { transform: scale(0.97); }
+    button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--primary), #FF9055);
+      color: #fff;
+    }
+
+    .btn-secondary {
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover:not(:disabled) { background: rgba(255,255,255,0.1); }
+
+    /* ── Status bar ────────────────────────────────── */
+    #status-bar {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.82em;
+      margin-left: 4px;
+    }
+
+    #status-bar.visible { display: flex; }
+
+    .spinner {
+      width: 14px; height: 14px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      flex-shrink: 0;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #status-text { color: var(--text-dim); }
+    #step-counter { color: var(--accent); font-family: var(--mono); font-weight: 600; }
+    #elapsed { color: var(--text-dim); font-family: var(--mono); }
+
+    /* ── Modal ─────────────────────────────────────── */
+    /* ── Events modal ─────────────────────────────── */
+    #events-overlay {
+      display: none;
+      position: fixed; inset: 0;
+      z-index: 100;
+      background: rgba(0,0,0,0.7);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      align-items: stretch;
+      justify-content: center;
+      padding: 20px;
+    }
+    #events-overlay.visible { display: flex; }
+
+    #events-modal {
+      background: #0b0e1a;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 32px 64px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.06);
+      padding: 24px 20px 20px;
+      width: 100%;
+      max-width: 1400px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      animation: modal-in 0.18s ease;
+    }
+
+    #events-modal #events-list {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: auto;
+    }
+
+    #events-modal .ev-body {
+      overflow: visible;
+      text-overflow: unset;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+
+    .btn-events {
+      background: rgba(56,189,248,0.12);
+      color: #38BDF8;
+      border: 1px solid rgba(56,189,248,0.3);
+      border-radius: var(--radius-sm);
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .btn-events:hover:not(:disabled) { background: rgba(56,189,248,0.2); border-color: rgba(56,189,248,0.5); }
+    .btn-events:disabled { opacity: 0.35; cursor: default; }
+
+    .btn-call {
+      background: rgba(74,222,128,0.1);
+      color: #4ADE80;
+      border: 1px solid rgba(74,222,128,0.3);
+      border-radius: var(--radius-sm);
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .btn-call:hover:not(:disabled) { background: rgba(74,222,128,0.2); border-color: rgba(74,222,128,0.5); }
+    .btn-call:disabled { opacity: 0.35; cursor: default; }
+
+    .chk-label {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-family: var(--font);
+      font-size: 0.85em;
+      font-weight: 600;
+      color: #FBBF24;
+      background: rgba(251,191,36,0.1);
+      border: 1px solid rgba(251,191,36,0.3);
+      border-radius: var(--radius-sm);
+      padding: 10px 22px;
+      line-height: normal;
+      text-transform: none;
+      letter-spacing: normal;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.15s, border-color 0.15s;
+      white-space: nowrap;
+    }
+    .chk-label:hover { background: rgba(251,191,36,0.2); border-color: rgba(251,191,36,0.5); }
+    .chk-label:has(input:disabled) { opacity: 0.4; cursor: not-allowed; }
+    .chk-label:has(input:checked) {
+      background: rgba(251,191,36,0.22);
+      border-color: rgba(251,191,36,0.6);
+    }
+    .chk-label input[type="checkbox"] {
+      accent-color: #FBBF24;
+      width: 13px;
+      height: 13px;
+      cursor: pointer;
+    }
+
+    #call-modal { max-width: 560px; }
+    #call-modal .form-grid { gap: 10px; }
+
+    #modal-overlay {
+      display: none;
+      position: fixed; inset: 0;
+      z-index: 100;
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    #modal-overlay.visible { display: flex; }
+
+    #modal {
+      background: #0f1320;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 32px 64px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.08);
+      padding: 28px;
+      width: 100%;
+      max-width: 480px;
+      animation: modal-in 0.18s ease;
+    }
+
+    @keyframes modal-in {
+      from { opacity: 0; transform: translateY(-12px) scale(0.98); }
+      to   { opacity: 1; transform: none; }
+    }
+
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+    }
+
+    .modal-title {
+      font-size: 0.85em;
+      font-weight: 700;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+    }
+
+    .modal-close {
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      font-size: 1.3em;
+      line-height: 1;
+      padding: 2px 6px;
+      cursor: pointer;
+      border-radius: var(--radius-sm);
+      transition: color 0.15s, background 0.15s;
+    }
+
+    .modal-close:hover { color: var(--text-b); background: var(--surface2); }
+    .modal-close:active { transform: none; }
+
+    .modal-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .modal-footer button { min-width: 90px; }
+
+    /* ── Result card ───────────────────────────────── */
+    #result-card { display: none; }
+    #result-card.visible { display: block; }
+
+    .result-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(90px, max-content));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .stat-box {
+      background: rgba(0,0,0,0.25);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 12px 14px;
+    }
+
+    .stat-box .stat-label {
+      font-size: 0.68em;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 4px;
+    }
+
+    .stat-box .stat-value {
+      font-family: var(--mono);
+      font-size: 1.05em;
+      font-weight: 600;
+      color: var(--text-b);
+    }
+
+    .stat-box .stat-value.ok   { color: var(--good); }
+    .stat-box .stat-value.fail { color: var(--bad); }
+
+    .tx-hash {
+      font-family: var(--mono);
+      font-size: 0.75em;
+      color: var(--text-dim);
+      word-break: break-all;
+      margin-bottom: 16px;
+    }
+
+    .tx-hash a {
+      color: var(--accent);
+      text-decoration: none;
+      border-bottom: 1px solid rgba(6,182,212,0.3);
+    }
+
+    /* ── Opcode table ──────────────────────────────── */
+    #ops-card { display: none; }
+    #ops-card.visible { display: block; }
+
+    .card-title {
+      font-size: 0.72em;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 14px;
+    }
+
+    .ops-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+      gap: 6px;
+    }
+
+    .op-chip {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(0,0,0,0.3);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 5px 10px;
+      font-size: 0.75em;
+      gap: 6px;
+    }
+
+    .op-name {
+      font-family: var(--mono);
+      font-weight: 600;
+      color: var(--text-b);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .op-count {
+      font-family: var(--mono);
+      color: var(--text-dim);
+      flex-shrink: 0;
+    }
+
+    /* Opcode group colors */
+    .op-chip[data-group="flow"]    { border-color: rgba(251,191,36,0.25); }
+    .op-chip[data-group="flow"]    .op-name { color: var(--warn); }
+    .op-chip[data-group="storage"] { border-color: rgba(255,107,53,0.25); }
+    .op-chip[data-group="storage"] .op-name { color: var(--primary); }
+    .op-chip[data-group="call"]    { border-color: rgba(124,58,237,0.35); }
+    .op-chip[data-group="call"]    .op-name { color: #A78BFA; }
+    .op-chip[data-group="math"]    { border-color: rgba(6,182,212,0.2); }
+    .op-chip[data-group="math"]    .op-name { color: var(--accent); }
+    .op-chip[data-group="halt"]    { border-color: rgba(248,113,113,0.3); }
+    .op-chip[data-group="halt"]    .op-name { color: var(--bad); }
+
+    /* ── Error ─────────────────────────────────────── */
+    #error-card { display: none; }
+    #error-card.visible { display: block; }
+
+    .error-msg {
+      font-family: var(--mono);
+      font-size: 0.8em;
+      color: var(--bad);
+      background: rgba(248,113,113,0.08);
+      border: 1px solid rgba(248,113,113,0.25);
+      border-radius: var(--radius-sm);
+      padding: 12px 14px;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    /* ── Events log ────────────────────────────────── */
+
+    #events-list {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      font-family: var(--mono);
+      font-size: 0.74em;
+    }
+
+    /* ev-wrap: outer block that holds the row line + optional data block */
+    .ev-wrap { border-radius: 4px; }
+    .ev-wrap.ev-has-data { cursor: pointer; }
+    .ev-wrap.ev-has-data:hover .ev-row { background: rgba(255,255,255,0.06); }
+
+    .ev-row {
+      display: flex;
+      align-items: stretch;
+      min-height: 1.6em;
+      border-radius: 4px;
+    }
+    .ev-row:hover { background: rgba(255,255,255,0.04); }
+
+    .ev-indent {
+      display: inline-block;
+      width: 20px;
+      min-width: 20px;
+      border-left: 3px solid currentColor;
+      opacity: 0.45;
+      flex-shrink: 0;
+    }
+
+    .ev-main {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .ev-content {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 2px 6px;
+    }
+
+    .ev-hex-hint {
+      font-size: 0.75em;
+      color: #94A3B8;
+      margin-left: 6px;
+    }
+    .ev-hex-data {
+      display: none;
+      padding: 4px 8px 5px calc(7.5em + 14px);
+      background: rgba(255,255,255,0.03);
+      border-top: 1px solid rgba(255,255,255,0.04);
+      color: var(--text-dim);
+      word-break: break-all;
+      white-space: normal;
+      font-size: 0.85em;
+    }
+    .ev-wrap.ev-open .ev-hex-data { display: block; }
+    .ev-data-row {
+      display: flex;
+      gap: 10px;
+      padding: 1px 0;
+    }
+    .ev-data-label {
+      flex-shrink: 0;
+      width: 7em;
+      color: rgba(255,255,255,0.35);
+      text-align: right;
+    }
+    .ev-data-val { white-space: normal; word-break: break-all; }
+    .ev-sig-head { color: #A78BFA; font-weight: 600; padding: 1px 0; }
+    .ev-addr-label {
+      font-size: 0.72em;
+      font-weight: 600;
+      color: #0F172A;
+      background: #8B5CF6;
+      border-radius: 3px;
+      padding: 1px 5px;
+      margin-left: 6px;
+      margin-right: 4px;
+      vertical-align: middle;
+      letter-spacing: 0.02em;
+    }
+    .ev-addr-label.clone      { background: #0891B2; } /* cyan   — EIP-1167 clone */
+    .ev-addr-label.delegate   { background: #059669; } /* green  — EIP-7702 delegate */
+    .ev-addr-label.precompile { background: #B45309; } /* amber  — precompile */
+    .ev-diff-pos { color: #4ADE80; }
+    .ev-diff-neg { color: #F87171; }
+
+    .ev-kind {
+      font-weight: 700;
+      width: 7.5em;
+      flex-shrink: 0;
+      letter-spacing: 0.02em;
+    }
+
+    .ev-body {
+      color: var(--text-b);
+      white-space: normal;
+      overflow-wrap: anywhere;
+      min-width: 0;
+      flex: 1;
+      opacity: 0.8;
+    }
+
+    .ev-undo {
+      font-size: 0.85em;
+      color: var(--bad);
+      opacity: 0.8;
+      margin-left: 4px;
+      flex-shrink: 0;
+      cursor: default;
+    }
+
+    /* Frame events */
+    .ev-wrap[data-kind="Call"]   .ev-row { background: rgba(167,139,250,0.06); margin-top: 2px; }
+    .ev-wrap[data-kind="Return"] .ev-row { background: rgba(74,222,128,0.04); }
+    .ev-wrap[data-kind="Revert"] .ev-row { background: rgba(248,113,113,0.06); }
+    .ev-wrap[data-kind="Halt"]   .ev-row { background: rgba(248,113,113,0.06); }
+    .ev-wrap[data-kind="Call"]   .ev-kind { color: #A78BFA; }
+    .ev-wrap[data-kind="Return"] .ev-kind { color: var(--good); }
+    .ev-wrap[data-kind="Revert"] .ev-kind { color: var(--bad); }
+    .ev-wrap[data-kind="Halt"]   .ev-kind { color: var(--bad); }
+    .ev-wrap[data-cat="write"]   .ev-kind { color: #FB923C; }
+    .ev-wrap[data-cat="read"]    .ev-kind { color: #38BDF8; }
+    .ev-wrap[data-kind="Create"] .ev-kind { color: var(--accent); }
+    .ev-wrap[data-kind="Delete"] .ev-kind { color: var(--warn); }
+    .ev-wrap[data-kind="Move"]   .ev-kind { color: var(--warn); }
+    .ev-wrap[data-kind="Log"]    .ev-kind { color: var(--primary); }
+    .ev-wrap[data-kind="Fee"]    .ev-kind { color: var(--text-dim); }
+    .ev-wrap[data-kind="Hash"]   .ev-kind { color: #94A3B8; }
+    .ev-wrap[data-kind="Step"]   .ev-kind { color: var(--text-dim); font-weight: 500; }
+    .ev-wrap[data-kind="Step"] { font-size: 1.2em; }
+
+    .ev-wrap.ev-reverted .ev-body   { opacity: 0.4; text-decoration: line-through; }
+    .ev-wrap.ev-reverted .ev-indent { opacity: 0.1; }
+
+    .ev-token { border-radius: 2px; }
+    .ev-token:hover { background: rgba(255,255,255,0.08); cursor: default; }
+    .ev-token.ev-hl {
+      background: rgba(251,191,36,0.28);
+      outline: 1px solid rgba(251,191,36,0.55);
+      border-radius: 2px;
+    }
+
+    .ev-wrap[data-depth="1"] .ev-row { background: rgba(167,139,250,0.04); }
+    .ev-wrap[data-depth="2"] .ev-row { background: rgba(56,189,248,0.04); }
+    .ev-wrap[data-depth="3"] .ev-row { background: rgba(74,222,128,0.04); }
+    .ev-wrap[data-depth="4"] .ev-row { background: rgba(251,191,36,0.04); }
+    .ev-wrap[data-depth="5"] .ev-row { background: rgba(251,146,60,0.04); }
+    .ev-wrap[data-depth="6"] .ev-row { background: rgba(244,114,182,0.04); }
+
+    .ev-sep {
+      height: 1px;
+      background: rgba(255,255,255,0.08);
+      margin: 6px 0;
+    }
+
+    /* ── Analysis card ────────────────────────────── */
+    #analysis-card { display: none; }
+    #analysis-card.visible { display: block; }
+
+    .an-section { margin-bottom: 14px; }
+    .an-section:last-child { margin-bottom: 0; }
+    .an-section-title {
+      font-size: 0.68em;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 6px;
+    }
+    .an-row {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      padding: 9px 12px;
+      border-radius: var(--radius-sm);
+      font-family: var(--mono);
+      font-size: 0.78em;
+      margin-bottom: 4px;
+    }
+    .an-row.warn    { background: rgba(248,113,113,0.08); border: 1px solid rgba(248,113,113,0.3); }
+    .an-row.caution { background: rgba(251,191,36,0.07);  border: 1px solid rgba(251,191,36,0.25); }
+    .an-row.neutral { background: rgba(0,0,0,0.2);        border: 1px solid var(--border); }
+    .an-label {
+      font-size: 0.72em;
+      font-weight: 700;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+    .an-label.red  { color: var(--bad); }
+    .an-label.yel  { color: var(--warn); }
+    .an-label.dim  { color: var(--text-dim); }
+    .an-addr  { color: var(--text-dim); }
+    .an-val   { color: var(--text-b); }
+    .an-val.new { color: var(--bad); }
+    .an-pos   { color: var(--good); }
+    .an-neg   { color: var(--bad); }
+
+    /* ── Footer ────────────────────────────────────── */
+    footer {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      z-index: 10;
+      text-align: center;
+      padding: 10px;
+      font-size: 0.72em;
+      color: var(--text-dim);
+      background: linear-gradient(transparent, rgba(7,9,15,0.95));
+    }
+
+    footer a { color: var(--accent); text-decoration: none; }
+
+    /* ── Mobile ────────────────────────────────────── */
+    @media (max-width: 500px) {
+      .ops-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
+      .result-grid { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Events modal -->
+<div id="events-overlay">
+  <div id="events-modal">
+    <div class="modal-header">
+      <span class="modal-title">Execution Trace</span>
+      <button class="modal-close" id="events-close" aria-label="Close">✕</button>
+    </div>
+    <div id="events-list"></div>
+  </div>
+</div>
+
+<!-- Endpoint modal -->
+<div id="modal-overlay">
+  <div id="modal">
+    <div class="modal-header">
+      <span class="modal-title">RPC Endpoint</span>
+      <button class="modal-close" id="modal-close" aria-label="Close">✕</button>
+    </div>
+    <div class="field">
+      <label>URL</label>
+      <input type="url" id="rpc-url" value="https://ethereum-rpc.publicnode.com" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" id="modal-cancel">Cancel</button>
+      <button class="btn-primary"   id="modal-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Call modal -->
+<div id="call-overlay" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,0.6);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);align-items:center;justify-content:center;padding:20px;">
+  <div id="call-modal" class="card" style="width:100%;max-width:560px;animation:modal-in 0.18s ease;">
+    <div class="modal-header">
+      <span class="modal-title">Custom Call</span>
+      <button class="modal-close" id="call-close" aria-label="Close">✕</button>
+    </div>
+    <div class="form-grid" id="call-form">
+      <div class="field">
+        <label>From (address)</label>
+        <input type="text" id="call-from" placeholder="0x…" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label>To (address, blank = CREATE)</label>
+        <input type="text" id="call-to" placeholder="0x…" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label>Gas limit</label>
+        <input type="text" id="call-gas" placeholder="1000000" value="1000000" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label>Value (wei)</label>
+        <input type="text" id="call-value" placeholder="0" value="0" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label>Calldata (hex)</label>
+        <input type="text" id="call-data" placeholder="0x" value="0x" autocomplete="off" spellcheck="false">
+      </div>
+    </div>
+    <div class="modal-footer" style="justify-content:space-between;">
+      <button class="btn-secondary" id="call-copylink">Copy Link</button>
+      <div style="display:flex;gap:10px;">
+        <button class="btn-secondary" id="call-cancel">Cancel</button>
+        <button class="btn-call" id="call-submit">Simulate</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="app">
+  <!-- Header -->
+  <div class="header">
+    <h1>YA<span>EVM</span>I</h1>
+  </div>
+
+  <!-- Input form -->
+  <div class="card" id="form-card">
+    <div class="form-grid">
+      <div class="field">
+        <label>Transaction — hash or block:index</label>
+        <input type="text" id="txn-inp" placeholder="0x… or 21895238:116" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="btn-row">
+        <button class="btn-primary  btn-main" id="btn-run">Simulate</button>
+        <label class="chk-label btn-main" title="Pre-execute all prior transactions in the block before this one">
+          <input type="checkbox" id="chk-block"> Block
+        </label>
+        <button class="btn-secondary btn-main" id="btn-rnd">Random</button>
+        <button class="btn-secondary btn-main" id="btn-endpoint">Endpoint</button>
+        <button class="btn-call     btn-main" id="btn-call">Custom</button>
+        <button class="btn-events    btn-main" id="btn-events" disabled>Tracing</button>
+        <div id="status-bar">
+          <div class="spinner"></div>
+          <span id="status-text">Running…</span>
+          <span id="step-counter"></span>
+          <span id="elapsed"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Error -->
+  <div class="card" id="error-card">
+    <div class="card-title">Error</div>
+    <div class="error-msg" id="error-msg"></div>
+  </div>
+
+  <!-- Result -->
+  <div class="card" id="result-card">
+    <div class="card-title">Result</div>
+    <div class="tx-hash" id="result-tx"></div>
+    <div class="result-grid" id="result-grid"></div>
+  </div>
+
+  <!-- Side-effect analysis -->
+  <div class="card" id="analysis-card">
+    <div class="card-title">Side Effects</div>
+    <div id="analysis-content"></div>
+  </div>
+
+  <!-- Opcode frequency -->
+  <div class="card" id="ops-card">
+    <div class="card-title">Opcodes <span id="ops-steps"></span></div>
+    <div class="ops-grid" id="ops-grid"></div>
+  </div>
+</div>
+
+<footer>
+  <a href="https://github.com/sergey-melnychuk/yevm">github.com/sergey-melnychuk/yevm</a>
+</footer>
+
+<script type="module">
+import init, { pick, empty, run, run_with_block, simulate, analyse as wasm_analyse } from './pkg/yevm_wasm.js';
+await init();
+
+/* ── Filter constants (mirror trace::filter) ──────────────── */
+const F = {
+  STEP:       1 << 0,
+  CALL:       1 << 1,
+  RETURN:     1 << 2,
+  REVERT:     1 << 3,
+  HALT:       1 << 4,
+  GET:        1 << 5,
+  PUT:        1 << 6,
+  LOG:        1 << 7,
+  CREATE:     1 << 8,
+  DELETE:     1 << 9,
+  MOVE:       1 << 10,
+  FEE:        1 << 11,
+  HASH:       1 << 12,
+  CODE:       1 << 13,
+};
+F.TOP        = F.CALL | F.RETURN | F.REVERT | F.HALT | F.CREATE | F.DELETE | F.LOG | F.FEE | F.GET | F.PUT | F.HASH | F.CODE;
+F.ALL        = 0xFFFFFFFF;
+
+/* ── ERC-20 log topics ─────────────────────────────────────── */
+const TOPIC_TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+const TOPIC_APPROVAL = '0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925';
+
+/* ── Known addresses ───────────────────────────────────────── */
+const KNOWN_ADDRS = {
+  '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2': 'WETH',
+  '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48': 'USDC',
+  '0xdac17f958d2ee523a2206206994597c13d831ec7': 'USDT',
+  '0x6b175474e89094c44da98b954eedeac495271d0f': 'DAI',
+  '0x2260fac5e5542a773aa44fbcfedf7c193bc2c599': 'WBTC',
+  '0x1f9840a85d5af5bf1d1762f925bdaddc4201f984': 'UNI',
+  '0x7fc66500c84a76ad7e9c93437bfc5ac33e2ddae9': 'AAVE',
+  '0x514910771af9ca656af840dff83e8264ecf986ca': 'LINK',
+  '0x7a250d5630b4cf539739df2c5dacb4c659f2488d': 'Uniswap V2 Router',
+  '0xe592427a0aece92de3edee1f18e0157c05861564': 'Uniswap V3 Router',
+  '0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45': 'Uniswap V3 Router2',
+  '0x1111111254eeb25477b68fb85ed929f73a960582': '1inch V5',
+  '0x881d40237659c251811cec9c364ef91dc08d300c': 'Metamask Swap',
+  '0x00000000219ab540356cbb839cbe05303d7705fa': 'ETH2 Deposit',
+  '0xae7ab96520de3a18e5e111b5eaab095312d7fe84': 'stETH (Lido)',
+  '0xd9e1ce17f2641f24ae83637ab66a2cca9c378b9f': 'SushiSwap Router',
+  // Precompiles
+  '0x0000000000000000000000000000000000000001': 'ecRecover',
+  '0x0000000000000000000000000000000000000002': 'SHA-256',
+  '0x0000000000000000000000000000000000000003': 'RIPEMD-160',
+  '0x0000000000000000000000000000000000000004': 'identity',
+  '0x0000000000000000000000000000000000000005': 'modexp',
+  '0x0000000000000000000000000000000000000006': 'ecAdd',
+  '0x0000000000000000000000000000000000000007': 'ecMul',
+  '0x0000000000000000000000000000000000000008': 'ecPairing',
+  '0x0000000000000000000000000000000000000009': 'blake2f',
+  '0x000000000000000000000000000000000000000a': 'pointEval',
+};
+
+// Populated at runtime by bytecode detection
+const CONTRACT_LABELS = new Map(); // addr (lowercase) -> 'Clone' | 'Proxy'
+
+function _addrLabel(addr) {
+  return KNOWN_ADDRS[addr?.toLowerCase()] ?? CONTRACT_LABELS.get(addr?.toLowerCase()) ?? null;
+}
+const _PRECOMPILE_ADDRS = new Set([
+  '0x0000000000000000000000000000000000000001',
+  '0x0000000000000000000000000000000000000002',
+  '0x0000000000000000000000000000000000000003',
+  '0x0000000000000000000000000000000000000004',
+  '0x0000000000000000000000000000000000000005',
+  '0x0000000000000000000000000000000000000006',
+  '0x0000000000000000000000000000000000000007',
+  '0x0000000000000000000000000000000000000008',
+  '0x0000000000000000000000000000000000000009',
+  '0x000000000000000000000000000000000000000a',
+]);
+
+function _tok(val, html) {
+  if (!val) return html;
+  return `<span class="ev-token" data-val="${val}">${html}</span>`;
+}
+
+function _lbl(addr) {
+  const a = addr?.toLowerCase();
+  const l = _addrLabel(addr);
+  const addrTok = _tok(a, String(addr));
+  if (!l) return addrTok;
+  const cls = l === 'Clone'    ? ' clone'
+            : l === 'Delegate' ? ' delegate'
+            : _PRECOMPILE_ADDRS.has(a) ? ' precompile'
+            : '';
+  return `${addrTok}<span class="ev-addr-label${cls}">${l}</span>`;
+}
+
+/* ── 4byte.directory lookup + ABI decode ───────────────────── */
+const _4byteCache = new Map();
+
+function _parseSig(sig) {
+  const m = sig.match(/^(\w+)\((.*)\)$/);
+  if (!m) return null;
+  const params = m[2].trim() ? m[2].split(',').map(s => s.trim()) : [];
+  return { name: m[1], params };
+}
+
+function _abiDecode(types, hexData) {
+  const bytes = new Uint8Array((hexData.match(/.{2}/g) || []).map(h => parseInt(h, 16)));
+  function word(pos) {
+    let n = 0n;
+    for (let i = 0; i < 32; i++) n = (n << 8n) | BigInt(bytes[pos + i] ?? 0);
+    return n;
+  }
+  return types.map((type, i) => {
+    const hp = i * 32;
+    try {
+      if (type === 'address') {
+        const addr = '0x' + word(hp).toString(16).padStart(40, '0');
+        const lbl = _addrLabel(addr);
+        return lbl ? `${addr}  (${lbl})` : addr;
+      }
+      if (type === 'bool') return word(hp) ? 'true' : 'false';
+      if (/^u?int\d*$/.test(type)) {
+        const n = word(hp);
+        const signed = type.startsWith('int') && (n >> 255n);
+        const val = signed ? n - (1n << 256n) : n;
+        return val.toLocaleString();
+      }
+      if (/^bytes\d+$/.test(type)) {
+        const n = parseInt(type.slice(5));
+        return '0x' + Array.from(bytes.slice(hp, hp + n)).map(b => b.toString(16).padStart(2,'0')).join('');
+      }
+      if (type === 'bytes' || type === 'string') {
+        const off = Number(word(hp));
+        const len = Number(word(off));
+        const data = bytes.slice(off + 32, off + 32 + len);
+        if (type === 'string') {
+          try { return '"' + new TextDecoder().decode(data) + '"'; } catch {}
+        }
+        return '0x' + Array.from(data).map(b => b.toString(16).padStart(2,'0')).join('');
+      }
+    } catch {}
+    return '0x' + word(hp).toString(16).padStart(64, '0');
+  });
+}
+
+async function _lookupAndDecode(callHex, hexDiv) {
+  if (!callHex || callHex.length < 10) return;
+  const sel = callHex.slice(0, 10);
+  let sig = _4byteCache.get(sel);
+  if (sig === undefined) {
+    try {
+      const r = await fetch(`https://www.4byte.directory/api/v1/signatures/?hex_signature=${sel}`);
+      const j = await r.json();
+      sig = j.results?.length
+        ? j.results.reduce((a, b) => a.id < b.id ? a : b).text_signature
+        : null;
+    } catch { sig = null; }
+    _4byteCache.set(sel, sig);
+  }
+  if (!sig) return;
+  const parsed = _parseSig(sig);
+  if (!parsed) return;
+  const vals = _abiDecode(parsed.params, callHex.slice(10));
+  const args = parsed.params.map((t, i) =>
+    `<div class="ev-data-row"><span class="ev-data-label">${t}</span><span class="ev-data-val">${vals[i]}</span></div>`
+  ).join('');
+  hexDiv.innerHTML = args
+    ? `<div class="ev-sig-head">${parsed.name}(</div>${args}<div class="ev-data-row">)</div>`
+    : `<div class="ev-sig-head">${parsed.name}()</div>`;
+}
+
+/* ── 4byte event signature lookup ─────────────────────────── */
+const _4byteEventCache = new Map();
+
+async function _lookupEventSig(topic0) {
+  if (!topic0 || topic0.length < 10) return null;
+  const sel = topic0.slice(0, 66); // full 32-byte topic
+  if (_4byteEventCache.has(sel)) return _4byteEventCache.get(sel);
+  let sig = null;
+  try {
+    const r = await fetch(`https://www.4byte.directory/api/v1/event-signatures/?hex_signature=${sel}`);
+    const j = await r.json();
+    sig = j.results?.length
+      ? j.results.reduce((a, b) => a.id < b.id ? a : b).text_signature
+      : null;
+  } catch {}
+  _4byteEventCache.set(sel, sig);
+  return sig;
+}
+
+async function _decodeLogTopics(topics, hexDiv) {
+  if (!topics?.length) return;
+  const sig = await _lookupEventSig(topics[0]);
+  if (!sig) return;
+  const parsed = _parseSig(sig);
+  if (!parsed) return;
+  // decode non-indexed params from log data (last child of hexDiv)
+  const dataEl = hexDiv.querySelector('.ev-data-row:last-child .ev-data-val');
+  const logData = dataEl?.textContent?.trim();
+  const vals = logData && logData.length > 2 ? _abiDecode(parsed.params, logData.slice(2)) : [];
+  // signature as full-width header
+  // topics[1..] are indexed params; remaining params are non-indexed, encoded in data
+  const indexedCount = topics.length - 1;
+  const rows = [`<div class="ev-sig-head">${sig}</div>`];
+  topics.slice(1).forEach((t, i) => {
+    const pname = parsed.params[i] ?? `topic[${i + 1}]`;
+    rows.push(`<div class="ev-data-row"><span class="ev-data-label">${pname}</span><span class="ev-data-val">${t}</span></div>`);
+  });
+  const nonIndexedParams = parsed.params.slice(indexedCount);
+  if (nonIndexedParams.length && logData && logData.length > 2) {
+    const dvals = _abiDecode(nonIndexedParams, logData.slice(2));
+    nonIndexedParams.forEach((type, i) => {
+      rows.push(`<div class="ev-data-row"><span class="ev-data-label">${type}</span><span class="ev-data-val">${dvals[i]}</span></div>`);
+    });
+  } else if (logData && logData.length > 2) {
+    rows.push(`<div class="ev-data-row"><span class="ev-data-label">data</span><span class="ev-data-val">${logData}</span></div>`);
+  }
+  hexDiv.innerHTML = rows.join('');
+}
+
+/* ── Revert reason decoder ─────────────────────────────────── */
+const PANIC_CODES = {
+  0x00: 'generic',       0x01: 'assert',        0x11: 'overflow',
+  0x12: 'div/zero',      0x21: 'bad enum',       0x22: 'bad storage',
+  0x31: 'pop empty',     0x32: 'out of bounds',  0x41: 'out of memory',
+  0x51: 'bad fn ptr',
+};
+
+function _decodeRevertReason(hex) {
+  if (!hex || hex.length < 10) return null;
+  const sel = hex.slice(0, 10).toLowerCase();
+  const payload = hex.slice(10);
+  if (sel === '0x08c379a0') {
+    // Error(string)
+    try {
+      const [msg] = _abiDecode(['string'], payload);
+      return msg ? `${msg}` : null;
+    } catch {}
+  }
+  if (sel === '0x4e487b71') {
+    // Panic(uint256)
+    try {
+      const [code] = _abiDecode(['uint256'], payload);
+      const n = Number(code.replace(/,/g, ''));
+      const label = PANIC_CODES[n] ?? `code ${n}`;
+      return `Panic: ${label}`;
+    } catch {}
+  }
+  return null;
+}
+
+/* ── Opcode groups ─────────────────────────────────────────── */
+const OP_GROUPS = {
+  flow:    new Set(['JUMP','JUMPI','JUMPDEST','PC','PUSH1','PUSH2','PUSH3','PUSH4','PUSH5',
+                    'PUSH6','PUSH7','PUSH8','PUSH9','PUSH10','PUSH11','PUSH12','PUSH13',
+                    'PUSH14','PUSH15','PUSH16','PUSH17','PUSH18','PUSH19','PUSH20','PUSH21',
+                    'PUSH22','PUSH23','PUSH24','PUSH25','PUSH26','PUSH27','PUSH28','PUSH29',
+                    'PUSH30','PUSH31','PUSH32','DUP1','DUP2','DUP3','DUP4','DUP5','DUP6',
+                    'DUP7','DUP8','DUP9','DUP10','DUP11','DUP12','DUP13','DUP14','DUP15',
+                    'DUP16','SWAP1','SWAP2','SWAP3','SWAP4','SWAP5','SWAP6','SWAP7','SWAP8',
+                    'SWAP9','SWAP10','SWAP11','SWAP12','SWAP13','SWAP14','SWAP15','SWAP16',
+                    'POP','MLOAD','MSTORE','MSTORE8','MSIZE']),
+  storage: new Set(['SLOAD','SSTORE','TLOAD','TSTORE']),
+  call:    new Set(['CALL','STATICCALL','DELEGATECALL','CALLCODE','CREATE','CREATE2',
+                    'RETURN','SELFDESTRUCT']),
+  math:    new Set(['ADD','MUL','SUB','DIV','SDIV','MOD','SMOD','ADDMOD','MULMOD','EXP',
+                    'SIGNEXTEND','LT','GT','SLT','SGT','EQ','ISZERO','AND','OR','XOR','NOT',
+                    'BYTE','SHL','SHR','SAR','SHA3']),
+  halt:    new Set(['STOP','REVERT','INVALID']),
+};
+
+function opGroup(name) {
+  for (const [g, s] of Object.entries(OP_GROUPS)) if (s.has(name)) return g;
+  return 'other';
+}
+
+/* ── Components ────────────────────────────────────────────── */
+
+class StatusBar {
+  constructor() {
+    this.el      = document.getElementById('status-bar');
+    this.textEl  = document.getElementById('status-text');
+    this.countEl = document.getElementById('step-counter');
+    this.timeEl  = document.getElementById('elapsed');
+    this._t0     = 0;
+    this._raf    = null;
+  }
+
+  show(msg) {
+    this.textEl.textContent = msg;
+    this.countEl.textContent = '';
+    this.el.classList.add('visible');
+    this._t0 = performance.now();
+    this._tick();
+  }
+
+  update(steps) {
+    this.countEl.textContent = `${steps.toLocaleString()} steps`;
+  }
+
+  progress(i, total) {
+    this.textEl.textContent = 'Pre-executing…';
+    this.countEl.textContent = `${i} / ${total}`;
+  }
+
+  hide() {
+    cancelAnimationFrame(this._raf);
+    this.el.classList.remove('visible');
+  }
+
+  _tick() {
+    const ms = performance.now() - this._t0;
+    this.timeEl.textContent = _fmtMs(ms);
+    this._raf = requestAnimationFrame(() => this._tick());
+  }
+}
+
+class EndpointModal {
+  constructor() {
+    this.overlay  = document.getElementById('modal-overlay');
+    this.inpUrl   = document.getElementById('rpc-url');
+    this._pending = null;
+
+    const saved = localStorage.getItem('yevm_rpc_url');
+    if (saved) this.inpUrl.value = saved;
+
+    document.getElementById('modal-close').onclick  = () => this.hide();
+    document.getElementById('modal-cancel').onclick = () => this.hide();
+    document.getElementById('modal-save').onclick   = () => this._save();
+    this.inpUrl.addEventListener('keydown', e => { if (e.key === 'Enter') this._save(); });
+    this.overlay.addEventListener('click', e => { if (e.target === this.overlay) this.hide(); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') this.hide(); });
+  }
+
+  show() {
+    this._pending = this.inpUrl.value;
+    this.overlay.classList.add('visible');
+    setTimeout(() => this.inpUrl.focus(), 50);
+  }
+
+  hide() {
+    this.inpUrl.value = this._pending ?? this.inpUrl.value;
+    this.overlay.classList.remove('visible');
+  }
+
+  _save() {
+    this._pending = this.inpUrl.value;
+    const url = this.inpUrl.value.trim();
+    if (url) localStorage.setItem('yevm_rpc_url', url);
+    this.overlay.classList.remove('visible');
+  }
+
+  get url() { return this.inpUrl.value.trim(); }
+}
+
+class ErrorCard {
+  constructor() {
+    this.el  = document.getElementById('error-card');
+    this.msg = document.getElementById('error-msg');
+  }
+  show(text) { this.msg.textContent = text; this.el.classList.add('visible'); }
+  hide()     { this.el.classList.remove('visible'); }
+}
+
+class ResultCard {
+  constructor() {
+    this.el   = document.getElementById('result-card');
+    this.tx   = document.getElementById('result-tx');
+    this.grid = document.getElementById('result-grid');
+  }
+
+  show(checkStr, steps, ms) {
+    const lines = checkStr.split('\n');
+    const txHash = (lines[0] || '').replace('TX: ', '').trim();
+    const gasOk  = /OK=true/.test(lines[1] || '');
+    const stOk   = /OK=true/.test(lines[2] || '');
+    const yGas   = (lines[1] || '').match(/yevm=(\d+)/)?.[1] ?? '?';
+
+    const isZeroHash = !txHash || /^0x0+$/.test(txHash);
+    this.tx.innerHTML = isZeroHash
+      ? `<span style="color:var(--text-dim)">custom call simulation</span>`
+      : `<a href="https://etherscan.io/tx/${txHash}" target="_blank" rel="noopener">${txHash}</a>`;
+
+    this.grid.innerHTML = `
+      ${_stat('Events', steps.toLocaleString())}
+      ${_stat('Time <span title="EVM execution time only — excludes network round-trips to fetch state" style="cursor:help;font-size:1em;opacity:0.8">ⓘ</span>', _fmtMs(ms))}
+      ${_stat('Gas',    _fmtNum(yGas), gasOk ? 'ok' : 'fail')}
+      ${_stat('Status', stOk ? 'OK' : 'FAIL', stOk ? 'ok' : 'fail')}
+    `;
+    this.el.classList.add('visible');
+  }
+
+  hide() { this.el.classList.remove('visible'); }
+}
+
+class OpsCard {
+  constructor() {
+    this.el   = document.getElementById('ops-card');
+    this.grid = document.getElementById('ops-grid');
+  }
+
+  show(counts, steps) {
+    const total = steps.toLocaleString();
+    document.getElementById('ops-steps').textContent = `· ${total} steps`;
+    const sorted = Object.entries(counts).sort((a, b) => a[0].localeCompare(b[0]));
+    this.grid.innerHTML = sorted.map(([name, n]) => {
+      const g = opGroup(name);
+      return `<div class="op-chip" data-group="${g}">
+        <span class="op-name">${name}</span>
+        <span class="op-count">${n.toLocaleString()}</span>
+      </div>`;
+    }).join('');
+    this.el.classList.add('visible');
+  }
+
+  hide() { this.el.classList.remove('visible'); }
+}
+
+const _DEPTH_COLORS = ['#A78BFA','#38BDF8','#4ADE80','#FBBF24','#FB923C','#F472B6'];
+
+function _depthBars(depth) {
+  return Array.from({length: depth}, (_, i) =>
+    `<span class="ev-indent" style="color:${_DEPTH_COLORS[i % _DEPTH_COLORS.length]}"></span>`
+  ).join('');
+}
+
+function _eventCat(kind) {
+  if (kind === 'Get') return 'read';
+  if (['Put','Move'].includes(kind)) return 'write';
+  return 'frame';
+}
+
+function _displayKind(kind, data) {
+  const named = ['Nonce','Value','Code','Auth'];
+  if (kind === 'Step' && data != null) return data.name;
+  if (kind === 'Get' && data != null) {
+    const tkey = Object.keys(data)[0];
+    if (named.includes(tkey)) return tkey;
+  }
+  if (kind === 'Put' && Array.isArray(data) && data[0] != null) {
+    const tkey = Object.keys(data[0])[0];
+    if (named.includes(tkey)) return tkey;
+  }
+  return kind;
+}
+
+class EventsLog {
+  constructor() {
+    this.overlay  = document.getElementById('events-overlay');
+    this.list     = document.getElementById('events-list');
+    this.btnOpen  = document.getElementById('btn-events');
+    this._rows      = [];
+    this._seenGets  = new Set(); // dedup Get(Code/Value/Nonce) per acc
+    this._seenCode  = new Set(); // dedup Code by hash
+    this._hashToAcc = new Map(); // code hash -> acc addr (for bytecode label detection)
+    this._hlVal     = null;
+
+    document.getElementById('events-close').onclick = () => this.close();
+    this.overlay.addEventListener('click', e => { if (e.target === this.overlay) this.close(); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') this.close(); });
+    this.btnOpen.onclick = () => this.open();
+
+    this.list.addEventListener('click', e => {
+      const tok = e.target.closest('.ev-token');
+      if (!tok) return;
+      const val = tok.dataset.val;
+      this._clearHighlight();
+      this._hlVal = val;
+      this.list.querySelectorAll(`.ev-token[data-val="${CSS.escape(val)}"]`)
+        .forEach(el => el.classList.add('ev-hl'));
+    });
+
+    document.addEventListener('click', e => {
+      if (!e.target.closest('.ev-token')) this._clearHighlight();
+    });
+
+    this.list.addEventListener('click', e => {
+      if (e.target.closest('.ev-hex-data')) return;
+      if (e.target.closest('.ev-token')) return;
+      const wrap = e.target.closest('.ev-has-data');
+      if (!wrap) return;
+      const opening = !wrap.classList.contains('ev-open');
+      wrap.classList.toggle('ev-open');
+      if (opening) {
+        const hexDiv = wrap.querySelector('.ev-hex-data');
+        if (hexDiv && !hexDiv.dataset.decoded) {
+          hexDiv.dataset.decoded = '1';
+          if (wrap.dataset.kind === 'Call') {
+            _lookupAndDecode(hexDiv.textContent.trim(), hexDiv);
+          } else if (wrap.dataset.kind === 'Log' && wrap.dataset.topics) {
+            const topics = JSON.parse(decodeURIComponent(wrap.dataset.topics));
+            _decodeLogTopics(topics, hexDiv);
+          }
+        }
+      }
+    });
+  }
+
+  push(trace) {
+    const kind = Object.keys(trace.event)[0];
+    const data = trace.event[kind];
+    if (kind === 'Undo') {
+      const [from, to] = data;
+      const FRAME_EVENTS = new Set(['Call','Return','Revert','Halt']);
+      for (const row of this._rows) {
+        if (row.seq >= from && row.seq < to && !FRAME_EVENTS.has(row.kind)) {
+          row.reverted = true;
+        }
+      }
+    } else {
+      if (kind === 'Get' && data != null) {
+        const tkey = Object.keys(data)[0];
+        if (tkey === 'Code' || tkey === 'Value' || tkey === 'Nonce') {
+          const dedup = `${tkey}:${data[tkey].acc}`;
+          if (this._seenGets.has(dedup)) return;
+          this._seenGets.add(dedup);
+        }
+        // record hash->acc for bytecode detection
+        if (tkey === 'Code') {
+          this._hashToAcc.set(data.Code.hash, data.Code.acc);
+        }
+      }
+      // Code event: attach bytecode to the matching Get(Code) row, don't add new row
+      if (kind === 'Code' && Array.isArray(data)) {
+        const [bytecode, hash] = data;
+        if (this._seenCode.has(hash)) return;
+        this._seenCode.add(hash);
+        const acc = this._hashToAcc.get(hash);
+        // detect proxy/clone patterns
+        if (acc && typeof bytecode === 'string') {
+          const b = bytecode.toLowerCase();
+          if (b.startsWith('0x363d3d373d3d3d363d73') && b.endsWith('5af43d82803e903d91602b57fd5bf3') && bytecode.length === 92)
+            CONTRACT_LABELS.set(acc.toLowerCase(), 'Clone');
+          else if (b.startsWith('0xef0100') && bytecode.length === 48)
+            CONTRACT_LABELS.set(acc.toLowerCase(), 'Delegate');
+        }
+        // attach bytecode to the last Get(Code) row with matching hash
+        for (let i = this._rows.length - 1; i >= 0; i--) {
+          const r = this._rows[i];
+          if (r.kind === 'Get' && r.data?.Code?.hash === hash) {
+            r.codeBytes = bytecode;
+            break;
+          }
+        }
+        return; // don't add a separate row
+      }
+      // drop Put(Value/Nonce) 0 → 0, and overflow/underflow Value steps
+      if (kind === 'Put' && Array.isArray(data) && data[0] != null) {
+        const tkey = Object.keys(data[0])[0];
+        if (tkey === 'Value') {
+          try {
+            const ETH = 10n ** 18n;
+            const oldW = BigInt(data[0][tkey].val);
+            const newW = BigInt(data[1]);
+            const oldOver = oldW / ETH > _MAX_SANE_ETH;
+            const newOver = newW / ETH > _MAX_SANE_ETH;
+            if (!oldOver && newOver) return; // sane → overflow: drop
+          } catch {}
+          const oldV = _fmtValue(data[0][tkey].val);
+          const newV = _fmtValue(data[1]);
+          if (oldV === '0' && newV === '0') return;
+        }
+        if (tkey === 'Nonce') {
+          if (_fmtValue(data[0][tkey].val) === '0' && _fmtValue(data[1]) === '0') return;
+        }
+      }
+      this._rows.push({ seq: trace.seq, kind, data, depth: trace.depth, reverted: trace.reverted });
+    }
+  }
+
+  flush() {
+    // Drop Get(Value/Nonce) immediately preceding Put(Value/Nonce) for same acc
+    const rows = this._rows.filter((r, i) => {
+      if (r.kind !== 'Get' || r.data == null) return true;
+      const tkey = Object.keys(r.data)[0];
+      if (tkey !== 'Value' && tkey !== 'Nonce') return true;
+      const next = this._rows[i + 1];
+      if (!next || next.kind !== 'Put' || !Array.isArray(next.data) || next.data[0] == null) return true;
+      const ntkey = Object.keys(next.data[0])[0];
+      return !(ntkey === tkey && next.data[0][ntkey].acc === r.data[tkey].acc);
+    });
+
+    // Second separator: after last depth>0 event; fallback to after last Call if no deep events exist
+    let lastDeepIdx = -1;
+    for (let i = rows.length - 1; i >= 0; i--) {
+      if (rows[i].depth > 0) { lastDeepIdx = i; break; }
+    }
+    let secondSepIdx = (lastDeepIdx >= 0 && lastDeepIdx < rows.length - 1) ? lastDeepIdx : -1;
+    if (secondSepIdx === -1) {
+      // zero-step call: no depth>0 events — separator goes after the last Call row
+      for (let i = rows.length - 2; i >= 0; i--) {
+        if (rows[i].kind === 'Call') { secondSepIdx = i; break; }
+      }
+    }
+
+    const firstCallIdx = rows.findIndex(r => r.kind === 'Call');
+
+    const sep = `<div class="ev-sep"></div>`;
+    const html = [];
+    for (let i = 0; i < rows.length; i++) {
+      if (i === firstCallIdx && i > 0) html.push(sep);
+      const { kind, data, reverted } = rows[i];
+      const depth = rows[i].depth;
+      const cat     = _eventCat(kind);
+      const label   = _displayKind(kind, data);
+      const [body, hex] = _fmtEventBody(kind, data, rows[i].codeBytes);
+      const undo    = reverted ? `<span class="ev-undo" title="reverted">✕</span>` : '';
+      let hintTxt = '', hexContent = '';
+      if (hex) {
+        if (typeof hex === 'string') {
+          hintTxt  = `${(hex.length - 2) / 2}B`;
+          hexContent = hex;
+        } else {
+          hintTxt  = hex.hint ?? '';
+          hexContent = hex.html;
+        }
+      }
+      const hint    = hintTxt ? `<span class="ev-hex-hint">${hintTxt}</span>` : '';
+      const hexDiv  = hexContent ? `<div class="ev-hex-data">${hexContent}</div>` : '';
+      const wrapCls = ['ev-wrap', reverted ? 'ev-reverted' : '', hexContent ? 'ev-has-data' : ''].filter(Boolean).join(' ');
+      const topicsAttr = kind === 'Log' && Array.isArray(data) ? ` data-topics="${encodeURIComponent(JSON.stringify(data[0]))}"` : '';
+      html.push(`<div class="${wrapCls}" data-kind="${kind}" data-cat="${cat}" data-depth="${depth}"${topicsAttr}>
+        <div class="ev-row">
+          ${_depthBars(depth)}<div class="ev-main"><div class="ev-content">
+            <span class="ev-kind">${label}</span>
+            <span class="ev-body">${body}</span>${hint}${undo}
+          </div></div>
+        </div>${hexDiv}
+      </div>`);
+      if (i === secondSepIdx) html.push(sep);
+    }
+    this.list.innerHTML = html.join('');
+    this.btnOpen.disabled = false;
+  }
+
+  _clearHighlight() {
+    if (!this._hlVal) return;
+    this.list.querySelectorAll('.ev-token.ev-hl').forEach(el => el.classList.remove('ev-hl'));
+    this._hlVal = null;
+  }
+
+  open()  { this.overlay.classList.add('visible'); }
+  close() { this.overlay.classList.remove('visible'); }
+  hide()  { this._clearHighlight(); this._rows = []; this._seenGets.clear(); this._seenCode.clear(); this._hashToAcc.clear(); this.list.innerHTML = ''; this.btnOpen.disabled = true; }
+}
+
+const _MODE = { Call:'CALL', Static:'STATICCALL', Delegate:'DELEGATECALL', CallCode:'CALLCODE', Create:'CREATE', Create2:'CREATE2' };
+
+// Returns [body_html, hex_or_null]
+function _fmtEventBody(kind, data, codeBytes) {
+  if (data == null) return ['', null];
+  try {
+    switch (kind) {
+      case 'Step': {
+        const hex = typeof data.data === 'string' && data.data.length > 2 ? data.data : null;
+        return [`pc=${data.pc}  (${_fmtNum(data.gas)} gas)`, hex];
+      }
+      case 'Call': {
+        const [call, mode] = data;
+        const modeKey  = typeof mode === 'string' ? mode : Object.keys(mode)[0];
+        const modeName = _MODE[modeKey] ?? modeKey;
+        const to       = call.to ?? '(create)';
+        const toStr    = _lbl(to);
+        const ethFmt   = call.eth != null ? _fmtValue(call.eth) : '0';
+        const eth      = ethFmt !== '0' ? `  <span style="color:#FBBF24">${ethFmt}</span>` : '';
+        const calldata = typeof call.data === 'string' && call.data.length > 2 ? call.data : null;
+        return [`${modeName}  ${_lbl(call.by)} → ${toStr}${eth}  (${_fmtNum(call.gas)} gas)`, calldata];
+      }
+      case 'Return': {
+        const [ret, gas] = data;
+        const hex = typeof ret === 'string' && ret.length > 2 ? ret : null;
+        return [`(${_fmtNum(gas)} gas)`, hex];
+      }
+      case 'Revert': {
+        const [ret, gas] = data;
+        const hex = typeof ret === 'string' && ret.length > 2 ? ret : null;
+        const reason = hex ? _decodeRevertReason(hex) : null;
+        const reasonStr = reason ? `  <span style="color:#F87171">${reason}</span>` : '';
+        return [`(${_fmtNum(gas)} gas)${reasonStr}`, hex];
+      }
+      case 'Halt':   { const [reason, gas] = data; const r = typeof reason === 'string' ? reason : JSON.stringify(reason); return [`${r}  (${_fmtNum(gas)} gas)`, null]; }
+      case 'Hash': {
+        const [input, output] = data;
+        const inHex = typeof input === 'string' ? input : '0x';
+        const bytes = inHex.length > 2 ? (inHex.length - 2) / 2 : 0;
+        return [_fmtEth(output), bytes > 0 ? inHex : null];
+      }
+      case 'Create': return [_lbl(String(data)), null];
+      case 'Delete': return [_lbl(String(data)), null];
+      case 'Move': {
+        const [from, to, val] = data;
+        return [`${_lbl(from)} → ${_lbl(to)}  ${_fmtValue(val)}`, null];
+      }
+      case 'Log': {
+        const [topics, payload] = data;
+        const rows = topics.map((t, i) =>
+          `<div class="ev-data-row"><span class="ev-data-label">topic[${i}]</span><span class="ev-data-val">${t}</span></div>`
+        );
+        if (typeof payload === 'string' && payload.length > 2) {
+          rows.push(`<div class="ev-data-row"><span class="ev-data-label">data</span><span class="ev-data-val">${payload}</span></div>`);
+        }
+        const dataHtml = rows.length ? { html: rows.join(''), hint: `${topics.length}T` } : null;
+        return [`${topics.length} topics`, dataHtml];
+      }
+      case 'Fee': {
+        const [acc, base, tip, gas] = data;
+        const hasTip = tip && tip !== '0x0000000000000000000000000000000000000000000000000000000000000000';
+        const total  = hasTip ? _fmtValue(`0x${(BigInt(base) + BigInt(tip)).toString(16)}`) : _fmtValue(base);
+        return [`${_lbl(acc)}  ${total}  (${_fmtNum(gas)} gas)`, null];
+      }
+      case 'Get': {
+        const tkey = Object.keys(data)[0];
+        const t    = data[tkey];
+        switch (tkey) {
+          case 'Store': return [`${_lbl(t.acc)} [${_strip(t.key)}] = ${_fmtEth(t.val)}`, null];
+          case 'Temp':  return [`${_lbl(t.acc)} [T:${_strip(t.key)}] = ${_fmtEth(t.val)}`, null];
+          case 'Value': return [`${_lbl(t.acc)}  value = ${_fmtValue(t.val)}`, null];
+          case 'Nonce': return [`${_lbl(t.acc)}  nonce = ${_fmtNum(t.val)}`, null];
+          case 'Code':  return [`${_lbl(t.acc)}  code = ${_tok(t.hash, t.hash)}`, codeBytes ?? null];
+          case 'Auth':  return [`auth[${_lbl(t.acc)}]`, null];
+          default:      return [JSON.stringify(data), null];
+        }
+      }
+      case 'Put': {
+        const tkey = Object.keys(data[0])[0];
+        const t    = data[0][tkey];
+        const newV = data[1];
+        switch (tkey) {
+          case 'Store': return [`${_lbl(t.acc)} [${_strip(t.key)}] = ${_fmtEth(t.val)} → ${_fmtEth(newV)}`, null];
+          case 'Temp':  return [`${_lbl(t.acc)} [T:${_strip(t.key)}] = ${_fmtEth(t.val)} → ${_fmtEth(newV)}`, null];
+          case 'Value': {
+            const _prefunded = `<span style="color:#475569">prefunded</span>`;
+            const _isOver = v => { try { const ETH=10n**18n; return BigInt(v)/ETH > _MAX_SANE_ETH; } catch { return false; } };
+            const oldOver = _isOver(t.val), newOver = _isOver(newV);
+            const oldStr = oldOver ? _prefunded : _fmtValue(t.val);
+            const newStr = newOver ? _prefunded : _fmtValue(newV);
+            const diff = (() => { try {
+              if (oldOver && newOver) {
+                // both prefunded: compute diff directly (small delta between two large numbers)
+                const d = BigInt(newV) - BigInt(t.val);
+                if (d === 0n) return '';
+                const s = _fmtValue('0x' + (d < 0n ? (-d) : d).toString(16));
+                return d > 0n
+                  ? `  <span class="ev-diff-pos">+${s}</span>`
+                  : `  <span class="ev-diff-neg">-${s}</span>`;
+              }
+              if (oldOver || newOver) return '';
+              const d = BigInt(newV) - BigInt(t.val);
+              if (d === 0n) return '';
+              const s = _fmtValue('0x' + (d < 0n ? (-d) : d).toString(16));
+              return d > 0n
+                ? `  <span class="ev-diff-pos">+${s}</span>`
+                : `  <span class="ev-diff-neg">-${s}</span>`;
+            } catch { return ''; } })();
+            return [`${_lbl(t.acc)}  ${oldStr} → ${newStr}${diff}`, null];
+          }
+          case 'Nonce': return [`${_lbl(t.acc)}  nonce = ${_fmtNum(t.val)} → ${_fmtNum(newV)}`, null];
+          case 'Code':  return [`${_lbl(t.acc)}  code = ${_tok(t.hash, t.hash)}`, null];
+          case 'Auth':  return [`auth[${_lbl(t.acc)}]`, null];
+          default:      return [JSON.stringify(data), null];
+        }
+      }
+      default: return ['', null];
+    }
+  } catch(e) { return ['', null]; }
+}
+
+function _fmtBytes(buf) {
+  if (!buf || !buf.length) return '';
+  return `${buf.length}B`;
+}
+
+function _strip(hex) {
+  if (typeof hex !== 'string' || !hex.startsWith('0x')) return String(hex);
+  const s = hex.replace(/^0x0+/, '0x');
+  const display = s === '0x' ? '0x0' : s;
+  return _tok(display, display);
+}
+
+function _fmtEth(val) {
+  if (!val || val === '0x0000000000000000000000000000000000000000000000000000000000000000') return '0';
+  if (typeof val === 'string' && val.startsWith('0x')) {
+    const s = val.replace(/^0x0+/, '0x');
+    const display = s === '0x' ? '0x0' : s;
+    if (display === '0' || display === '0x0') return display;
+    return _tok(display, display);
+  }
+  return String(val);
+}
+
+// Format ETH value: show as ETH if >= 1e12 wei (0.000001 ETH), otherwise show wei count
+const _MAX_SANE_ETH = 10n ** 9n; // 1B ETH — anything above is an underflow artifact
+
+function _fmtValue(val) {
+  if (!val || val === '0x0000000000000000000000000000000000000000000000000000000000000000') return '0';
+  if (typeof val === 'string' && val.startsWith('0x')) {
+    const wei = BigInt(val);
+    if (wei === 0n) return '0';
+    const ETH = 10n ** 18n;
+    const micro = 10n ** 12n;
+    if (wei >= micro) {
+      const whole = wei / ETH;
+      if (whole > _MAX_SANE_ETH) return _short(val);
+      const frac = wei % ETH;
+      let display;
+      if (frac === 0n) {
+        display = `${whole} ETH`;
+      } else {
+        const fracStr = frac.toString().padStart(18, '0').replace(/0+$/, '');
+        const decimals = fracStr.length > 6 ? fracStr.slice(0, 6) + '…' : fracStr;
+        display = whole === 0n ? `0.${decimals} ETH` : `${whole}.${decimals} ETH`;
+      }
+      return _tok(display, display);
+    }
+    const display = `${wei} wei`;
+    return _tok(display, display);
+  }
+  return String(val);
+}
+
+function _short(hex) {
+  if (!hex || typeof hex !== 'string') return String(hex);
+  if (hex.startsWith('0x') && hex.length > 12) return hex.slice(0, 8) + '…' + hex.slice(-4);
+  return hex;
+}
+
+/* ── Helpers ───────────────────────────────────────────────── */
+function _fmtMs(ms) {
+  if (ms < 1000) return `${ms.toFixed(0)} ms`;
+  return `${(ms / 1000).toFixed(2)} s`;
+}
+function _fmtNum(n) {
+  if (typeof n === 'number') return n.toLocaleString();
+  if (typeof n === 'string' && n.startsWith('0x')) {
+    const x = parseInt(n, 16);
+    return isNaN(x) ? n : x.toLocaleString();
+  }
+  const x = parseInt(n, 10);
+  return isNaN(x) ? String(n) : x.toLocaleString();
+}
+function _stat(label, value, cls = '') {
+  return `<div class="stat-box">
+    <div class="stat-label">${label}</div>
+    <div class="stat-value ${cls}">${value}</div>
+  </div>`;
+}
+
+/* ── CallModal ─────────────────────────────────────────────── */
+class CallModal {
+  constructor(onSubmit) {
+    this.overlay  = document.getElementById('call-overlay');
+    this.inpFrom  = document.getElementById('call-from');
+    this.inpTo    = document.getElementById('call-to');
+    this.inpGas   = document.getElementById('call-gas');
+    this.inpValue = document.getElementById('call-value');
+    this.inpData  = document.getElementById('call-data');
+    this._onSubmit = onSubmit;
+    this._btnCopy  = document.getElementById('call-copylink');
+
+    document.getElementById('call-close').onclick    = () => this.hide();
+    document.getElementById('call-cancel').onclick   = () => this.hide();
+    document.getElementById('call-submit').onclick   = () => this._submit();
+    this._btnCopy.onclick                            = () => this._copyLink();
+    this.overlay.addEventListener('click', e => { if (e.target === this.overlay) this.hide(); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') this.hide(); });
+  }
+
+  show() {
+    this.overlay.style.display = 'flex';
+    setTimeout(() => this.inpFrom.focus(), 50);
+  }
+
+  hide() { this.overlay.style.display = 'none'; }
+
+  fill(json) {
+    this.inpFrom.value  = json.from  ?? '';
+    this.inpTo.value    = json.to    ?? '';
+    const gasHex = json.gas ?? '0xf4240';
+    this.inpGas.value   = gasHex.startsWith('0x') ? parseInt(gasHex, 16).toString() : gasHex;
+    const valHex = json.value ?? '0x0';
+    try { this.inpValue.value = valHex.startsWith('0x') ? BigInt(valHex).toString() : valHex; }
+    catch { this.inpValue.value = '0'; }
+    this.inpData.value  = json.input ?? '0x';
+  }
+
+  _toHex(v, fallback = '0x0') {
+    v = v.trim();
+    if (!v || v === '0x') return fallback;
+    if (v.startsWith('0x')) return v;
+    const n = parseInt(v, 10);
+    return isNaN(n) ? fallback : '0x' + n.toString(16);
+  }
+
+  _buildJson() {
+    const from  = this.inpFrom.value.trim();
+    const to    = this.inpTo.value.trim();
+    const gas   = this._toHex(this.inpGas.value, '0xf4240');
+    const input = this.inpData.value.trim() || '0x';
+    let value = '0x0';
+    const rawVal = this.inpValue.value.trim();
+    if (rawVal && rawVal !== '0x') {
+      try { value = rawVal.startsWith('0x') ? rawVal : '0x' + BigInt(rawVal).toString(16); }
+      catch {}
+    }
+    const json = { from, gas, value, input };
+    if (to) json.to = to;
+    return json;
+  }
+
+  _copyLink() {
+    const b64 = btoa(JSON.stringify(this._buildJson()));
+    history.replaceState(null, '', `?call=${encodeURIComponent(b64)}`);
+    navigator.clipboard?.writeText(location.href);
+    this._btnCopy.textContent = 'Copied!';
+    setTimeout(() => { this._btnCopy.textContent = 'Copy Link'; }, 1500);
+  }
+
+  _submit() {
+    const json = this._buildJson();
+    if (!json.from) { this.inpFrom.focus(); return; }
+    this.hide();
+    this._onSubmit(json);
+  }
+}
+
+/* ── App ───────────────────────────────────────────────────── */
+class App {
+  constructor() {
+    this.status   = new StatusBar();
+    this.modal    = new EndpointModal();
+    this.callModal = new CallModal(json => this._simulate(json));
+    this.errCard  = new ErrorCard();
+    this.result   = new ResultCard();
+    this.evLog    = new EventsLog();
+    this.analysis = new AnalysisCard();
+    this.ops      = new OpsCard();
+
+    this.btnRun      = document.getElementById('btn-run');
+    this.btnEndpoint = document.getElementById('btn-endpoint');
+    this.btnRnd      = document.getElementById('btn-rnd');
+    this.btnCall     = document.getElementById('btn-call');
+    this.chkBlock    = document.getElementById('chk-block');
+    this.inpTxn      = document.getElementById('txn-inp');
+
+    this.running  = false;
+    this._fetches = empty();
+    this._lastTxn = null;
+  }
+
+  init() {
+    this.btnRun.onclick      = () => this._run();
+    this.btnEndpoint.onclick = () => this.modal.show();
+    this.btnRnd.onclick      = () => this._random().then(() => this._run());
+    this.chkBlock.onchange   = () => { this._fetches = empty(); };
+    this.btnCall.onclick     = () => this.callModal.show();
+
+    const params    = new URLSearchParams(location.search);
+    const txParam   = params.get('tx');
+    const callParam = params.get('call');
+
+    let callJson = null;
+    if (callParam) {
+      try { callJson = JSON.parse(atob(callParam)); } catch {}
+    }
+
+    if (txParam)   this.inpTxn.value = txParam;
+    if (callJson)  this.callModal.fill(callJson);
+
+    if (txParam && callJson) {
+      // both present: fill both forms, let user choose which to run
+    } else if (txParam) {
+      this._run();
+    } else if (callJson) {
+      this._simulate(callJson);
+    } else {
+      this._random().then(() => this._run());
+    }
+  }
+
+  _setRunning(v) {
+    this.running = v;
+    this.btnRun.disabled      = v;
+    this.btnRnd.disabled      = v;
+    this.btnEndpoint.disabled = v;
+    this.btnCall.disabled     = v;
+    this.chkBlock.disabled    = v;
+  }
+
+  async _random() {
+    if (this.running) return;
+    const url = this.modal.url;
+    if (!url) return;
+    this.status.show('Picking random tx…');
+    this.btnRun.disabled      = true;
+    this.btnRnd.disabled      = true;
+    this.btnEndpoint.disabled = true;
+    this.btnCall.disabled     = true;
+    this.chkBlock.disabled    = true;
+    this._fetches = empty();
+    try {
+      const tx = await pick(url);
+      this.inpTxn.value = tx;
+      history.replaceState(null, '', `?tx=${encodeURIComponent(tx)}`);
+    } catch (e) {
+      this._showError(e);
+    } finally {
+      this.status.hide();
+      this.btnRun.disabled      = false;
+      this.btnRnd.disabled      = false;
+      this.btnEndpoint.disabled = false;
+      this.btnCall.disabled     = false;
+      this.chkBlock.disabled    = false;
+    }
+  }
+
+  async _run() {
+    if (this.running) return;
+    const url = this.modal.url;
+    const txn = this.inpTxn.value.trim();
+    if (!url || !txn) return;
+    if (txn !== this._lastTxn) { this._fetches = empty(); this._lastTxn = txn; }
+
+    this._setRunning(true);
+    this.errCard.hide();
+    this.result.hide();
+    this.evLog.hide();
+    this.analysis.hide();
+    this.ops.hide();
+    this.status.show('Running…');
+    history.replaceState(null, '', `?tx=${encodeURIComponent(txn)}`);
+
+    try {
+      const withBlock = document.getElementById('chk-block').checked;
+      let stream;
+      const t0 = performance.now();
+      if (withBlock) {
+        stream = await run_with_block(url, txn, F.TOP, this._fetches,
+          (i, total) => this.status.progress(i, total));
+        this.status.show('Running…');
+      } else {
+        stream = await run(url, txn, F.TOP, this._fetches);
+      }
+      this._fetches = stream.fetches();
+      await this._consume(stream, t0);
+    } catch (e) {
+      console.error(e);
+      this.status.hide();
+      this._showError(e);
+    } finally {
+      this._setRunning(false);
+    }
+  }
+
+  async _simulate(callJson) {
+    if (this.running) return;
+    const url = this.modal.url;
+    if (!url) return;
+
+    this._setRunning(true);
+    this.errCard.hide();
+    this.result.hide();
+    this.evLog.hide();
+    this.analysis.hide();
+    this.ops.hide();
+    this.status.show('Simulating…');
+    history.replaceState(null, '', `?call=${encodeURIComponent(btoa(JSON.stringify(callJson)))}`);
+
+    try {
+      const stream = await simulate(url, callJson, F.TOP);
+      await this._consume(stream);
+    } catch (e) {
+      console.error(e);
+      this.status.hide();
+      this._showError(e);
+    } finally {
+      this._setRunning(false);
+    }
+  }
+
+  async _consume(stream, t0 = performance.now()) {
+    const counts = {};
+    let steps = 0;
+    const UPDATE_INTERVAL = 200;
+    let lastUpdate = t0;
+    let trace;
+    const traces = [];
+
+    while ((trace = await stream.next()) !== null) {
+      if (trace.event == null) { console.error('bad trace:', JSON.stringify(trace)); break; }
+      const kind = Object.keys(trace.event)[0];
+      if (kind === 'Step') {
+        const step = trace.event.Step;
+        counts[step.name] = (counts[step.name] ?? 0) + 1;
+        steps++;
+      } else {
+        if (kind === 'Undo') {
+          const [from, to] = trace.event.Undo;
+          for (const t of traces) {
+            if (t.seq >= from && t.seq < to) t.reverted = true;
+          }
+        }
+        traces.push(trace);
+        this.evLog.push(trace);
+      }
+
+      const now = performance.now();
+      if (now - lastUpdate > UPDATE_INTERVAL) {
+        this.status.update(steps);
+        lastUpdate = now;
+      }
+    }
+
+    const ms = performance.now() - t0;
+    this.status.hide();
+    this.result.show(stream.check(), this.evLog._rows.length, ms);
+    this.evLog.flush();
+    try {
+      this.analysis.show(analyse(traces));
+    } catch (e) {
+      console.error('analyse failed:', e);
+    }
+    if (steps > 0) this.ops.show(counts, steps);
+  }
+
+  _showError(e) {
+    this.errCard.show(e?.message ?? String(e));
+  }
+}
+
+/* ── analyse(rows) ─────────────────────────────────────────── */
+function _isSlot0(key) {
+  try { return BigInt(key) === 0n; } catch { return false; }
+}
+
+function _slotToAddr(val) {
+  const h = typeof val === 'string' && val.startsWith('0x') ? val.slice(2) : String(val);
+  return '0x' + h.slice(-40).toLowerCase();
+}
+
+function _topicToAddr(topic) {
+  const h = typeof topic === 'string' && topic.startsWith('0x') ? topic.slice(2) : String(topic);
+  return '0x' + h.slice(-40).toLowerCase();
+}
+
+function _fmtDelta(delta) {
+  const abs = delta < 0n ? -delta : delta;
+  return _fmtValue('0x' + abs.toString(16));
+}
+
+function analyse(traces) {
+  return wasm_analyse(traces);
+}
+
+// kept for reference during transition — remove after validation
+function _analyse_js_unused(rows) {
+  // ── Pass 1: hash preimage map ───────────────────────────────────────────
+  const preimages = new Map();
+  for (const { kind, data } of rows) {
+    if (kind !== 'Hash' || !data) continue;
+    const [input, output] = data;
+    if (!input || !output) continue;
+    const hex = (typeof input === 'string' && input.startsWith('0x') ? input.slice(2) : String(input)).toLowerCase();
+    if (hex.length !== 128 || !hex.startsWith('000000000000000000000000')) continue;
+    const key = (typeof output === 'string' && output.startsWith('0x') ? output : '0x' + output).toLowerCase();
+    preimages.set(key, { addr: '0x' + hex.slice(24, 64), slot: hex.slice(64) });
+  }
+
+  // ── Accumulators ────────────────────────────────────────────────────────
+  const proxySwaps      = [];
+  const ethChanges      = [];
+  const erc20Transfers  = [];
+  const erc20Approvals  = [];
+  const erc721Transfers = []; // emitted directly from state; log only adds tokenId
+  const forgedTransfers = [];
+  let   feeInfo         = null;
+
+  // balance writes per contract: [{holderAddr, mappingSlot, delta, _logMatched}]
+  const balanceWrites = new Map();
+
+  const ctxStack = [];
+  function execAddr() { return ctxStack.length ? ctxStack[ctxStack.length - 1] : null; }
+
+  // Returns a 20-byte Ethereum address from a 32-byte storage value if the upper 12 bytes
+  // are exactly zero, otherwise null.
+  function _asStorageAddr(val) {
+    try {
+      const h = (typeof val === 'string' && val.startsWith('0x') ? val.slice(2) : String(val)).toLowerCase();
+      if (h.length !== 64 || !h.startsWith('000000000000000000000000')) return null;
+      return '0x' + h.slice(24);
+    } catch { return null; }
+  }
+
+  // > 0xffffn: excludes reentrancy guards / counters for proxy swap detection.
+  const _isAddrLike = a => { try { return BigInt(a) > 0xffffn; } catch { return false; } };
+  // > 2^144: 18-byte position IDs (e.g. Uniswap v4) max out at < 2^144;
+  // real 20-byte addresses have at least 1 non-zero byte in the upper 2 bytes → ≥ 2^144.
+  const _isAddrTopic = a => { try { return BigInt(a) > (1n << 144n); } catch { return false; } };
+
+  // ── Pass 3: main loop ───────────────────────────────────────────────────
+  for (const row of rows) {
+    const { kind, data, reverted } = row;
+    switch (kind) {
+
+      case 'Call': {
+        const [call, mode] = data;
+        const modeKey = typeof mode === 'string' ? mode : Object.keys(mode)[0];
+        let addr;
+        if (modeKey === 'Delegate' || modeKey === 'CallCode') {
+          addr = execAddr() ?? call.by;
+        } else if (modeKey === 'Create' || modeKey === 'Create2') {
+          addr = typeof mode === 'object' ? mode[modeKey] : null;
+        } else {
+          addr = call.to;
+        }
+        ctxStack.push(addr);
+        break;
+      }
+
+      case 'Return':
+      case 'Revert':
+      case 'Halt':
+        ctxStack.pop();
+        break;
+
+      case 'Put': {
+        if (reverted || !data) break;
+        const tkey = Object.keys(data[0])[0];
+        const t    = data[0][tkey];
+        const newV = data[1];
+
+        if (tkey === 'Store') {
+          // Proxy swap: slot[0] write where both values are properly ABI-encoded addresses
+          // (12 zero bytes + 20-byte address) and look like real contract addresses (> 0xffff).
+          if (_isSlot0(t.key)) {
+            const oldAddr = _asStorageAddr(t.val);
+            const newAddr = _asStorageAddr(newV);
+            if (oldAddr !== null && newAddr !== null && oldAddr !== newAddr
+                && _isAddrLike(oldAddr) && _isAddrLike(newAddr)) {
+              proxySwaps.push({ proxy: t.acc, from: oldAddr, to: newAddr });
+            }
+          }
+
+          const contract = (t.acc?.toLowerCase?.() ?? String(t.acc));
+          const keyLow   = (typeof t.key === 'string' ? t.key : ('0x' + BigInt(t.key).toString(16))).toLowerCase();
+
+          // ERC-721 ownerOf write: value changes from one address to another.
+          // ERC-20 balance write: key matches a single-level hash preimage.
+          const pre = preimages.get(keyLow);
+          if (pre) {
+            let delta;
+            try { delta = BigInt(newV) - BigInt(t.val); } catch { break; }
+            if (delta !== 0n) {
+              if (!balanceWrites.has(contract)) balanceWrites.set(contract, []);
+              balanceWrites.get(contract).push({ holderAddr: pre.addr, mappingSlot: pre.slot, delta, _logMatched: false });
+            }
+          }
+        }
+
+        if (tkey === 'Value') {
+          try {
+            const delta = BigInt(newV) - BigInt(t.val);
+            const ETH   = 10n ** 18n;
+            const sane  = v => { try { return BigInt(v) / ETH <= _MAX_SANE_ETH; } catch { return false; } };
+            if (delta !== 0n && sane(t.val) && sane(newV)) ethChanges.push({ acc: t.acc, delta });
+          } catch {}
+        }
+        break;
+      }
+
+      case 'Fee': {
+        if (!data || reverted) break;
+        const [acc, , tip] = data;
+        feeInfo = { sender: acc?.toLowerCase?.() ?? acc, tip };
+        break;
+      }
+
+      case 'Log': {
+        // Logs are secondary: enrich state-derived events or flag forgeries.
+        if (reverted || !data) break;
+        const [topics, payload] = data;
+        if (!topics?.length) break;
+        const t0         = topics[0]?.toLowerCase?.();
+        const emitter    = execAddr();
+        const emitterKey = emitter?.toLowerCase?.() ?? emitter;
+
+        if (t0 === TOPIC_TRANSFER && topics.length === 4 && (!payload || payload === '0x')) {
+          // ERC-721 Transfer: enrich state-derived entry with tokenId if found.
+          // If no state match, emit from log — but only if from/to look like real addresses.
+          // Protocols like Uniswap v4 PositionManager reuse the ERC-721 Transfer signature
+          // with position identifiers in the topics, not wallet addresses.
+          const ZERO = '0x0000000000000000000000000000000000000000';
+          const from = _topicToAddr(topics[1]);
+          const to   = _topicToAddr(topics[2]);
+          if (!from || !to) break;
+          const entry = erc721Transfers.find(e =>
+            e.token?.toLowerCase?.() === emitterKey && e.from === from && e.to === to && !e._logMatched);
+          if (entry) {
+            entry._logMatched = true;
+            try { entry.tokenId = BigInt(topics[3]); } catch {}
+          } else if (_isAddrTopic(from) || from === ZERO || _isAddrTopic(to) || to === ZERO) {
+            let tokenId = null;
+            try { tokenId = BigInt(topics[3]); } catch {}
+            erc721Transfers.push({ token: emitter, from, to, tokenId, _logMatched: true });
+          }
+
+        } else if (t0 === TOPIC_TRANSFER && topics.length === 3) {
+          // ERC-20 Transfer: log provides from/to pairing; state write is required to confirm.
+          const from   = _topicToAddr(topics[1]);
+          const to     = _topicToAddr(topics[2]);
+          const writes = balanceWrites.get(emitterKey) ?? [];
+          const fromW  = writes.find(w => !w._logMatched && w.holderAddr === from && w.delta < 0n);
+          const toW    = writes.find(w => !w._logMatched && w.holderAddr === to   && w.delta > 0n);
+          if (fromW || toW) {
+            if (fromW) fromW._logMatched = true;
+            if (toW)   toW._logMatched   = true;
+            let amount = null;
+            try { amount = BigInt(payload); } catch {}
+            erc20Transfers.push({ token: emitter, from, to, amount });
+          } else {
+            forgedTransfers.push({ token: emitter, from, to, kind: 'ERC-20' });
+          }
+
+        } else if (t0 === TOPIC_APPROVAL && topics.length >= 3) {
+          const owner   = _topicToAddr(topics[1]);
+          const spender = _topicToAddr(topics[2]);
+          let allowance = null;
+          try { allowance = BigInt(payload); } catch {}
+          erc20Approvals.push({ token: emitter, owner, spender, allowance });
+        }
+        break;
+      }
+    }
+  }
+
+  return { proxySwaps, ethChanges, erc20Transfers, erc20Approvals, erc721Transfers, forgedTransfers, feeInfo };
+}
+
+/* ── AnalysisCard ──────────────────────────────────────────── */
+class AnalysisCard {
+  constructor() {
+    this.el      = document.getElementById('analysis-card');
+    this.content = document.getElementById('analysis-content');
+  }
+
+  show(r) {
+    const { proxySwaps, ethChanges, erc20Transfers, erc20Approvals, erc721Transfers, forgedTransfers, fee } = r;
+    const sections = [];
+
+    if (proxySwaps.length) {
+      sections.push(proxySwaps.map(s => `
+        <div class="an-row warn">
+          <span class="an-label red">⚠ Proxy implementation replaced</span>
+          <span class="an-addr">${_lbl(s.proxy) || _short(s.proxy)}</span>
+          <span><span class="an-val">${s.oldImpl}</span> → <span class="an-val new">${s.newImpl}</span></span>
+        </div>`).join(''));
+    }
+
+    if (ethChanges.length) {
+      const byAcc = new Map();
+      for (const c of ethChanges) {
+        const key = c.acc?.toLowerCase?.() ?? c.acc;
+        const delta = BigInt(c.after) - BigInt(c.before);
+        byAcc.set(key, { acc: c.acc, delta: (byAcc.get(key)?.delta ?? 0n) + delta });
+      }
+
+      const sender   = fee?.sender?.toLowerCase?.()   ?? fee?.sender;
+      const coinbase = fee?.coinbase?.toLowerCase?.() ?? fee?.coinbase;
+      const rows = [...byAcc.values()].filter(c => c.delta !== 0n).map(c => {
+        const key = c.acc?.toLowerCase?.() ?? c.acc;
+        const role = key === sender ? 'sender' : key === coinbase ? 'coinbase' : null;
+        const pos = c.delta > 0n;
+        return `
+          <div class="an-row neutral">
+            <span class="an-label dim">ETH${role ? `  <span style="color:var(--text-dim);font-weight:400;text-transform:none;letter-spacing:0">${role}</span>` : ''}</span>
+            <span class="an-addr">${_lbl(c.acc) || _short(c.acc)}</span>
+            <span class="${pos ? 'an-pos' : 'an-neg'}">${pos ? '+' : '−'}${_fmtDelta(c.delta)}</span>
+          </div>`;
+      }).join('');
+      if (rows) sections.push(`<div class="an-section"><div class="an-section-title">ETH balance changes</div>${rows}</div>`);
+    }
+
+    if (erc20Transfers.length) {
+      const rows = erc20Transfers.map(t => `
+        <div class="an-row neutral">
+          <span class="an-label dim">${_lbl(t.token) || _short(t.token)}</span>
+          <span class="an-addr">${_lbl(t.from) || _short(t.from)} → ${_lbl(t.to) || _short(t.to)}</span>
+          <span class="an-val">${t.amount != null ? BigInt(t.amount).toLocaleString() : '?'}</span>
+        </div>`).join('');
+      sections.push(`<div class="an-section"><div class="an-section-title">ERC-20 transfers</div>${rows}</div>`);
+    }
+
+    if (erc721Transfers.length) {
+      const rows = erc721Transfers.map(t => `
+        <div class="an-row neutral">
+          <span class="an-label dim">${_lbl(t.token) || _short(t.token)}</span>
+          <span class="an-addr">${_lbl(t.from) || _short(t.from)} → ${_lbl(t.to) || _short(t.to)}</span>
+          <span class="an-val">Token ID: ${t.tokenId != null ? BigInt(t.tokenId).toLocaleString() : '?'}</span>
+        </div>`).join('');
+      sections.push(`<div class="an-section"><div class="an-section-title">ERC-721 transfers</div>${rows}</div>`);
+    }
+
+    if (erc20Approvals.length) {
+      const MAX_UINT256 = (1n << 256n) - 1n;
+      const rows = erc20Approvals.map(a => {
+        const val      = a.allowance != null ? BigInt(a.allowance) : null;
+        const revoke   = val === 0n;
+        const unlimited = val === MAX_UINT256;
+        const valStr   = val == null ? '?' : unlimited ? 'Unlimited' : val.toLocaleString();
+        return `
+          <div class="an-row ${revoke ? 'neutral' : 'caution'}">
+            <span class="an-label ${revoke ? 'dim' : 'yel'}">${_lbl(a.token) || _short(a.token)}</span>
+            <span class="an-addr">${_lbl(a.owner) || _short(a.owner)} → ${_lbl(a.spender) || _short(a.spender)}</span>
+            <span class="an-val">${valStr}</span>
+          </div>`;
+      }).join('');
+      sections.push(`<div class="an-section"><div class="an-section-title">ERC-20 approvals</div>${rows}</div>`);
+    }
+
+    if (forgedTransfers.length) {
+      const rows = forgedTransfers.map(t => `
+        <div class="an-row warn">
+          <span class="an-label red">⚠ Forged transfer (log without state change)</span>
+          <span class="an-addr">ERC-20  ${_lbl(t.token) || _short(t.token)}</span>
+          <span class="an-addr">${_lbl(t.from) || _short(t.from)} → ${_lbl(t.to) || _short(t.to)}</span>
+        </div>`).join('');
+      sections.push(`<div class="an-section">${rows}</div>`);
+    }
+
+    if (!sections.length) return;
+    this.content.innerHTML = sections.join('');
+    this.el.classList.add('visible');
+  }
+
+  hide() { this.el.classList.remove('visible'); this.content.innerHTML = ''; }
+}
+
+new App().init();
+</script>
+</body>
+</html>

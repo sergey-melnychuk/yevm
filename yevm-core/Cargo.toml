@@ -1,0 +1,41 @@
+[package]
+name = "yevm-core"
+version = "0.1.0"
+edition = "2024"
+description = "Async, WASM-native Ethereum VM engine: opcode dispatch, gas accounting, precompiles, state traits, structured trace events."
+license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
+repository = "https://github.com/sergey-melnychuk/yevm"
+keywords = ["ethereum", "evm", "blockchain", "wasm", "async"]
+categories = ["cryptography::cryptocurrencies", "wasm"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+eyre.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+ethnum.workspace = true
+hex.workspace = true
+k256.workspace = true
+sha2 = "0.10"
+ripemd = "0.1"
+num-bigint = "0.4"
+num-traits = "0.2"
+num-integer = "0.1"
+bn = { package = "substrate-bn", version = "0.6" }
+kzg-rs = "0.2"
+p256 = { version = "0.13", features = ["ecdsa"] }
+futures.workspace = true
+ahash.workspace = true
+yevm-base.workspace = true
+yevm-misc.workspace = true
+alloy-eip7702 = { version = "0.6.3", features = ["k256"] }
+alloy-primitives = { version = "1.5", default-features = false, features = ["rlp"] }
+
+## Allow `EvmYield` as result error despite the size
+## TODO: consider `Call(Call, CallMode),` => `Call(Box<Call>, CallMode),`
+[lints.clippy]
+result_large_err = "allow"
+
+[dev-dependencies]
+tokio = { version = "1.50.0", features = ["full"] }

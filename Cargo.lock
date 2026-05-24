@@ -6466,16 +6466,33 @@ dependencies = [
 ]
 
 [[package]]
-name = "yaevmi-base"
+name = "yansi"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
+
+[[package]]
+name = "yevm"
+version = "0.1.0"
+dependencies = [
+ "yevm-base",
+ "yevm-core",
+ "yevm-lens",
+ "yevm-misc",
+ "yevm-wasm",
+]
+
+[[package]]
+name = "yevm-base"
 version = "0.1.0"
 dependencies = [
  "hex",
  "ruint",
- "yaevmi-misc",
+ "yevm-misc",
 ]
 
 [[package]]
-name = "yaevmi-core"
+name = "yevm-core"
 version = "0.1.0"
 dependencies = [
  "ahash",
@@ -6499,16 +6516,12 @@ dependencies = [
  "substrate-bn",
  "thiserror 2.0.18",
  "tokio",
- "yaevmi-base",
- "yaevmi-misc",
+ "yevm-base",
+ "yevm-misc",
 ]
 
 [[package]]
-name = "yaevmi-full"
-version = "0.1.0"
-
-[[package]]
-name = "yaevmi-gate"
+name = "yevm-gate"
 version = "0.1.0"
 dependencies = [
  "axum",
@@ -6525,24 +6538,24 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.23",
- "yaevmi-base",
- "yaevmi-core",
- "yaevmi-misc",
+ "yevm-base",
+ "yevm-core",
+ "yevm-misc",
 ]
 
 [[package]]
-name = "yaevmi-lens"
+name = "yevm-lens"
 version = "0.1.0"
 dependencies = [
  "hex",
  "serde",
- "yaevmi-base",
- "yaevmi-core",
- "yaevmi-misc",
+ "yevm-base",
+ "yevm-core",
+ "yevm-misc",
 ]
 
 [[package]]
-name = "yaevmi-misc"
+name = "yevm-misc"
 version = "0.1.0"
 dependencies = [
  "eyre",
@@ -6554,7 +6567,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "yaevmi-test"
+name = "yevm-test"
 version = "0.1.0"
 dependencies = [
  "alloy-eip7702",
@@ -6571,13 +6584,13 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "yaevmi-base",
- "yaevmi-core",
- "yaevmi-misc",
+ "yevm-base",
+ "yevm-core",
+ "yevm-misc",
 ]
 
 [[package]]
-name = "yaevmi-wasm"
+name = "yevm-wasm"
 version = "0.1.0"
 dependencies = [
  "eyre",
@@ -6591,16 +6604,10 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "yaevmi-base",
- "yaevmi-core",
- "yaevmi-lens",
+ "yevm-base",
+ "yevm-core",
+ "yevm-lens",
 ]
-
-[[package]]
-name = "yansi"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
 
 [[package]]
 name = "yoke"

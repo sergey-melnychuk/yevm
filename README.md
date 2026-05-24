@@ -1,8 +1,8 @@
-# YAEVMI
+# YEVM
 
-**(Yield-Aware | Yet Another) EVM Implementation** — in Rust.
+**(Yield-aware | Yet another) EVM implementation** — in Rust.
 
-**[Live Demo](https://sergey-melnychuk.github.io/yaevmi)**
+**[Live Demo](https://sergey-melnychuk.github.io/yevm)**
 
 ## Goals
 
@@ -24,12 +24,12 @@ Intended for:
 
 | Crate         | Description                                                       |
 | ------------- | ----------------------------------------------------------------- |
-| `yaevmi-base` | Primitive types: `Acc` (address), `Int` (uint256), `Head`, `Tx`   |
-| `yaevmi-core` | EVM engine: opcode dispatch, stack/memory, `State`/`Chain` traits |
-| `yaevmi-misc` | Utilities and helpers                                             |
-| `yaevmi-test` | Test harness and fixtures                                         |
-| `yaevmi-wasm` | WebAssembly bindings                                              |
-| `yaevmi` | Full integration: ties all crates together                        |
+| `yevm-base` | Primitive types: `Acc` (address), `Int` (uint256), `Head`, `Tx`   |
+| `yevm-core` | EVM engine: opcode dispatch, stack/memory, `State`/`Chain` traits |
+| `yevm-misc` | Utilities and helpers                                             |
+| `yevm-test` | Test harness and fixtures                                         |
+| `yevm-wasm` | WebAssembly bindings                                              |
+| `yevm` | Full integration: ties all crates together                        |
 
 ## Links
 
@@ -38,3 +38,14 @@ Intended for:
 2. [Ethereum EIPs](https://eips.ethereum.org)
 
 3. [EVM.codes](https://www.evm.codes/)
+
+## Licensing
+
+Yaevmi is licensed under the PolyForm Noncommercial License 1.0.0. 
+It is free for educational use, research, and non-commercial tooling.
+
+### Commercial Use
+If you wish to use Yaevmi for commercial purposes, embed it into revenue-generating 
+infrastructure, or operate it for commercial advantage, the PolyForm license does 
+not apply. Please contact me directly to discuss commercial licensing 
+and revenue-sharing terms.
