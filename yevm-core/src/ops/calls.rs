@@ -4,8 +4,8 @@ use yevm_misc::keccak256;
 
 use crate::{
     Call,
-    aux::{create_address, create2_address, is_precompile},
     evm::{self, CallMode, Context, Evm, EvmResult, EvmYield, Fetch, HaltReason},
+    misc::{create_address, create2_address, is_precompile},
     state::State,
 };
 

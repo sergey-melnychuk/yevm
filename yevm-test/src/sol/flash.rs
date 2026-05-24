@@ -1,5 +1,5 @@
 use yevm_base::{Acc, Int, acc};
-use yevm_core::{Call, aux::create_address, state::Account};
+use yevm_core::{Call, misc::create_address, state::Account};
 use yevm_misc::buf::Buf;
 
 /// Deploy Flash and MockBorrower, fund both, then execute a flash loan.

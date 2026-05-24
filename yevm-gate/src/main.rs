@@ -343,7 +343,7 @@ async fn api_reject(
 }
 
 async fn ui() -> Html<&'static str> {
-    Html(include_str!("../../yevm-gate/web/index.html"))
+    Html(include_str!("../web/index.html"))
 }
 
 struct AppError(eyre::Report);

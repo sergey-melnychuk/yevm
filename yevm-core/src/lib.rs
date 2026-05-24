@@ -5,13 +5,13 @@ pub use yevm_base::{Acc, Int};
 pub use crate::call::{Call, Head, Tx};
 pub use crate::evm::Fetch;
 
-pub mod aux;
 pub mod cache;
 pub mod call;
 pub mod chain;
 pub mod eip7702;
 pub mod evm;
 pub mod exe;
+pub mod misc;
 pub mod ops;
 pub mod pre;
 pub mod rpc;

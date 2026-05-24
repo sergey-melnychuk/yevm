@@ -6,8 +6,8 @@ use yevm_misc::buf::Buf;
 
 use crate::Fetch;
 use crate::Tx;
-use crate::aux::{create_address, is_precompile};
 use crate::evm::{CallMode, Context, Evm, Gas, StepResult};
+use crate::misc::{create_address, is_precompile};
 use crate::{Acc, Call, Error, Int, Result};
 use crate::{
     call::Head,
