@@ -5,6 +5,9 @@ edition = "2024"
 description = "Async, WASM-native Ethereum VM in Rust. Top-level integration crate re-exporting the YEVM sub-crates as a single API surface."
 license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
 repository = "https://github.com/sergey-melnychuk/yevm"
+homepage = "https://github.com/sergey-melnychuk/yevm"
+documentation = "https://docs.rs/yevm"
+readme = "../README.md"
 keywords = ["ethereum", "evm", "wasm", "blockchain", "web3"]
 categories = ["cryptography::cryptocurrencies", "wasm"]
 

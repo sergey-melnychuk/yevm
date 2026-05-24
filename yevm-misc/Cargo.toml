@@ -5,6 +5,9 @@ edition = "2024"
 description = "Utilities (keccak256, hex, HTTP client, byte buffer) shared across the YEVM crates."
 license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
 repository = "https://github.com/sergey-melnychuk/yevm"
+homepage = "https://github.com/sergey-melnychuk/yevm"
+documentation = "https://docs.rs/yevm-misc"
+readme = "../README.md"
 keywords = ["ethereum", "evm", "utility"]
 categories = ["cryptography::cryptocurrencies"]
 

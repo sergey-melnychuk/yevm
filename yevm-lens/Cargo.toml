@@ -5,6 +5,9 @@ edition = "2024"
 description = "Side-effect decoder for EVM execution traces: proxy implementation swaps, ERC-20/721 transfers, approvals, forged-transfer detection."
 license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
 repository = "https://github.com/sergey-melnychuk/yevm"
+homepage = "https://github.com/sergey-melnychuk/yevm"
+documentation = "https://docs.rs/yevm-lens"
+readme = "../README.md"
 keywords = ["ethereum", "evm", "security", "wallet", "blockchain"]
 categories = ["cryptography::cryptocurrencies"]
 

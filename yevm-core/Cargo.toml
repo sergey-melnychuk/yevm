@@ -5,6 +5,9 @@ edition = "2024"
 description = "Async, WASM-native Ethereum VM engine: opcode dispatch, gas accounting, precompiles, state traits, structured trace events."
 license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
 repository = "https://github.com/sergey-melnychuk/yevm"
+homepage = "https://github.com/sergey-melnychuk/yevm"
+documentation = "https://docs.rs/yevm-core"
+readme = "../README.md"
 keywords = ["ethereum", "evm", "blockchain", "wasm", "async"]
 categories = ["cryptography::cryptocurrencies", "wasm"]
 

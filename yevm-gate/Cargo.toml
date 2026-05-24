@@ -5,6 +5,9 @@ edition = "2024"
 description = "Local RPC proxy that intercepts eth_sendRawTransaction, simulates locally with YEVM, and holds the transaction until the owner approves the decoded side effects."
 license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
 repository = "https://github.com/sergey-melnychuk/yevm"
+homepage = "https://github.com/sergey-melnychuk/yevm"
+documentation = "https://docs.rs/yevm-gate"
+readme = "../README.md"
 keywords = ["ethereum", "evm", "security", "wallet", "rpc"]
 categories = ["cryptography::cryptocurrencies", "web-programming::http-server"]
 

@@ -5,6 +5,9 @@ edition = "2024"
 description = "WebAssembly bindings for YEVM — run pre-broadcast Ethereum transaction simulation entirely in the browser."
 license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
 repository = "https://github.com/sergey-melnychuk/yevm"
+homepage = "https://github.com/sergey-melnychuk/yevm"
+documentation = "https://docs.rs/yevm-wasm"
+readme = "../README.md"
 keywords = ["ethereum", "evm", "wasm", "browser", "blockchain"]
 categories = ["cryptography::cryptocurrencies", "wasm"]
 

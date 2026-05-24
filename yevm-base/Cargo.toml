@@ -5,6 +5,9 @@ edition = "2024"
 description = "Primitive types (address, uint256, transaction, block header) for the YEVM Ethereum VM."
 license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
 repository = "https://github.com/sergey-melnychuk/yevm"
+homepage = "https://github.com/sergey-melnychuk/yevm"
+documentation = "https://docs.rs/yevm-base"
+readme = "../README.md"
 keywords = ["ethereum", "evm", "blockchain", "web3"]
 categories = ["cryptography::cryptocurrencies"]
 
