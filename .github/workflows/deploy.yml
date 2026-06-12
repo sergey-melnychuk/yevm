@@ -2,7 +2,7 @@ name: Deploy WASM
 
 on:
   push:
-    branches: [deploy, public]
+    branches: [main, deck]
   workflow_dispatch:
 
 permissions:
@@ -50,8 +50,8 @@ jobs:
           cp yevm-wasm/pkg/yevm_wasm.js public/pkg/
           cp yevm-wasm/pkg/yevm_wasm_bg.wasm public/pkg/
 
-      - name: Include deck (public branch only)
-        if: github.ref_name == 'public'
+      - name: Include deck (deck branch only)
+        if: github.ref_name == 'deck'
         run: |
           mkdir -p public/deck
           cp etc/deck/index.html public/deck/
