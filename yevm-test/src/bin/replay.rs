@@ -115,10 +115,10 @@ async fn run() -> eyre::Result<()> {
     } else {
         let chain_id = rpc.chain_id().await?;
         cache.set_chain_id(chain_id);
-        cache.save_fetched(Fetched::ChainId(chain_id));
+        cache.save_fetched(Fetched::ChainId(chain_id), 0);
 
         let block = rpc.block(block).await?;
-        cache.save_fetched(Fetched::Block(block.clone()));
+        cache.save_fetched(Fetched::Block(block.clone()), 0);
         block
     };
 
@@ -215,11 +215,10 @@ async fn run() -> eyre::Result<()> {
 
         let now = Instant::now();
         let result = exe.run(tx, head.clone(), &mut cache, &rpc).await?;
-        let ms = now.elapsed().as_millis();
+        let ms = now.elapsed().as_millis() as u64;
 
         let gas = result.gas().finalized;
-        let fetches = exe.fetches;
-        let fetching = exe.fetching.as_millis();
+        let (fetches, fetching) = cache.fetch_stats();
         let receipt = rpc.receipt(hash).await?;
         let ty = receipt.r#type.as_u8();
 

@@ -68,10 +68,6 @@ pub struct Executor {
     pub callstack: Vec<CallFrame>,
     /// Effective gas price for GASPRICE opcode (min(max_fee, base_fee + priority) for EIP-1559).
     effective_gas_price: Int,
-    pub fetches: usize,
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fetching: std::time::Duration,
 }
 
 pub struct CallFrame {
@@ -294,10 +290,6 @@ impl Executor {
             call,
             callstack: vec![],
             effective_gas_price: Int::ZERO,
-            fetches: 0,
-
-            #[cfg(not(target_arch = "wasm32"))]
-            fetching: std::time::Duration::ZERO,
         }
     }
 
@@ -407,6 +399,10 @@ impl Executor {
         // For top-level CREATE: collision check + initialize with nonce=1 (EIP-161).
         // Done AFTER the checkpoint so it's reverted on init-code failure.
         if let CallMode::Create(created) = mode {
+            // TODO: uncomment to avoid overwriting pre-crate account state
+            // if state.acc(&created).is_none() {
+            //     fetch(Fetch::Account(created), state, chain).await?;
+            // }
             let existing_nonce = state.nonce(&created).unwrap_or(Int::ZERO);
             let has_code = state.code(&created).is_some_and(|(c, _)| !c.0.is_empty());
             if !existing_nonce.is_zero() || has_code {
@@ -670,6 +666,10 @@ impl Executor {
                     // Per EVM spec, nonce is incremented before the snapshot so it survives
                     // collision reverts, but NOT depth or insufficient-balance failures.
                     if let Some(created) = mode.created() {
+                        // TODO: uncomment to avoid overwriting pre-crate account state
+                        // if state.acc(&created).is_none() {
+                        //     fetch(Fetch::Account(created), state, chain).await?;
+                        // }
                         let creator = call.by;
 
                         // Depth check before nonce increment
@@ -727,11 +727,6 @@ impl Executor {
 
                     if let Some(created) = mode.created() {
                         let creator = call.by;
-
-                        // Fetch before collision check — account may exist on-chain but not in cache
-                        if state.acc(&created).is_none() {
-                            fetch(Fetch::Account(created), state, chain).await?;
-                        }
 
                         // Collision check: existing nonce or code at derived address
                         let existing_nonce = state.nonce(&created).unwrap_or(Int::ZERO);
@@ -904,18 +899,7 @@ impl Executor {
                     self.callstack.pop();
                 }
                 StepResult::Fetch(f) => {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let now = std::time::Instant::now();
-
                     fetch(f, state, chain).await?;
-
-                    #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        let elapsed = now.elapsed();
-                        self.fetching += elapsed;
-                    }
-
-                    self.fetches += 1;
                     this.evm.reset();
                 }
             }

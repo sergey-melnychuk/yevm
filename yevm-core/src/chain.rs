@@ -44,9 +44,18 @@ pub async fn fetch(f: Fetch, state: &mut impl State, chain: &impl Chain) -> Resu
                 };
                 state.merge(&acc, account.clone());
             } else {
+                #[cfg(not(target_arch = "wasm32"))]
+                let now = std::time::Instant::now();
+
                 let account = chain.acc(&acc).await?;
+
+                #[cfg(not(target_arch = "wasm32"))]
+                let millis = now.elapsed().as_millis() as u64;
+                #[cfg(target_arch = "wasm32")]
+                let millis = 0;
+
                 state.merge(&acc, account.clone());
-                state.save_fetched(Fetched::Account(acc, account));
+                state.save_fetched(Fetched::Account(acc, account), millis);
             }
             Ok(())
         }
@@ -60,13 +69,22 @@ pub async fn fetch(f: Fetch, state: &mut impl State, chain: &impl Chain) -> Resu
                 };
                 state.hash(number, hash);
             } else {
+                #[cfg(not(target_arch = "wasm32"))]
+                let now = std::time::Instant::now();
+
                 let hash = chain
                     .head(number)
                     .await
                     .map(|head| head.hash)
                     .unwrap_or(Int::ZERO);
+
+                #[cfg(not(target_arch = "wasm32"))]
+                let millis = now.elapsed().as_millis() as u64;
+                #[cfg(target_arch = "wasm32")]
+                let millis = 0;
+
                 state.hash(number, hash);
-                state.save_fetched(Fetched::Hash(number, hash));
+                state.save_fetched(Fetched::Hash(number, hash), millis);
             }
             Ok(())
         }
@@ -80,9 +98,18 @@ pub async fn fetch(f: Fetch, state: &mut impl State, chain: &impl Chain) -> Resu
                 };
                 state.init(&acc, &key, val);
             } else {
+                #[cfg(not(target_arch = "wasm32"))]
+                let now = std::time::Instant::now();
+
                 let val = chain.get(&acc, &key).await?;
+
+                #[cfg(not(target_arch = "wasm32"))]
+                let millis = now.elapsed().as_millis() as u64;
+                #[cfg(target_arch = "wasm32")]
+                let millis = 0;
+
                 state.init(&acc, &key, val);
-                state.save_fetched(Fetched::State(acc, key, val));
+                state.save_fetched(Fetched::State(acc, key, val), millis);
             }
             Ok(())
         }

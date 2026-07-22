@@ -65,14 +65,19 @@ async fn main() -> eyre::Result<()> {
 
         let now = Instant::now();
         pre_block(&head, &mut cache, &rpc).await?;
+        let mut gas = 0;
         for tx in &block.txs {
             let (tx, call) = (tx.tx.clone(), tx.call.clone().into());
             let mut exe = Executor::new(call);
             cache.reset();
-            let _ = exe.run(tx, head.clone(), &mut cache, &rpc).await?;
+            let res = exe.run(tx, head.clone(), &mut cache, &rpc).await?;
+            gas += res.gas().spent.max(0) as u64;
         }
         let ms = now.elapsed().as_millis() as u64;
-        println!("I={i:03} T={:6.4}", ms as f64 / 1000.0);
+        let t = ms as f64 / 1000.0;
+        let n = block.txs.len() as f64 / t;
+        let g = gas as f64 / t;
+        println!("I={i:03} T={t:6.4} Txn/s={n:6.2} Gas/s={g:8.2}");
     }
     Ok(())
 }
