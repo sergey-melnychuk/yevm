@@ -399,10 +399,9 @@ impl Executor {
         // For top-level CREATE: collision check + initialize with nonce=1 (EIP-161).
         // Done AFTER the checkpoint so it's reverted on init-code failure.
         if let CallMode::Create(created) = mode {
-            // TODO: uncomment to avoid overwriting pre-crate account state
-            // if state.acc(&created).is_none() {
-            //     fetch(Fetch::Account(created), state, chain).await?;
-            // }
+            if state.acc(&created).is_none() {
+                fetch(Fetch::Account(created), state, chain).await?;
+            }
             let existing_nonce = state.nonce(&created).unwrap_or(Int::ZERO);
             let has_code = state.code(&created).is_some_and(|(c, _)| !c.0.is_empty());
             if !existing_nonce.is_zero() || has_code {
@@ -666,10 +665,9 @@ impl Executor {
                     // Per EVM spec, nonce is incremented before the snapshot so it survives
                     // collision reverts, but NOT depth or insufficient-balance failures.
                     if let Some(created) = mode.created() {
-                        // TODO: uncomment to avoid overwriting pre-crate account state
-                        // if state.acc(&created).is_none() {
-                        //     fetch(Fetch::Account(created), state, chain).await?;
-                        // }
+                        if state.acc(&created).is_none() {
+                            fetch(Fetch::Account(created), state, chain).await?;
+                        }
                         let creator = call.by;
 
                         // Depth check before nonce increment
