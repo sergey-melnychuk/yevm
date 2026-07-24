@@ -1563,9 +1563,9 @@ function _fmtEventBody(kind, data, codeBytes) {
         return [`${topics.length} topics`, dataHtml];
       }
       case 'Fee': {
-        const [acc, base, tip, gas] = data;
+        const [acc, coinbase, burn, tip, gas] = data;
         const hasTip = tip && tip !== '0x0000000000000000000000000000000000000000000000000000000000000000';
-        const total  = hasTip ? _fmtValue(`0x${(BigInt(base) + BigInt(tip)).toString(16)}`) : _fmtValue(base);
+        const total  = hasTip ? _fmtValue(`0x${(BigInt(burn) + BigInt(tip)).toString(16)}`) : _fmtValue(base);
         return [`${_lbl(acc)}  ${total}  (${_fmtNum(gas)} gas)`, null];
       }
       case 'Get': {
@@ -2129,7 +2129,7 @@ function _analyse_js_unused(rows) {
 
       case 'Fee': {
         if (!data || reverted) break;
-        const [acc, , tip] = data;
+        const [acc, coinbase, burn, tip, gas] = data;
         feeInfo = { sender: acc?.toLowerCase?.() ?? acc, tip };
         break;
       }
