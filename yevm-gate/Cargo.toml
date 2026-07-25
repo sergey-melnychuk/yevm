@@ -33,3 +33,6 @@ dotenvy = "0.15"
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+alloy-primitives = { version = "1.5", default-features = false, features = ["k256"] }
