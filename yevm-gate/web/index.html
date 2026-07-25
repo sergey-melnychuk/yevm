@@ -244,8 +244,53 @@ async function loadChains() {
   return chainUrls;
 }
 
+// Fetch the sender's current on-chain nonce through the gate's own RPC proxy
+// (same-origin, CORS-safe; the gate forwards reads to the chain upstream).
+// 'latest' = confirmed nonce = count of mined txs. Returns a BigInt, or null on
+// any RPC/parse error so the caller skips the check instead of warning falsely.
+async function fetchAccountNonce(cid, from) {
+  try {
+    const res = await fetch('/rpc/' + cid, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getTransactionCount', params: [from, 'latest'] }),
+    });
+    const j = await res.json();
+    return j?.result != null ? BigInt(j.result) : null;
+  } catch { return null; }
+}
+
+// Classify the signed tx's nonce against the sender's on-chain nonce:
+//   ok     - equal; this is the next tx to mine.
+//   behind - already used; the tx can never be mined ("nonce too low").
+//   ahead  - a gap; the tx stays queued until the missing nonces are used -
+//            UNLESS this gate is already holding those in-between txs from the
+//            same sender (a legit stacked tx), in which case it's 'queued'.
+// Returns null (no badge) when the account nonce couldn't be fetched.
+async function checkNonce(item, cid) {
+  const accountNonce = await fetchAccountNonce(cid, item.from);
+  if (accountNonce == null) return null;
+  let txNonce;
+  try { txNonce = BigInt(item.tx.nonce); } catch { return null; }
+  let status = txNonce === accountNonce ? 'ok' : txNonce < accountNonce ? 'behind' : 'ahead';
+  let ahead = 0;
+  if (status === 'ahead') {
+    // Distinct same-sender pending nonces that fill the gap [account, tx).
+    const filling = new Set();
+    for (const other of currentList) {
+      if (other.hash === item.hash) continue;
+      if ((other.from || '').toLowerCase() !== (item.from || '').toLowerCase()) continue;
+      let n; try { n = BigInt(other.tx.nonce); } catch { continue; }
+      if (n >= accountNonce && n < txNonce) filling.add(n.toString());
+    }
+    ahead = filling.size;
+    if (BigInt(ahead) === txNonce - accountNonce) status = 'queued';
+  }
+  return { status, txNonce: txNonce.toString(), accountNonce: accountNonce.toString(), ahead };
+}
+
 let currentList = [];
-// hash -> { status: 'pending'|'done'|'failed', analysis, error }
+// hash -> { status: 'pending'|'done'|'failed', analysis, nonceCheck, error }
 const simResults = new Map();
 
 // Run the decoded pending tx (exactly as signed - real nonce/fees/access list)
@@ -257,9 +302,13 @@ async function simulateCard(item) {
   const { hash, tx } = item;
   simResults.set(hash, { status: 'pending' });
   render();
+  const cid = _chainId(tx.chainId);
+  // Nonce sanity runs alongside the simulation - an independent RPC read, so a
+  // slow/failing nonce lookup never blocks the analysis (and vice versa).
+  const noncePromise = checkNonce(item, cid);
   try {
     const urls = await loadChains();
-    const url = urls[parseInt(tx.chainId, 16)];
+    const url = urls[cid];
     if (!url) throw new Error(`no RPC configured for chain ${tx.chainId}`);
     const EVENT_FILTER = 0xFFFFFFFF - 1; // exclude STEP events
     const stream = await wasmExecute(url, item.call, tx, EVENT_FILTER);
@@ -270,8 +319,8 @@ async function simulateCard(item) {
       if (t.event && t.event.Undo) {
         // mark the reverted span for analyse() to be aware of it.
         const [from, to] = t.event.Undo;
-        for (const p of traces) 
-          if (p.seq >= from && p.seq < to) 
+        for (const p of traces)
+          if (p.seq >= from && p.seq < to)
             p.reverted = true;
       }
       traces.push(t);
@@ -279,9 +328,14 @@ async function simulateCard(item) {
     simResults.set(hash, {
       status: 'done',
       analysis: wasmAnalyse(traces),
+      nonceCheck: await noncePromise,
     });
   } catch (e) {
-    simResults.set(hash, { status: 'failed', error: (e && e.message) || String(e) });
+    simResults.set(hash, {
+      status: 'failed',
+      error: (e && e.message) || String(e),
+      nonceCheck: await noncePromise.catch(() => null),
+    });
   }
   render();
 }
@@ -343,6 +397,7 @@ function render() {
       ${toLine}
       <div class="status ${sim.status}">${sim.status.toUpperCase()}</div>
       <div class="meta">${meta}</div>
+      ${renderNonceWarning(sim)}
       ${sim.status === 'done' ? renderAnalysis(sim.analysis, cid) : ''}
       ${actions}
     </div>`;
@@ -525,6 +580,27 @@ function _fmtDelta(delta) {
   const pos = delta > 0n;
   const abs = pos ? delta : -delta;
   return (pos ? '+' : '-') + _fmtValue('0x' + abs.toString(16));
+}
+
+// Nonce badge: shown only when the signed tx's nonce doesn't line up with the
+// sender's on-chain nonce. This is gate-side metadata (is the tx broadcastable
+// right now?), deliberately kept out of renderAnalysis (which renders the lens).
+function renderNonceWarning(sim) {
+  const nc = sim.nonceCheck;
+  if (!nc || nc.status === 'ok') return '';
+  if (nc.status === 'queued') {
+    return `<div class="analysis"><div class="an-row caution">
+      <span class="an-label yel">Queued</span>
+      <span class="an-addr">nonce ${nc.txNonce} follows ${nc.ahead} earlier pending tx(s); account nonce is ${nc.accountNonce}</span>
+    </div></div>`;
+  }
+  const msg = nc.status === 'behind'
+    ? `nonce ${nc.txNonce} is behind account nonce ${nc.accountNonce} — already used, this tx cannot be mined`
+    : `nonce ${nc.txNonce} is ahead of account nonce ${nc.accountNonce} — a gap; the tx stays queued until the earlier nonces are used`;
+  return `<div class="analysis"><div class="an-row warn">
+    <span class="an-label red">⚠ Nonce ${nc.status}</span>
+    <span class="an-addr">${msg}</span>
+  </div></div>`;
 }
 
 // Render analyse() output (a lens `Alerts`): the structured effects of the tx,
