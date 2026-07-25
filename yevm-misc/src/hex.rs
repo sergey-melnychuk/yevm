@@ -96,6 +96,18 @@ impl<const N: usize> From<&[u8]> for Hex<N> {
     }
 }
 
+impl<const N: usize> TryFrom<&str> for Hex<N> {
+    type Error = &'static str;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let vec = parse_vec(value)?;
+        if vec.len() > N {
+            return Err("data loss detected");
+        }
+        Ok(Self::from(vec.as_ref()))
+    }
+}
+
 impl<const N: usize> From<usize> for Hex<N> {
     fn from(value: usize) -> Self {
         Self::from(&value.to_be_bytes()[..])
