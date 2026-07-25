@@ -3,12 +3,21 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>dryrun · gate</title>
+<title>yevm · gate</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: #0b0e1a; color: #e2e8f0; font-family: monospace; font-size: 14px; padding: 24px; }
-  h1 { color: #7dd3fc; margin-bottom: 4px; font-size: 1.1em; letter-spacing: 0.05em; }
-  #addr { color: #475569; font-size: 0.82em; margin-bottom: 20px; min-height: 1.2em; }
+  .header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+  h1 { color: #7dd3fc; font-size: 1.1em; letter-spacing: 0.05em; white-space: nowrap; }
+  .session-wrap { position: relative; }
+  #session { width: 21ch; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wallet-menu { display: none; position: absolute; top: calc(100% + 6px); right: 0; min-width: 21ch;
+                 background: #10162a; border: 1px solid rgba(255,255,255,0.08); border-radius: 6px;
+                 overflow: hidden; z-index: 10; }
+  .wallet-menu.open { display: block; }
+  .wallet-menu button { display: block; width: 100%; text-align: left; padding: 8px 12px; background: none;
+                         border: none; color: #e2e8f0; font-family: monospace; font-size: 0.85em; cursor: pointer; }
+  .wallet-menu button:hover { background: rgba(56,189,248,0.12); }
   #list { display: flex; flex-direction: column; gap: 12px; }
   .card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 14px 16px; }
   .hash { color: #94a3b8; font-size: 0.85em; margin-bottom: 4px; word-break: break-all; }
@@ -28,7 +37,6 @@
   .btn.danger { background: rgba(248,113,113,0.10); border-color: rgba(248,113,113,0.3); color: #f87171; }
   .btn.danger:hover { background: rgba(248,113,113,0.20); }
   .empty { color: #475569; font-style: italic; }
-  #connect { margin-bottom: 20px; }
   .traces { margin-bottom: 10px; font-size: 0.8em; display: flex; flex-direction: column; gap: 2px; }
   .trace-line { color: #94a3b8; padding: 2px 0; word-break: break-all; }
   .trace-line.reverted { color: #475569; text-decoration: line-through; }
@@ -38,24 +46,73 @@
 </style>
 </head>
 <body>
-<h1>dryrun · gate</h1>
-<div id="addr"></div>
-<div id="connect"><button class="btn" onclick="connect()">Connect Wallet</button></div>
+<div class="header">
+  <h1>yevm · gate</h1>
+  <div class="session-wrap">
+    <button id="session" class="btn" onclick="onSessionClick()">Connect Wallet</button>
+    <div id="wallet-menu" class="wallet-menu"></div>
+  </div>
+</div>
 <div id="list"></div>
 <script>
-let token = localStorage.getItem('dryrun_token');
-let address = localStorage.getItem('dryrun_address');
+let token = localStorage.getItem('yevm_gate_token');
+let address = localStorage.getItem('yevm_gate_address');
+let isAdmin = localStorage.getItem('yevm_gate_admin') === '1';
 
 function authHeaders() {
   return token ? { 'Authorization': 'Bearer ' + token } : {};
 }
 
-async function connect() {
-  if (!window.ethereum) { alert('No wallet detected.'); return; }
+const F = {
+  STEP:       1 << 0,
+  CALL:       1 << 1,
+  RETURN:     1 << 2,
+  REVERT:     1 << 3,
+  HALT:       1 << 4,
+  GET:        1 << 5,
+  PUT:        1 << 6,
+  LOG:        1 << 7,
+  CREATE:     1 << 8,
+  DELETE:     1 << 9,
+  MOVE:       1 << 10,
+  FEE:        1 << 11,
+  HASH:       1 << 12,
+  CODE:       1 << 13,
+};
+F.TOP        = F.CALL | F.RETURN | F.REVERT | F.HALT | F.CREATE | F.DELETE | F.LOG | F.FEE | F.GET | F.PUT | F.HASH | F.CODE;
+F.ALL        = 0xFFFFFFFF;
 
-  const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+const EVENT_FILTER = F.TOP;
+
+let wasmReady = false;
+let wasmExecute = null;
+let wasmAnalyse = null;
+async function loadWasm() {
+  try {
+    const mod = await import('/static/yevm_wasm.js');
+    await mod.default();
+    wasmExecute = mod.execute;
+    wasmAnalyse = mod.analyse;
+    wasmReady = true;
+  } catch (e) {
+    console.error('wasm init failed', e);
+  }
+  // Simulate any cards that were rendered before the simulator was ready.
+  for (const item of currentList) {
+    if (!simResults.has(item.hash) && wasmReady) simulateCard(item);
+  }
+}
+
+async function connect(provider) {
+  if (!provider) { alert('No wallet detected.'); return; }
+
+  const accounts = await provider.request({ method: 'eth_requestAccounts' });
+  if (!accounts || !accounts.length) {
+    alert('Wallet returned no accounts - unlock it and select an account, then try again.');
+    return;
+  }
   const account = accounts[0];
-  const chainId = parseInt(await window.ethereum.request({ method: 'eth_chainId' }), 16);
+  const chainId = parseInt(await provider.request({ method: 'eth_chainId' }), 16);
 
   const { nonce } = await fetch('/auth/challenge').then(r => r.json());
 
@@ -76,39 +133,192 @@ async function connect() {
   ].join('\n');
 
   const msgHex = '0x' + Array.from(new TextEncoder().encode(message), b => b.toString(16).padStart(2, '0')).join('');
-  const signature = await window.ethereum.request({
-    method: 'personal_sign',
-    params: [msgHex, account],
-  });
+  const signature = await provider.request({ method: 'personal_sign', params: [msgHex, account] });
 
   const res = await fetch('/auth/verify', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message, signature }),
   });
-
   if (!res.ok) { alert('Auth failed: ' + (await res.json()).error); return; }
 
   const data = await res.json();
   token = data.token;
   address = data.address;
-  localStorage.setItem('dryrun_token', token);
-  localStorage.setItem('dryrun_address', address);
+  isAdmin = !!data.admin;
+  localStorage.setItem('yevm_gate_token', token);
+  localStorage.setItem('yevm_gate_address', address);
+  localStorage.setItem('yevm_gate_admin', isAdmin ? '1' : '0');
 
   updateHeader();
   load();
 }
 
+// "0x1234abcd...5678efab" - first and last 4 bytes, so a full address stays
+// recognizable at a glance without blowing out the button's fixed width.
+function shortAddr(a) {
+  return a.length <= 21 ? a : a.slice(0, 6) + '...' + a.slice(-4);
+}
+
 function updateHeader() {
-  const el = document.getElementById('addr');
-  const connect = document.getElementById('connect');
-  if (address) {
-    el.textContent = address;
-    connect.style.display = 'none';
-  } else {
-    el.textContent = '';
-    connect.style.display = '';
+  const btn = document.getElementById('session');
+  btn.textContent = address ? shortAddr(address) : 'Connect Wallet';
+}
+
+// EIP-6963 (Multi Injected Provider Discovery): each installed wallet extension
+// announces itself here instead of everyone fighting over window.ethereum. The
+// listener must be registered before the request is dispatched, or announcements
+// made synchronously in response to it would be missed.
+const wallets = []; // { info: { uuid, name, icon, rdns }, provider }
+window.addEventListener('eip6963:announceProvider', (event) => {
+  const { info, provider } = event.detail;
+  if (!wallets.some(w => w.info.uuid === info.uuid)) {
+    wallets.push({ info, provider });
+    if (!address) closeWalletMenu(); // list changed; close so the next click re-renders it
   }
+});
+window.dispatchEvent(new Event('eip6963:requestProvider'));
+
+function closeWalletMenu() {
+  document.getElementById('wallet-menu').classList.remove('open');
+}
+
+function openWalletMenu() {
+  const menu = document.getElementById('wallet-menu');
+  menu.innerHTML = '';
+  wallets.forEach((w, i) => {
+    const btn = document.createElement('button');
+    btn.textContent = w.info.name;
+    btn.onclick = () => selectWallet(i);
+    menu.appendChild(btn);
+  });
+  menu.classList.add('open');
+}
+
+function selectWallet(i) {
+  closeWalletMenu();
+  connect(wallets[i].provider);
+}
+
+// Click outside the button/menu closes the menu.
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.session-wrap')) closeWalletMenu();
+});
+
+function onSessionClick() {
+  if (address) {
+    closeWalletMenu();
+    if (confirm(`Sign out of ${address}?`)) signOut();
+    return;
+  }
+  if (wallets.length >= 2) {
+    document.getElementById('wallet-menu').classList.contains('open')
+      ? closeWalletMenu()
+      : openWalletMenu();
+    return;
+  }
+  // Zero or one EIP-6963 wallet: fall back to the legacy single-provider global.
+  const provider = wallets[0]?.provider || window.ethereum;
+  if (!provider) { alert('No wallet detected.'); return; }
+  connect(provider);
+}
+
+function signOut() {
+  token = null;
+  address = null;
+  isAdmin = false;
+  localStorage.removeItem('yevm_gate_token');
+  localStorage.removeItem('yevm_gate_address');
+  localStorage.removeItem('yevm_gate_admin');
+  currentList = [];
+  simResults.clear();
+  updateHeader();
+  load();
+}
+
+// The chainId -> RPC url map used both to resolve where to simulate a pending
+// tx and (once submitted) where to broadcast it. Fetched once and cached; the
+// gate is the only party that manages this registry, so it doesn't change
+// mid-session under normal use.
+let chainUrls = null;
+async function loadChains() {
+  if (!chainUrls) {
+    const res = await fetch('/chain', { headers: authHeaders() });
+    const raw = res.ok ? await res.json() : {};
+    // Keyed by numeric chain id, not the raw hex string: /chain's keys ("0x1")
+    // and a decoded tx's chainId ("0x0000000000000001", a zero-padded Hex<8>)
+    // are both valid hex for the same chain but spelled differently.
+    chainUrls = {};
+    for (const [hex, url] of Object.entries(raw)) chainUrls[parseInt(hex, 16)] = url;
+  }
+  return chainUrls;
+}
+
+let currentList = [];
+// hash -> { status: 'pending'|'done'|'failed', gasUsed, success, created, traces, error }
+const simResults = new Map();
+
+// Run the decoded pending tx (exactly as signed - real nonce/fees/access list)
+// against the chain it was captured on. Never touches `raw`: simulation only
+// needs the decoded `call`/`tx` the API already returned.
+async function simulateCard(item) {
+  const { hash, tx } = item;
+  simResults.set(hash, { status: 'pending' });
+  render();
+  try {
+    const urls = await loadChains();
+    const url = urls[parseInt(tx.chainId, 16)];
+    if (!url) throw new Error(`no RPC configured for chain ${tx.chainId}`);
+    const stream = await wasmExecute(url, item.call, tx, EVENT_FILTER);
+    const traces = [];
+    for (;;) {
+      const t = await stream.next();
+      if (t == null) break;
+      // console.log(t);
+      traces.push(t);
+    }
+    simResults.set(hash, {
+      status: 'done',
+      traces,
+    });
+  } catch (e) {
+    simResults.set(hash, { status: 'failed', error: (e && e.message) || String(e) });
+  }
+  render();
+}
+
+function render() {
+  const el = document.getElementById('list');
+  if (!currentList.length) {
+    el.innerHTML = '<p class="empty">No pending transactions.</p>';
+    return;
+  }
+
+  el.innerHTML = currentList.map(({ hash, from, call }) => {
+    const sim = simResults.get(hash) || { status: 'pending' };
+    const meta = sim.status === 'done'
+      ? ''
+      : sim.status === 'failed'
+      ? `<span class="bad">${sim.error}</span>`
+      : '<span>simulating…</span>';
+    const fromLine = from && from.toLowerCase() !== (address || '').toLowerCase()
+      ? `<div class="from">from: ${from}</div>` : '';
+    const toLine = `<div class="from">${call && call.to ? 'to: ' + call.to : 'contract creation'}</div>`;
+    const actions = `
+      <div class="actions">
+        ${sim.status === 'done' ? `<button class="btn" onclick="submit('${hash}')">Submit</button>` : ''}
+        <button class="btn danger" onclick="remove('${hash}')">Remove</button>
+      </div>`;
+    return `<div class="card">
+      <div class="hash">${hash}</div>
+      ${fromLine}
+      ${toLine}
+      <div class="status ${sim.status}">${sim.status.toUpperCase()}</div>
+      <div class="meta">${meta}</div>
+      ${renderTraces(sim.traces)}
+      ${actions}
+    </div>`;
+  }).join('');
 }
 
 async function load() {
@@ -119,43 +329,18 @@ async function load() {
 
   const res = await fetch('/api/txs', { headers: authHeaders() });
   if (res.status === 401) {
-    token = null; address = null;
-    localStorage.removeItem('dryrun_token');
-    localStorage.removeItem('dryrun_address');
-    updateHeader();
-    load();
+    signOut();
     return;
   }
 
-  const list = await res.json();
-  const el = document.getElementById('list');
-  if (!list.length) {
-    el.innerHTML = '<p class="empty">No pending transactions.</p>';
-    return;
-  }
+  currentList = await res.json();
+  render();
 
-  el.innerHTML = list.map(({ hash, from, sim }) => {
-    const meta = sim.status === 'done'
-      ? `<span>gas: ${sim.gasUsed}</span><span class="${sim.success ? 'ok' : 'bad'}">${sim.success ? 'success' : 'reverted'}</span>`
-      : sim.status === 'failed'
-      ? `<span class="bad">${sim.error}</span>`
-      : '<span>simulating…</span>';
-    const fromLine = from && from.toLowerCase() !== (address || '').toLowerCase()
-      ? `<div class="from">from: ${from}</div>` : '';
-    const actions = sim.status !== 'pending' ? `
-      <div class="actions">
-        <button class="btn" onclick="submit('${hash}')">Submit</button>
-        <button class="btn danger" onclick="reject('${hash}')">Reject</button>
-      </div>` : '';
-    return `<div class="card">
-      <div class="hash">${hash}</div>
-      ${fromLine}
-      <div class="status ${sim.status}">${sim.status.toUpperCase()}</div>
-      <div class="meta">${meta}</div>
-      ${renderTraces(sim.traces)}
-      ${actions}
-    </div>`;
-  }).join('');
+  console.log(currentList);
+
+  if (wasmReady) for (const item of currentList) {
+    if (!simResults.has(item.hash)) simulateCard(item);
+  }
 }
 
 
@@ -201,8 +386,9 @@ function renderTrace(t) {
     const [from, to, val] = e.Move;
     body = `<span class="tkey">move</span>${from} → ${to}: <span class="tok">${fmtEth(val)}</span>`;
   } else if (e.Fee) {
-    const [sender, , , gas] = e.Fee;
-    body = `<span class="tkey">fee</span>${sender}: ${gas} gas`;
+    const [sender, coinbase, burn, tip, gas] = e.Fee;
+    const total  = weiToEth(BigInt(burn) + BigInt(tip));
+    body = `<span class="tkey">fee</span>${sender}: ${gas} gas | ${total}`;
   } else if (e.Put) {
     const [target, next] = e.Put;
     if (target.Value) {
@@ -239,14 +425,16 @@ async function submit(hash) {
   load();
 }
 
-async function reject(hash) {
-  await fetch('/api/txs/' + hash + '/reject', { method: 'POST', headers: authHeaders() });
+async function remove(hash) {
+  await fetch('/api/txs/' + hash, { method: 'DELETE', headers: authHeaders() });
   load();
 }
 
 updateHeader();
 load();
-setInterval(load, 2000);
+setInterval(load, 30000);
+loadWasm();
+
 </script>
 </body>
 </html>

@@ -372,6 +372,51 @@ mod wasm {
         })
     }
 
+    #[wasm_bindgen]
+    pub async fn execute(
+        url: JsString,
+        call_json: JsValue,
+        tx_json: JsValue,
+        event_filter: u32,
+    ) -> Result<Stream, Error> {
+        let mut rpc = Rpc::latest(url.into()).await?;
+        let chain_id = rpc.chain_id().await?;
+        let head = rpc.block(rpc.block_number).await?.head;
+        rpc.reset(head.number.as_u64(), head.hash);
+
+        let call: Call = serde_wasm_bindgen::from_value(call_json).map_err(|e| eyre!("{e}"))?;
+        let tx: Tx = serde_wasm_bindgen::from_value(tx_json).map_err(|e| eyre!("{e}"))?;
+
+        let (ytx, yrx) = mpsc::channel(1024 * 1024);
+        let mut cache = Cache::with_sender(ytx, event_filter);
+        cache.set_chain_id(chain_id);
+
+        let mut exe = Executor::new(call);
+        let result = exe.run(tx, head, &mut cache, &rpc).await?;
+        let _ = cache.sender.take();
+
+        let (yevm_status, yevm_gas) = match result {
+            CallResult::Done {
+                status,
+                ret: _,
+                gas,
+            } => (status, gas.finalized.into()),
+            CallResult::Created { acc, code: _, gas } => (acc.to(), gas.finalized.into()),
+        };
+
+        // No real receipt exists yet for a pending tx, so there's nothing to compare
+        // against - mirror `simulate()` and set rcpt_* equal to the yevm result.
+        Ok(Stream {
+            receiver: yrx,
+            tx: Int::ZERO,
+            rcpt_gas: yevm_gas,
+            yevm_gas,
+            rcpt_status: yevm_status,
+            yevm_status,
+            fetches: cache.fetched,
+        })
+    }
+
     async fn release() {
         let promise = js_sys::Promise::resolve(&JsValue::NULL);
         let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
@@ -380,11 +425,3 @@ mod wasm {
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm::*;
-
-/*
-TODO:
-
-Call target: bring your own env (bytecode, call, storage, etc) + state overrides.
-(Fully reproducible hermetic execution environment, demo/PoC/etc)
-
-*/
