@@ -25,7 +25,6 @@ ruint = "1.17"
 ethnum = "1.5"
 keccak-asm = "0.1"
 tiny-keccak = { version = "2", features = ["keccak"] }
-rlp = "0.8"
 reqwest = { version = "0.13", features = ["json"] }
 k256 = { version = "0.13", features = ["ecdsa"] }
 futures = "0.3"
