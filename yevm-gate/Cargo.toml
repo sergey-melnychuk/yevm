@@ -21,11 +21,15 @@ serde_json = { workspace = true }
 reqwest = { workspace = true }
 hex = { workspace = true }
 k256 = { workspace = true }
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+alloy-consensus = { version = "1.7", features = ["k256"] }
+alloy-eips = { version = "1.7" }
 futures = { workspace = true }
 tokio = { version = "1", features = ["full"] }
 rand = "0.8"
 axum = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }
 dotenvy = "0.15"
-sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "macros"] }
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
