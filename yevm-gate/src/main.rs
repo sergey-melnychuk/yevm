@@ -1,59 +1,40 @@
 mod auth;
 mod db;
-mod decode;
+mod tx;
 
 use auth::AuthStore;
 use axum::{
     Json, Router,
     extract::{Path, Request, State as AxumState},
+    http::{StatusCode, header},
     middleware::{self, Next},
-    response::Html,
+    response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
 use eyre::eyre;
-use futures::StreamExt;
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
+use yevm_misc::hex::Hex;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
-use yevm_base::{Acc, Int};
-use yevm_core::{
-    Call, Head, Tx,
-    cache::Cache,
-    chain::Chain,
-    exe::{CallResult, Executor},
-    rpc::Rpc,
-    state::State,
-    trace::{Trace, filter},
-};
+use tower_http::cors::CorsLayer;
+use yevm_base::Acc;
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SimResult {
-    pub status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub gas_used: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub success: Option<bool>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub traces: Vec<Trace>,
-}
-
-struct PendingTx {
-    from: Acc,
-    raw: String,
-    sim: SimResult,
-}
+const WASM_JS: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../yevm-wasm/pkg/yevm_wasm.js"
+));
+const WASM_BG: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../yevm-wasm/pkg/yevm_wasm_bg.wasm"
+));
 
 struct AppState {
-    rpc_url: String,
     client: reqwest::Client,
     auth: Arc<AuthStore>,
     admin: Option<Acc>,
     pool: SqlitePool,
-    pending: RwLock<HashMap<String, PendingTx>>,
+    chains: RwLock<HashMap<i64, String>>,
 }
 
 type Shared = Arc<AppState>;
@@ -61,12 +42,13 @@ type Shared = Arc<AppState>;
 #[derive(Clone)]
 struct Caller(Acc);
 
+// RUST_LOG=info YEVM_PROXY_BIND="127.0.0.1:8000" YEVM_DB="./target/gate.db" cargo run -p yevm-gate
+
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     tracing_subscriber::fmt::init();
     dotenvy::dotenv().ok();
 
-    let rpc_url = std::env::var("YEVM_RPC_URL").map_err(|_| eyre!("YEVM_RPC_URL not set"))?;
     let bind: SocketAddr = std::env::var("YEVM_PROXY_BIND")
         .unwrap_or_else(|_| "127.0.0.1:8000".into())
         .parse()?;
@@ -81,31 +63,34 @@ async fn main() -> eyre::Result<()> {
     }
 
     let db_path = std::env::var("YEVM_DB").unwrap_or_else(|_| "gate.db".into());
-    let pool = db::open(&db_path).await?;
-    let pending_init = db::load_all(&pool).await?;
+    let pool = db::open(&db_path).await?;   // runs migrations (seeds default networks)
+    let chains: HashMap<i64, String> = db::list_chains(&pool).await?.into_iter().collect();
+    tracing::info!("configured chains: {:?}", chains.keys().collect::<Vec<_>>());
 
     let state: Shared = Arc::new(AppState {
-        rpc_url,
         client: reqwest::Client::new(),
-        auth: AuthStore::new(),
+        auth: AuthStore::new(pool.clone()),
         admin,
         pool,
-        pending: RwLock::new(pending_init),
+        chains: RwLock::new(chains),
     });
 
     let api = Router::new()
         .route("/api/txs", get(api_list))
-        .route("/api/txs/{hash}", get(api_get))
+        .route("/api/txs/{hash}", get(api_get).delete(api_delete))
         .route("/api/txs/{hash}/submit", post(api_submit))
-        .route("/api/txs/{hash}/reject", post(api_reject))
+        .route("/chain", get(chains_get))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     let app = Router::new()
         .route("/", get(ui))
+        .route("/static/{*path}", get(serve))
         .route("/rpc", post(handle_rpc))
+        .route("/rpc/{chainId}", post(handle_rpc_chain))
         .route("/auth/challenge", get(auth_challenge))
         .route("/auth/verify", post(auth_verify))
         .merge(api)
+        .layer(CorsLayer::permissive())
         .with_state(state);
 
     tracing::info!("yevm-gate listening on {bind}");
@@ -118,166 +103,272 @@ async fn require_auth(
     AxumState(state): AxumState<Shared>,
     mut req: Request,
     next: Next,
-) -> Result<axum::response::Response, AppError> {
+) -> Result<Response, AppError> {
     let token = req
         .headers()
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
-        .ok_or_else(|| eyre!("missing Authorization header"))?;
+        .ok_or_else(|| {
+            AppError::new(StatusCode::UNAUTHORIZED, eyre!("missing Authorization header"))
+        })?;
 
     let addr = state
         .auth
         .authenticate(token)
         .await
-        .ok_or_else(|| eyre!("invalid or expired session"))?;
+        .ok_or_else(|| {
+            AppError::new(StatusCode::UNAUTHORIZED, eyre!("invalid or expired session"))
+        })?;
 
     req.extensions_mut().insert(Caller(addr));
     Ok(next.run(req).await)
 }
 
-async fn auth_challenge(AxumState(state): AxumState<Shared>) -> Json<Value> {
-    let nonce = state.auth.new_challenge().await;
-    Json(json!({ "nonce": nonce }))
+async fn auth_challenge(AxumState(state): AxumState<Shared>) -> Result<Json<Value>, AppError> {
+    let nonce = state.auth.new_challenge().await?;
+    Ok(Json(json!({ "nonce": nonce })))
 }
 
 async fn auth_verify(
     AxumState(state): AxumState<Shared>,
+    headers: header::HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
+    let bad = |m: &str| AppError::new(StatusCode::BAD_REQUEST, eyre!("{m}"));
     let message = body
         .get("message")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| eyre!("missing message"))?;
+        .ok_or_else(|| bad("missing message"))?;
     let signature = body
         .get("signature")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| eyre!("missing signature"))?;
+        .ok_or_else(|| bad("missing signature"))?;
 
-    let (address, token) = state.auth.verify(message, signature).await?;
+    let host = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .or(headers
+            .get(header::FORWARDED)
+            .and_then(|v| v.to_str().ok()))
+        .ok_or_else(|| bad("missing Host header"))?;
+
+    let (address, token) = state
+        .auth
+        .verify(message, signature, host)
+        .await
+        .map_err(|e| AppError::new(StatusCode::UNAUTHORIZED, e))?;
     Ok(Json(
         json!({ "address": format!("{address}"), "token": token }),
     ))
 }
 
+async fn resolve_url(state: &AppState, chain_id: i64) -> Option<String> {
+    state.chains.read().await.get(&chain_id).cloned()
+}
+
+fn parse_chain_id(s: &str) -> Option<i64> {
+    s.try_into().ok().map(|hex: Hex<8>| hex.as_u64() as i64)
+}
+
 async fn handle_rpc(
     AxumState(state): AxumState<Shared>,
     Json(body): Json<Value>,
-) -> Result<Json<Value>, AppError> {
-    let method = body.get("method").and_then(|m| m.as_str()).unwrap_or("");
-    tracing::info!("proxy {method}");
-    if method == "eth_sendRawTransaction" {
-        return intercept_send_raw(state, body).await;
-    }
-    let resp = state.client.post(&state.rpc_url).json(&body).send().await?;
-    Ok(Json(resp.json::<Value>().await?))
+) -> Result<Response, AppError> {
+    let chain_id = 1; // Ethereum Mainnet
+    proxy(state, chain_id, body).await
 }
 
-async fn intercept_send_raw(state: Shared, body: Value) -> Result<Json<Value>, AppError> {
+async fn handle_rpc_chain(
+    AxumState(state): AxumState<Shared>,
+    Path(chain): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Response, AppError> {
     let id = body.get("id").cloned().unwrap_or(Value::Null);
-    let raw = body
-        .get("params")
-        .and_then(|p| p.get(0))
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| eyre!("missing params[0]"))?
-        .to_string();
+    match parse_chain_id(&chain) {
+        Some(chain_id) => proxy(state, chain_id, body).await,
+        None => Ok(rpc_error(id, -32602, format!("invalid chain id: {chain}")).into_response()),
+    }
+}
 
-    let decoded = decode::decode_raw(&raw).map_err(|e| eyre!("{e}"))?;
-    let hash = format!("{}", decoded.tx.hash);
-    tracing::info!("intercepted tx hash={hash} from={}", decoded.call.by);
-    let from = decoded.call.by;
-
-    let sim_init = SimResult {
-        status: "pending".into(),
-        error: None,
-        gas_used: None,
-        success: None,
-        traces: vec![],
+async fn proxy(state: Shared, chain_id: i64, body: Value) -> Result<Response, AppError> {
+    let url = match resolve_url(&state, chain_id).await {
+        Some(url) => url,
+        None => {
+            let id: Value = body.get("id").cloned().unwrap_or(Value::Null);
+            return Ok(rpc_error(id, -32602, format!("chain {chain_id} not configured"))
+                .into_response());
+        }
     };
-    db::insert(&state.pool, &hash, &from, &raw, &sim_init).await?;
-    {
-        let mut pending = state.pending.write().await;
-        pending.insert(
-            hash.clone(),
-            PendingTx {
-                from,
-                raw: raw.clone(),
-                sim: sim_init,
-            },
-        );
+
+    if let Some(arr) = body.as_array() {
+        let has_send_raw_tx = arr
+            .iter()
+            .any(|e| e.get("method").and_then(|m| m.as_str()) == Some("eth_sendRawTransaction"));
+        tracing::info!("proxy chain={chain_id} batch[{}]{}", arr.len(), if has_send_raw_tx { " +send" } else { "" });
+        if has_send_raw_tx {
+            return handle_batch(state, chain_id, &url, arr).await;
+        }
+        return relay(&state, &url, &body).await;
     }
 
-    spawn_sim(state, hash.clone(), decoded.call, decoded.tx);
-    Ok(Json(json!({ "jsonrpc": "2.0", "id": id, "result": hash })))
+    let method = body.get("method").and_then(|m| m.as_str()).unwrap_or("");
+    tracing::info!("proxy chain={chain_id} {method}");
+    if method == "eth_sendRawTransaction" {
+        return Ok(intercept_send_raw(state, body, chain_id).await?.into_response());
+    }
+    relay(&state, &url, &body).await
 }
 
-fn spawn_sim(state: Shared, hash: String, call: Call, tx: Tx) {
-    let rpc_url = state.rpc_url.clone();
-    tokio::spawn(async move {
-        let result = run_sim(rpc_url, call, tx).await;
-        let sim = match result {
-            Ok((gas, success, traces)) => SimResult {
-                status: "done".into(),
-                error: None,
-                gas_used: Some(gas),
-                success: Some(success),
-                traces,
-            },
-            Err(e) => SimResult {
-                status: "failed".into(),
-                error: Some(e.to_string()),
-                gas_used: None,
-                success: None,
-                traces: vec![],
-            },
+async fn relay(state: &AppState, url: &str, body: &Value) -> Result<Response, AppError> {
+    let resp = state.client.post(url).json(body).send().await?;
+    let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let ct = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/json")
+        .to_string();
+    let bytes = resp.bytes().await?;
+    Ok((status, [(header::CONTENT_TYPE, ct)], bytes).into_response())
+}
+
+async fn handle_batch(
+    state: Shared,
+    chain_id: i64,
+    url: &str,
+    arr: &[Value],
+) -> Result<Response, AppError> {
+    let mut slots: Vec<Value> = vec![Value::Null; arr.len()];
+    let mut forward: Vec<Value> = Vec::new();
+    let mut fwd_pos: Vec<usize> = Vec::new();
+    for (i, entry) in arr.iter().enumerate() {
+        if entry.get("method").and_then(|m| m.as_str()) == Some("eth_sendRawTransaction") {
+            slots[i] = store_raw_tx(&state, entry, chain_id).await;
+        } else {
+            fwd_pos.push(i);
+            forward.push(entry.clone());
+        }
+    }
+    if !forward.is_empty() {
+        let resp = state.client.post(url).json(&Value::Array(forward)).send().await?;
+        let items = match resp.json::<Value>().await? {
+            Value::Array(v) => v,
+            other => vec![other], // some nodes answer a 1-element batch with a bare object
         };
-        if let Err(e) = db::update_sim(&state.pool, &hash, &sim).await {
-            tracing::warn!("db update_sim failed: {e}");
+        for &i in &fwd_pos {
+            let id = arr[i].get("id").cloned().unwrap_or(Value::Null);
+            slots[i] = items
+                .iter()
+                .find(|r| r.get("id") == Some(&id))
+                .cloned()
+                .unwrap_or_else(|| rpc_error_json(id, -32603, "no matching response from upstream"));
         }
-        let mut pending = state.pending.write().await;
-        if let Some(entry) = pending.get_mut(&hash) {
-            entry.sim = sim;
-        }
-    });
+    }
+    Ok(Json(Value::Array(slots)).into_response())
 }
 
-async fn run_sim(rpc_url: String, call: Call, tx: Tx) -> eyre::Result<(u64, bool, Vec<Trace>)> {
-    let mut rpc = Rpc::latest(rpc_url).await?;
-    let chain_id = rpc.chain_id().await?;
-    let head: Head = rpc.block(rpc.block_number).await?.head;
-    rpc.reset(head.number.as_u64(), head.hash);
+// Hard caps on the (unauthenticated-by-design) signed queue, so that storing a
+// validly-signed tx for anyone who posts one can't be turned into a storage DoS.
+const MAX_SIGNED_TOTAL: i64 = 1024 * 1024;
+const MAX_SIGNED_PER_SENDER: i64 = 256;
 
-    let (ytx, yrx) = futures::channel::mpsc::channel(1024 * 1024);
-    let mut cache = Cache::with_sender(
-        ytx,
-        filter::MOVE | filter::PUT | filter::FEE | filter::LOG | filter::CREATE,
-    );
-    cache.set_chain_id(chain_id);
+// Build a JSON-RPC error response. The wallet posted JSON-RPC, so it must get
+// JSON-RPC back (HTTP 200) - not an HTTP error with a foreign body.
+fn rpc_error_json(id: Value, code: i64, message: impl Into<String>) -> Value {
+    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message.into() } })
+}
 
-    let mut exe = Executor::new(call);
-    let result = exe.run(tx, head, &mut cache, &rpc).await?;
-    drop(cache);
+fn rpc_error(id: Value, code: i64, message: impl Into<String>) -> Json<Value> {
+    Json(rpc_error_json(id, code, message))
+}
 
-    let traces: Vec<Trace> = yrx.collect().await;
-    let (gas, success) = match result {
-        CallResult::Done { gas, status, .. } => (gas.finalized as u64, status == Int::from(1u64)),
-        CallResult::Created { gas, .. } => (gas.finalized as u64, true),
+async fn store_raw_tx(state: &AppState, entry: &Value, chain_id: i64) -> Value {
+    let id = entry.get("id").cloned().unwrap_or(Value::Null);
+    let raw = match entry.get("params").and_then(|p| p.get(0)).and_then(|v| v.as_str()) {
+        Some(raw) => raw.to_string(),
+        None => return rpc_error_json(id, -32602, "missing params[0]"),
     };
-    Ok((gas, success, traces))
+    let decoded = match tx::decode_raw(&raw) {
+        Ok(decoded) => decoded,
+        Err(e) => return rpc_error_json(id, -32602, format!("cannot decode raw tx: {e}"))
+    };
+    let hash = format!("{}", decoded.tx.hash);
+    let from = decoded.call.by;
+    tracing::info!("intercepted tx hash={hash} from={from} chain={chain_id}");
+
+    match db::count_total(&state.pool).await {
+        Ok(n) if n >= MAX_SIGNED_TOTAL => return rpc_error_json(id, -32005, "gate queue is full"),
+        Err(e) => return rpc_error_json(id, -32603, format!("db error: {e}")),
+        _ => {}
+    }
+    match db::count_for_signer(&state.pool, &from).await {
+        Ok(n) if n >= MAX_SIGNED_PER_SENDER => {
+            return rpc_error_json(id, -32005, "too many txs for this sender");
+        }
+        Err(e) => return rpc_error_json(id, -32603, format!("db error: {e}")),
+        _ => {}
+    }
+    if let Err(e) = db::insert(&state.pool, &hash, &from, &raw, chain_id).await {
+        return rpc_error_json(id, -32603, format!("db error: {e}"));
+    }
+    json!({ "jsonrpc": "2.0", "id": id, "result": hash })
+}
+
+async fn intercept_send_raw(
+    state: Shared,
+    body: Value,
+    chain_id: i64,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(store_raw_tx(&state, &body, chain_id).await))
+}
+
+fn is_admin(state: &AppState, caller: &Acc) -> bool {
+    state.admin.as_ref() == Some(caller)
+}
+
+fn decoded_json(signed: &db::SignedTx) -> Result<Value, AppError> {
+    let decoded = tx::decode_raw(&signed.raw).map_err(|e| {
+        AppError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            eyre!("stored tx {} failed to decode: {e}", signed.hash),
+        )
+    })?;
+    Ok(json!({
+        "from": format!("{}", decoded.call.by),
+        "hash": format!("{}", decoded.tx.hash),
+        "call": decoded.call,
+        "tx": decoded.tx,
+    }))
 }
 
 async fn api_list(
     AxumState(state): AxumState<Shared>,
     axum::Extension(Caller(caller)): axum::Extension<Caller>,
-) -> Json<Value> {
-    let is_admin = state.admin == Some(caller);
-    let pending = state.pending.read().await;
-    let list: Vec<_> = pending
-        .iter()
-        .filter(|(_, p)| is_admin || p.from == caller)
-        .map(|(hash, p)| json!({ "hash": hash, "from": format!("{}", p.from), "sim": p.sim }))
-        .collect();
-    Json(json!(list))
+) -> Result<Json<Value>, AppError> {
+    let filter = if is_admin(&state, &caller) {
+        None
+    } else {
+        Some(&caller)
+    };
+    let mut list = Vec::new();
+    for tx in db::list(&state.pool, filter).await? {
+        match decoded_json(&tx) {
+            Ok(json) => list.push(json),
+            Err(e) => tracing::warn!("skipping tx {}: {}", tx.hash, e.report),
+        }
+    }
+    Ok(Json(json!(list)))
+}
+
+async fn owned(state: &AppState, caller: &Acc, hash: &str) -> Result<db::SignedTx, AppError> {
+    let signed = db::get(&state.pool, hash)
+        .await?
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, eyre!("tx not found: {hash}")))?;
+    if !is_admin(state, caller) && signed.from != *caller {
+        return Err(AppError::new(StatusCode::FORBIDDEN, eyre!("not your tx")));
+    }
+    Ok(signed)
 }
 
 async fn api_get(
@@ -285,17 +376,8 @@ async fn api_get(
     axum::Extension(Caller(caller)): axum::Extension<Caller>,
     Path(hash): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let is_admin = state.admin == Some(caller);
-    let pending = state.pending.read().await;
-    let entry = pending
-        .get(&hash)
-        .ok_or_else(|| eyre!("tx not found: {hash}"))?;
-    if !is_admin && entry.from != caller {
-        return Err(eyre!("not your tx").into());
-    }
-    Ok(Json(
-        json!({ "hash": hash, "from": format!("{}", entry.from), "sim": entry.sim }),
-    ))
+    let tx = owned(&state, &caller, &hash).await?;
+    Ok(Json(decoded_json(&tx)?))
 }
 
 async fn api_submit(
@@ -303,63 +385,76 @@ async fn api_submit(
     axum::Extension(Caller(caller)): axum::Extension<Caller>,
     Path(hash): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let is_admin = state.admin == Some(caller);
-    let raw = {
-        let pending = state.pending.read().await;
-        let entry = pending
-            .get(&hash)
-            .ok_or_else(|| eyre!("tx not found: {hash}"))?;
-        if !is_admin && entry.from != caller {
-            return Err(eyre!("not your tx").into());
-        }
-        entry.raw.clone()
-    };
-    let body =
-        json!({ "jsonrpc": "2.0", "method": "eth_sendRawTransaction", "params": [raw], "id": 1 });
-    let resp = state.client.post(&state.rpc_url).json(&body).send().await?;
-    let result: Value = resp.json().await?;
-    db::delete(&state.pool, &hash).await?;
-    state.pending.write().await.remove(&hash);
-    Ok(Json(result))
+    let signed = owned(&state, &caller, &hash).await?;
+    let url = resolve_url(&state, signed.chain_id).await;
+    Ok(Json(json!({
+        "raw": signed.raw,
+        "chain_id": format!("0x{:x}", signed.chain_id),
+        "url": url,
+    })))
 }
 
-async fn api_reject(
+async fn api_delete(
     AxumState(state): AxumState<Shared>,
     axum::Extension(Caller(caller)): axum::Extension<Caller>,
     Path(hash): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let is_admin = state.admin == Some(caller);
-    let pending = state.pending.write().await;
-    let entry = pending
-        .get(&hash)
-        .ok_or_else(|| eyre!("tx not found: {hash}"))?;
-    if !is_admin && entry.from != caller {
-        return Err(eyre!("not your tx").into());
-    }
-    drop(pending);
+    owned(&state, &caller, &hash).await?;
     db::delete(&state.pool, &hash).await?;
-    state.pending.write().await.remove(&hash);
-    Ok(Json(json!({ "rejected": hash })))
+    Ok(Json(json!({ "deleted": hash })))
+}
+
+async fn chains_get(AxumState(state): AxumState<Shared>) -> Json<Value> {
+    let map: tokio::sync::RwLockReadGuard<'_, HashMap<i64, String>> = state.chains.read().await;
+    let obj: serde_json::Map<String, Value> = map
+        .iter()
+        .map(|(id, url)| (format!("0x{id:x}"), Value::String(url.clone())))
+        .collect();
+    Json(Value::Object(obj))
 }
 
 async fn ui() -> Html<&'static str> {
     Html(include_str!("../web/index.html"))
 }
 
-struct AppError(eyre::Report);
-impl From<eyre::Report> for AppError {
-    fn from(e: eyre::Report) -> Self {
-        Self(e)
+async fn serve(Path(path): Path<String>) -> Response {
+    let asset: Option<(&'static [u8], &'static str)> = match path.as_str() {
+        "yevm_wasm.js" => Some((WASM_JS, "application/javascript")),
+        "yevm_wasm_bg.wasm" => Some((WASM_BG, "application/wasm")),
+        _ => None,
+    };
+    match asset {
+        Some((bytes, ct)) => ([(header::CONTENT_TYPE, ct)], bytes).into_response(),
+        None => (StatusCode::NOT_FOUND, "no such wasm asset").into_response(),
     }
 }
+
+struct AppError {
+    status: StatusCode,
+    report: eyre::Report,
+}
+
+impl AppError {
+    fn new(status: StatusCode, report: eyre::Report) -> Self {
+        Self { status, report }
+    }
+}
+
+impl From<eyre::Report> for AppError {
+    fn from(report: eyre::Report) -> Self {
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, report)
+    }
+}
+
 impl From<reqwest::Error> for AppError {
     fn from(e: reqwest::Error) -> Self {
-        Self(e.into())
+        Self::new(StatusCode::BAD_GATEWAY, e.into())
     }
 }
-impl axum::response::IntoResponse for AppError {
-    fn into_response(self) -> axum::response::Response {
-        let body = json!({ "error": self.0.to_string() });
-        (axum::http::StatusCode::UNAUTHORIZED, Json(body)).into_response()
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let body = json!({ "error": self.report.to_string() });
+        (self.status, Json(body)).into_response()
     }
 }
