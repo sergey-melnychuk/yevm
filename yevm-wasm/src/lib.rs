@@ -378,10 +378,12 @@ mod wasm {
         call_json: JsValue,
         tx_json: JsValue,
         event_filter: u32,
+        block: Option<u32>,
     ) -> Result<Stream, Error> {
         let mut rpc = Rpc::latest(url.into()).await?;
         let chain_id = rpc.chain_id().await?;
-        let head = rpc.block(rpc.block_number).await?.head;
+        let target = block.map(u64::from).unwrap_or(rpc.block_number);
+        let head = rpc.block(target).await?.head;
         rpc.reset(head.number.as_u64(), head.hash);
 
         let call: Call = serde_wasm_bindgen::from_value(call_json).map_err(|e| eyre!("{e}"))?;
