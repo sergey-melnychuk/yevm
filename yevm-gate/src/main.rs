@@ -79,7 +79,8 @@ async fn main() -> eyre::Result<()> {
         .route("/api/txs", get(api_list))
         .route("/api/txs/{hash}", get(api_get).delete(api_delete))
         .route("/api/txs/{hash}/submit", post(api_submit))
-        .route("/chain", get(chains_get))
+        .route("/chain", get(chains_get).post(chains_set))
+        .route("/chain/{chainId}", post(chain_set).delete(chain_delete))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     let app = Router::new()
@@ -158,8 +159,11 @@ async fn auth_verify(
         .verify(message, signature, host)
         .await
         .map_err(|e| AppError::new(StatusCode::UNAUTHORIZED, e))?;
+    // Surface whether this address may mutate the GLOBAL chain registry, so the UI
+    // can offer server-side chain edits (admin) vs browser-local overrides (anyone).
+    let admin = state.admin.as_ref() == Some(&address);
     Ok(Json(
-        json!({ "address": format!("{address}"), "token": token }),
+        json!({ "address": format!("{address}"), "token": token, "admin": admin }),
     ))
 }
 
@@ -411,6 +415,115 @@ async fn chains_get(AxumState(state): AxumState<Shared>) -> Json<Value> {
         .map(|(id, url)| (format!("0x{id:x}"), Value::String(url.clone())))
         .collect();
     Json(Value::Object(obj))
+}
+
+fn require_chain_admin(state: &AppState, caller: &Acc) -> Result<(), AppError> {
+    match &state.admin {
+        Some(admin) if admin == caller => Ok(()),
+        _ => Err(AppError::new(StatusCode::FORBIDDEN, eyre!("network config is admin-only"))),
+    }
+}
+
+async fn verify_chain(client: &reqwest::Client, url: &str, expected: i64) -> Result<(), String> {
+    let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "eth_chainId", "params": [] });
+    let resp = client
+        .post(url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+    let v: Value = resp.json().await.map_err(|e| format!("non-JSON response: {e}"))?;
+    let got = v
+        .get("result")
+        .and_then(|r| r.as_str())
+        .ok_or_else(|| "no chainId in response".to_string())?;
+    let got = i64::from_str_radix(got.trim_start_matches("0x"), 16)
+        .map_err(|_| format!("bad chainId: {got}"))?;
+    if got != expected {
+        return Err(format!("eth_chainId returned 0x{got:x}, expected 0x{expected:x}"));
+    }
+    Ok(())
+}
+
+async fn chain_set(
+    AxumState(state): AxumState<Shared>,
+    axum::Extension(Caller(caller)): axum::Extension<Caller>,
+    Path(chain): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, AppError> {
+    require_chain_admin(&state, &caller)?;
+    let chain_id = parse_chain_id(&chain)
+        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, eyre!("invalid chain id: {chain}")))?;
+    let url = body
+        .get("rpc")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, eyre!("missing rpc")))?
+        .to_string();
+    verify_chain(&state.client, &url, chain_id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, eyre!("{e}")))?;
+    db::update_chain(&state.pool, chain_id, &url).await?;
+    state.chains.write().await.insert(chain_id, url.clone());
+    Ok(Json(json!({ "chain_id": format!("0x{chain_id:x}"), "url": url })))
+}
+
+async fn chain_delete(
+    AxumState(state): AxumState<Shared>,
+    axum::Extension(Caller(caller)): axum::Extension<Caller>,
+    Path(chain): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    require_chain_admin(&state, &caller)?;
+    let chain_id = parse_chain_id(&chain)
+        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, eyre!("invalid chain id: {chain}")))?;
+    db::delete_chain(&state.pool, chain_id).await?;
+    state.chains.write().await.remove(&chain_id);
+    Ok(Json(json!({ "deleted": format!("0x{chain_id:x}") })))
+}
+
+async fn chains_set(
+    AxumState(state): AxumState<Shared>,
+    axum::Extension(Caller(caller)): axum::Extension<Caller>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, AppError> {
+    require_chain_admin(&state, &caller)?;
+    let obj = body.as_object().ok_or_else(|| {
+        AppError::new(StatusCode::BAD_REQUEST, eyre!("expected a JSON object of chainId -> url"))
+    })?;
+    let mut stored = serde_json::Map::new();
+    let mut errors = serde_json::Map::new();
+    for (key, val) in obj {
+        let chain_id = match parse_chain_id(key) {
+            Some(c) => c,
+            None => {
+                errors.insert(key.clone(), Value::String("invalid chain id".into()));
+                continue;
+            }
+        };
+        let url = match val.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(u) => u.to_string(),
+            None => {
+                errors.insert(key.clone(), Value::String("url must be a non-empty string".into()));
+                continue;
+            }
+        };
+        match verify_chain(&state.client, &url, chain_id).await {
+            Ok(()) => match db::update_chain(&state.pool, chain_id, &url).await {
+                Ok(()) => {
+                    state.chains.write().await.insert(chain_id, url.clone());
+                    stored.insert(format!("0x{chain_id:x}"), Value::String(url));
+                }
+                Err(e) => {
+                    errors.insert(key.clone(), Value::String(format!("db error: {e}")));
+                }
+            },
+            Err(e) => {
+                errors.insert(key.clone(), Value::String(e));
+            }
+        }
+    }
+    Ok(Json(json!({ "stored": stored, "errors": errors })))
 }
 
 async fn ui() -> Html<&'static str> {

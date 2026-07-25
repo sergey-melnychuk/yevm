@@ -103,3 +103,20 @@ pub async fn list_chains(pool: &SqlitePool) -> Result<Vec<(i64, String)>> {
         .await?;
     Ok(rows)
 }
+
+pub async fn update_chain(pool: &SqlitePool, id: i64, url: &str) -> Result<()> {
+    sqlx::query("INSERT INTO chains (id, url) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET url = excluded.url")
+        .bind(id)
+        .bind(url)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn delete_chain(pool: &SqlitePool, id: i64) -> Result<()> {
+    sqlx::query("DELETE FROM chains WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
