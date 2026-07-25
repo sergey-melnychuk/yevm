@@ -1,84 +1,105 @@
 use eyre::Result;
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
-use std::{collections::HashMap, str::FromStr};
+use std::str::FromStr;
 use yevm_base::Acc;
 
-use crate::{PendingTx, SimResult};
+pub struct SignedTx {
+    pub hash: String,
+    pub from: Acc,
+    pub raw: String,
+    pub chain_id: i64,
+}
 
 pub async fn open(path: &str) -> Result<SqlitePool> {
     let opts = SqliteConnectOptions::from_str(&format!("sqlite:{path}"))?.create_if_missing(true);
     let pool = SqlitePool::connect_with(opts).await?;
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS pending_txs (
-            hash     TEXT PRIMARY KEY,
-            from_addr TEXT NOT NULL,
-            raw      TEXT NOT NULL,
-            sim      TEXT NOT NULL
-        )",
-    )
-    .execute(&pool)
-    .await?;
+    sqlx::migrate!("./db").run(&pool).await?;
     Ok(pool)
 }
 
-pub async fn load_all(pool: &SqlitePool) -> Result<HashMap<String, PendingTx>> {
-    let rows = sqlx::query_as::<_, (String, String, String, String)>(
-        "SELECT hash, from_addr, raw, sim FROM pending_txs",
-    )
-    .fetch_all(pool)
-    .await?;
-
-    let mut map = HashMap::new();
-    for (hash, from_addr, raw, sim_json) in rows {
-        let from_bytes = hex::decode(from_addr.trim_start_matches("0x")).unwrap_or_default();
-        let from = Acc::from(from_bytes.as_slice());
-        let sim: SimResult = match serde_json::from_str(&sim_json) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!("skipping malformed sim for {hash}: {e}");
-                continue;
-            }
-        };
-        map.insert(hash, PendingTx { from, raw, sim });
+fn row_to_tx(hash: String, signer: String, raw: String, chain_id: i64) -> Option<SignedTx> {
+    match signer.as_str().try_into().ok() {
+        Some(from) => Some(SignedTx {
+            hash,
+            from,
+            raw,
+            chain_id,
+        }),
+        None => {
+            tracing::warn!("skipping tx {hash}: invalid signer in DB: {signer:?}");
+            None
+        }
     }
-    Ok(map)
 }
 
-pub async fn insert(
-    pool: &SqlitePool,
-    hash: &str,
-    from: &Acc,
-    raw: &str,
-    sim: &SimResult,
-) -> Result<()> {
-    let from_str = format!("{from}");
-    let sim_json = serde_json::to_string(sim)?;
-    sqlx::query(
-        "INSERT OR IGNORE INTO pending_txs (hash, from_addr, raw, sim) VALUES (?, ?, ?, ?)",
+pub async fn list(pool: &SqlitePool, signer: Option<&Acc>) -> Result<Vec<SignedTx>> {
+    let rows = match signer {
+        Some(acc) => sqlx::query_as::<_, (String, String, String, i64)>(
+                "SELECT hash, signer, raw, chain_id FROM txs WHERE signer = ?",
+            )
+            .bind(format!("{acc}"))
+            .fetch_all(pool)
+            .await?,
+        None => sqlx::query_as::<_, (String, String, String, i64)>(
+                "SELECT hash, signer, raw, chain_id FROM txs",
+            )
+            .fetch_all(pool)
+            .await?,
+    };
+    Ok(rows
+        .into_iter()
+        .filter_map(|(hash, signer, raw, chain_id)| row_to_tx(hash, signer, raw, chain_id))
+        .collect())
+}
+
+pub async fn count_total(pool: &SqlitePool) -> Result<i64> {
+    let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM txs")
+        .fetch_one(pool)
+        .await?;
+    Ok(n)
+}
+
+pub async fn count_for_signer(pool: &SqlitePool, signer: &Acc) -> Result<i64> {
+    let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM txs WHERE signer = ?")
+        .bind(format!("{signer}"))
+        .fetch_one(pool)
+        .await?;
+    Ok(n)
+}
+
+pub async fn get(pool: &SqlitePool, hash: &str) -> Result<Option<SignedTx>> {
+    let row = sqlx::query_as::<_, (String, String, String, i64)>(
+        "SELECT hash, signer, raw, chain_id FROM txs WHERE hash = ?",
     )
     .bind(hash)
-    .bind(&from_str)
-    .bind(raw)
-    .bind(&sim_json)
-    .execute(pool)
+    .fetch_optional(pool)
     .await?;
-    Ok(())
+    Ok(row.and_then(|(hash, signer, raw, chain_id)| row_to_tx(hash, signer, raw, chain_id)))
 }
 
-pub async fn update_sim(pool: &SqlitePool, hash: &str, sim: &SimResult) -> Result<()> {
-    let sim_json = serde_json::to_string(sim)?;
-    sqlx::query("UPDATE pending_txs SET sim = ? WHERE hash = ?")
-        .bind(&sim_json)
+pub async fn insert(pool: &SqlitePool, hash: &str, from: &Acc, raw: &str, chain_id: i64) -> Result<()> {
+    let signer = format!("{from}");
+    sqlx::query("INSERT OR IGNORE INTO txs (hash, signer, raw, chain_id) VALUES (?, ?, ?, ?)")
         .bind(hash)
+        .bind(&signer)
+        .bind(raw)
+        .bind(chain_id)
         .execute(pool)
         .await?;
     Ok(())
 }
 
 pub async fn delete(pool: &SqlitePool, hash: &str) -> Result<()> {
-    sqlx::query("DELETE FROM pending_txs WHERE hash = ?")
+    sqlx::query("DELETE FROM txs WHERE hash = ?")
         .bind(hash)
         .execute(pool)
         .await?;
     Ok(())
+}
+
+pub async fn list_chains(pool: &SqlitePool) -> Result<Vec<(i64, String)>> {
+    let rows = sqlx::query_as::<_, (i64, String)>("SELECT id, url FROM chains ORDER BY id")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows)
 }
