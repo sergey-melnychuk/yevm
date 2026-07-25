@@ -41,7 +41,40 @@
   .btn.danger { background: rgba(248,113,113,0.10); border-color: rgba(248,113,113,0.3); color: #f87171; }
   .btn.danger:hover { background: rgba(248,113,113,0.20); }
   .empty { color: #475569; font-style: italic; }
-  /* Analysis (analyse(traces) results): structured effects, not raw events. */
+  .header-right { display: flex; align-items: center; gap: 8px; }
+  #admin-badge { display: none; align-self: stretch; align-items: center; color: #f87171; font-size: 0.72em;
+                 font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; padding: 0 10px;
+                 border-radius: 6px; white-space: nowrap; border: 1px solid rgba(248,113,113,0.4);
+                 background: rgba(248,113,113,0.12); }
+  #admin-badge.on { display: inline-flex; }
+  #gear { width: auto; padding: 6px 10px; }
+  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100;
+                   align-items: flex-start; justify-content: center; padding: 60px 16px; overflow-y: auto; }
+  .modal-overlay.open { display: flex; }
+  .modal { background: #10162a; border: 1px solid rgba(255,255,255,0.1); border-radius: 10px;
+           width: 100%; max-width: 800px; padding: 20px; }
+  .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .modal-head h2 { color: #7dd3fc; font-size: 1em; letter-spacing: 0.04em; }
+  .modal-close { background: none; border: none; color: #94a3b8; font-size: 1.2em; cursor: pointer; padding: 0 4px; }
+  .modal-note { color: #64748b; font-size: 0.78em; margin-bottom: 14px; }
+  .chain-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+  .chain-id { flex: none; width: 12ch; color: #94a3b8; font-size: 0.82em; }
+  .chain-id .cname { color: #7dd3fc; }
+  .modal input { flex: 1; min-width: 12ch; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1);
+                 border-radius: 5px; color: #e2e8f0; font-family: monospace; font-size: 0.82em; padding: 5px 8px; }
+  .modal input:disabled { opacity: 0.5; }
+  .src-badge { flex: none; font-size: 0.68em; padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+  .src-badge.global { color: #7dd3fc; background: rgba(56,189,248,0.12); }
+  .src-badge.local  { color: #fbbf24; background: rgba(251,191,36,0.12); }
+  .chain-err { color: #f87171; font-size: 0.75em; margin: 2px 0 8px 0; }
+  .chain-add { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding-top: 14px;
+               border-top: 1px solid rgba(255,255,255,0.08); flex-wrap: wrap; }
+  .btn.sm { padding: 5px 10px; font-size: 0.78em; }
+  .sim-block { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; padding-bottom: 14px;
+               border-bottom: 1px solid rgba(255,255,255,0.08); flex-wrap: wrap; font-size: 0.82em; color: #94a3b8; }
+  #sim-banner { display: none; margin-bottom: 16px; padding: 6px 12px; border-radius: 6px; font-size: 0.82em;
+                color: #fbbf24; background: rgba(251,191,36,0.10); border: 1px solid rgba(251,191,36,0.3); }
+  #sim-banner.on { display: block; }
   .analysis { display: flex; flex-direction: column; gap: 12px; margin-bottom: 10px; }
   .an-section-title { color: #7dd3fc; font-size: 0.72em; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; }
   .an-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 6px 10px; border-radius: 6px; font-size: 0.82em; margin-bottom: 4px; }
@@ -65,12 +98,39 @@
 <body>
 <div class="header">
   <h1>yevm · gate</h1>
-  <div class="session-wrap">
-    <button id="session" class="btn" onclick="onSessionClick()">Connect Wallet</button>
-    <div id="wallet-menu" class="wallet-menu"></div>
+  <div class="header-right">
+    <span id="admin-badge">admin</span>
+    <button id="gear" class="btn" onclick="openSettings()" title="Chain settings" style="display:none">⚙</button>
+    <div class="session-wrap">
+      <button id="session" class="btn" onclick="onSessionClick()">Connect Wallet</button>
+      <div id="wallet-menu" class="wallet-menu"></div>
+    </div>
   </div>
 </div>
+<div id="sim-banner"></div>
 <div id="list"></div>
+
+<div id="settings" class="modal-overlay" onclick="if (event.target === this) closeSettings()">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>Chain configuration</h2>
+      <button class="modal-close" onclick="closeSettings()">✕</button>
+    </div>
+    <div class="sim-block">
+      <span>Simulate against block:</span>
+      <input id="sim-block-input" placeholder="latest" style="width:14ch;flex:none">
+      <button class="btn sm" onclick="applySimBlock()">Apply</button>
+    </div>
+    <div class="modal-note" id="settings-note"></div>
+    <div id="chain-rows"></div>
+    <div class="chain-add">
+      <input id="add-chain-id" placeholder="chain id (e.g. 8453 or 0x2105)" style="width:16ch;flex:none">
+      <input id="add-chain-url" placeholder="https://rpc…">
+      <button class="btn sm" onclick="addChain()">Add</button>
+    </div>
+    <div class="chain-err" id="add-chain-err"></div>
+  </div>
+</div>
 <script>
 let token = localStorage.getItem('yevm_gate_token');
 let address = localStorage.getItem('yevm_gate_address');
@@ -153,6 +213,11 @@ async function connect(provider) {
 function updateHeader() {
   const btn = document.getElementById('session');
   btn.textContent = address ? _fmtAcc(address, null, true) : 'Connect Wallet';
+  // Chain settings require a session (GET /chain is auth-gated), so the gear only
+  // shows once connected.
+  document.getElementById('gear').style.display = address ? '' : 'none';
+  // Red "admin" label when this session may edit the global chain registry.
+  document.getElementById('admin-badge').classList.toggle('on', !!(address && isAdmin));
 }
 
 // EIP-6963 (Multi Injected Provider Discovery): each installed wallet extension
@@ -230,30 +295,81 @@ function signOut() {
 // tx and (once submitted) where to broadcast it. Fetched once and cached; the
 // gate is the only party that manages this registry, so it doesn't change
 // mid-session under normal use.
-let chainUrls = null;
-async function loadChains() {
-  if (!chainUrls) {
+// Per-browser chain URL overrides (numeric chainId -> url). Anyone can set these;
+// they layer on top of the server's global registry (overrides win) and never
+// leave this browser. Admins instead edit the global registry via the API.
+function loadOverrides() {
+  try { return JSON.parse(localStorage.getItem('yevm_gate_chain_overrides') || '{}'); }
+  catch { return {}; }
+}
+function saveOverride(id, url) {
+  const o = loadOverrides();
+  o[String(id)] = url;
+  localStorage.setItem('yevm_gate_chain_overrides', JSON.stringify(o));
+  chainUrls = null; // invalidate the merged cache
+}
+function removeOverride(id) {
+  const o = loadOverrides();
+  delete o[String(id)];
+  localStorage.setItem('yevm_gate_chain_overrides', JSON.stringify(o));
+  chainUrls = null;
+}
+
+// The server's global registry (numeric chainId -> url), fetched once.
+let globalChains = null;
+async function loadGlobalChains(force = false) {
+  if (globalChains === null || force) {
     const res = await fetch('/chain', { headers: authHeaders() });
     const raw = res.ok ? await res.json() : {};
     // Keyed by numeric chain id, not the raw hex string: /chain's keys ("0x1")
     // and a decoded tx's chainId ("0x0000000000000001", a zero-padded Hex<8>)
     // are both valid hex for the same chain but spelled differently.
-    chainUrls = {};
-    for (const [hex, url] of Object.entries(raw)) chainUrls[parseInt(hex, 16)] = url;
+    globalChains = {};
+    for (const [hex, url] of Object.entries(raw)) globalChains[parseInt(hex, 16)] = url;
+    chainUrls = null;
+  }
+  return globalChains;
+}
+
+// Effective map used for simulation/broadcast: global registry with local
+// overrides layered on top.
+let chainUrls = null;
+async function loadChains() {
+  if (!chainUrls) {
+    const global = await loadGlobalChains();
+    chainUrls = { ...global };
+    for (const [id, url] of Object.entries(loadOverrides())) chainUrls[Number(id)] = url;
   }
   return chainUrls;
+}
+
+// Block to pin simulation to (null = latest). Stored per-browser. Pinning to a
+// historical block (e.g. pre-exploit) requires the chain's RPC to be an archive
+// node - set that via a chain override.
+function getSimBlock() {
+  const v = localStorage.getItem('yevm_gate_sim_block');
+  return v && /^\d+$/.test(v) ? Number(v) : null;
+}
+function setSimBlock(v) {
+  if (v == null || v === '') localStorage.removeItem('yevm_gate_sim_block');
+  else localStorage.setItem('yevm_gate_sim_block', String(v));
+}
+// The block tag for JSON-RPC state reads: the pinned block as hex, else 'latest'.
+function simBlockTag() {
+  const b = getSimBlock();
+  return b == null ? 'latest' : '0x' + b.toString(16);
 }
 
 // Fetch the sender's current on-chain nonce through the gate's own RPC proxy
 // (same-origin, CORS-safe; the gate forwards reads to the chain upstream).
 // 'latest' = confirmed nonce = count of mined txs. Returns a BigInt, or null on
 // any RPC/parse error so the caller skips the check instead of warning falsely.
-async function fetchAccountNonce(cid, from) {
+async function fetchAccountNonce(cid, from, blockTag = 'latest') {
   try {
     const res = await fetch('/rpc/' + cid, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getTransactionCount', params: [from, 'latest'] }),
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getTransactionCount', params: [from, blockTag] }),
     });
     const j = await res.json();
     return j?.result != null ? BigInt(j.result) : null;
@@ -268,7 +384,9 @@ async function fetchAccountNonce(cid, from) {
 //            same sender (a legit stacked tx), in which case it's 'queued'.
 // Returns null (no badge) when the account nonce couldn't be fetched.
 async function checkNonce(item, cid) {
-  const accountNonce = await fetchAccountNonce(cid, item.from);
+  // Check against the same block the simulation runs at, so a pinned-block replay
+  // stays consistent (the tx reads 'ok' at its own era, not 'behind' vs head).
+  const accountNonce = await fetchAccountNonce(cid, item.from, simBlockTag());
   if (accountNonce == null) return null;
   let txNonce;
   try { txNonce = BigInt(item.tx.nonce); } catch { return null; }
@@ -311,7 +429,7 @@ async function simulateCard(item) {
     const url = urls[cid];
     if (!url) throw new Error(`no RPC configured for chain ${tx.chainId}`);
     const EVENT_FILTER = 0xFFFFFFFF - 1; // exclude STEP events
-    const stream = await wasmExecute(url, item.call, tx, EVENT_FILTER);
+    const stream = await wasmExecute(url, item.call, tx, EVENT_FILTER, getSimBlock() ?? undefined);
     const traces = [];
     for (;;) {
       const t = await stream.next();
@@ -706,7 +824,160 @@ async function remove(hash) {
   load();
 }
 
+// Escape a value for safe interpolation into an HTML attribute.
+function _attr(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+async function openSettings() {
+  document.getElementById('settings-note').textContent = isAdmin
+    ? 'Admin: saving writes to the shared, server-side registry (affects all users).'
+    : 'Changes are saved to this browser only (local override) and never affect other users.';
+  const sb = getSimBlock();
+  document.getElementById('sim-block-input').value = sb == null ? '' : String(sb);
+  document.getElementById('add-chain-err').textContent = '';
+  document.getElementById('settings').classList.add('open');
+  await renderChainRows();
+}
+
+// Header banner making a pinned simulation block obvious (it's not "latest").
+function updateSimBanner() {
+  const b = getSimBlock();
+  const el = document.getElementById('sim-banner');
+  if (b == null) { el.classList.remove('on'); el.textContent = ''; return; }
+  el.textContent = `⛓ simulating against block ${b.toLocaleString()} (not latest) — needs an archive RPC for old blocks`;
+  el.classList.add('on');
+}
+
+// Apply the "simulate against block" setting, then re-run all card simulations so
+// results reflect the new block immediately.
+async function applySimBlock() {
+  const raw = document.getElementById('sim-block-input').value.trim();
+  if (raw !== '' && !/^\d+$/.test(raw)) {
+    document.getElementById('add-chain-err').textContent = 'Block must be a number, or blank for latest';
+    return;
+  }
+  setSimBlock(raw);
+  updateSimBanner();
+  closeSettings();
+  simResults.clear();              // drop results computed against the old block
+  for (const item of currentList) if (wasmReady) simulateCard(item);
+  render();
+}
+function closeSettings() {
+  document.getElementById('settings').classList.remove('open');
+}
+
+// Rows = union of the global registry and this browser's overrides. Each row's
+// URL is editable; an override (if any) shadows the global entry.
+async function renderChainRows() {
+  const global = await loadGlobalChains(true);
+  const overrides = loadOverrides();
+  const ids = [...new Set([
+    ...Object.keys(global).map(Number),
+    ...Object.keys(overrides).map(Number),
+  ])].sort((a, b) => a - b);
+
+  const rows = ids.map(id => {
+    const hasOverride = overrides[String(id)] != null;
+    const url = hasOverride ? overrides[String(id)] : global[id];
+    const name = CHAIN_NAMES[id] ? ` <span class="cname">${CHAIN_NAMES[id]}</span>` : '';
+    const badge = hasOverride
+      ? '<span class="src-badge local">local</span>'
+      : '<span class="src-badge global">global</span>';
+    // Remove is possible when there's a local override to drop, or (admin) a
+    // global entry to delete. A non-admin can't remove a purely global chain.
+    const canRemove = hasOverride || (isAdmin && global[id] != null);
+    return `<div class="chain-row" data-id="${id}">
+      <span class="chain-id">0x${id.toString(16)}${name}</span>
+      <input class="chain-url" value="${_attr(url)}">
+      ${badge}
+      <button class="btn sm" onclick="saveChain(${id})">Save</button>
+      <button class="btn sm danger" onclick="removeChain(${id})" ${canRemove ? '' : 'disabled'}>Drop</button>
+    </div>
+    <div class="chain-err" id="chain-err-${id}"></div>`;
+  }).join('');
+
+  document.getElementById('chain-rows').innerHTML =
+    rows || '<div class="modal-note">No chains configured.</div>';
+}
+
+// POST a global chain entry (admin only). The gate verifies the RPC actually
+// serves that chain before storing. Returns an error string, or null on success.
+async function putGlobalChain(id, url) {
+  try {
+    const res = await fetch('/chain/0x' + id.toString(16), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ rpc: url }),
+    });
+    if (res.ok) return null;
+    const j = await res.json().catch(() => ({}));
+    return j.error || ('HTTP ' + res.status);
+  } catch (e) { return (e && e.message) || String(e); }
+}
+
+async function saveChain(id) {
+  const row = document.querySelector(`.chain-row[data-id="${id}"]`);
+  const url = row.querySelector('.chain-url').value.trim();
+  const errEl = document.getElementById('chain-err-' + id);
+  errEl.textContent = '';
+  if (!url) { errEl.textContent = 'URL required'; return; }
+  if (isAdmin) {
+    const e = await putGlobalChain(id, url);
+    if (e) { errEl.textContent = e; return; }
+    removeOverride(id);
+    await loadGlobalChains(true);
+  } else {
+    saveOverride(id, url);
+  }
+  await renderChainRows();
+}
+
+async function removeChain(id) {
+  const errEl = document.getElementById('chain-err-' + id);
+  if (errEl) errEl.textContent = '';
+  if (loadOverrides()[String(id)] != null) {
+    removeOverride(id);
+  } else if (isAdmin) {
+    try {
+      const res = await fetch('/chain/0x' + id.toString(16), { method: 'DELETE', headers: authHeaders() });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        if (errEl) errEl.textContent = j.error || ('HTTP ' + res.status);
+        return;
+      }
+    } catch (e) { if (errEl) errEl.textContent = (e && e.message) || String(e); return; }
+    await loadGlobalChains(true);
+  } else {
+    return;
+  }
+  await renderChainRows();
+}
+
+async function addChain() {
+  const idStr = document.getElementById('add-chain-id').value.trim();
+  const url = document.getElementById('add-chain-url').value.trim();
+  const errEl = document.getElementById('add-chain-err');
+  errEl.textContent = '';
+  // Accept "8453" (decimal) or "0x2105" (hex); the API path is always sent hex.
+  const id = idStr.toLowerCase().startsWith('0x') ? parseInt(idStr, 16) : parseInt(idStr, 10);
+  if (!Number.isInteger(id) || id <= 0) { errEl.textContent = 'Invalid chain id'; return; }
+  if (!url) { errEl.textContent = 'URL required'; return; }
+  if (isAdmin) {
+    const e = await putGlobalChain(id, url);
+    if (e) { errEl.textContent = e; return; }
+    await loadGlobalChains(true);
+  } else {
+    saveOverride(id, url);
+  }
+  document.getElementById('add-chain-id').value = '';
+  document.getElementById('add-chain-url').value = '';
+  await renderChainRows();
+}
+
 updateHeader();
+updateSimBanner();
 load();
 setInterval(load, 30000);
 loadWasm();
