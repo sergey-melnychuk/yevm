@@ -37,12 +37,25 @@
   .btn.danger { background: rgba(248,113,113,0.10); border-color: rgba(248,113,113,0.3); color: #f87171; }
   .btn.danger:hover { background: rgba(248,113,113,0.20); }
   .empty { color: #475569; font-style: italic; }
-  .traces { margin-bottom: 10px; font-size: 0.8em; display: flex; flex-direction: column; gap: 2px; }
-  .trace-line { color: #94a3b8; padding: 2px 0; word-break: break-all; }
-  .trace-line.reverted { color: #475569; text-decoration: line-through; }
-  .trace-line .tkey { color: #7dd3fc; margin-right: 6px; }
-  .trace-line .tok  { color: #4ade80; }
-  .trace-line .tbad { color: #f87171; }
+  /* Analysis (analyse(traces) results): structured effects, not raw events. */
+  .analysis { display: flex; flex-direction: column; gap: 12px; margin-bottom: 10px; }
+  .an-section-title { color: #7dd3fc; font-size: 0.72em; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; }
+  .an-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 6px 10px; border-radius: 6px; font-size: 0.82em; margin-bottom: 4px; }
+  .an-row:last-child { margin-bottom: 0; }
+  .an-row.warn    { background: rgba(248,113,113,0.08); border: 1px solid rgba(248,113,113,0.3); }
+  .an-row.caution { background: rgba(251,191,36,0.07);  border: 1px solid rgba(251,191,36,0.25); }
+  .an-row.neutral { background: rgba(0,0,0,0.2);        border: 1px solid rgba(255,255,255,0.08); }
+  .an-label { font-weight: 600; }
+  .an-label.red { color: #f87171; }
+  .an-label.yel { color: #fbbf24; }
+  .an-label.dim { color: #64748b; }
+  .an-role { color: #64748b; font-weight: 400; }
+  .an-addr { color: #94a3b8; word-break: break-all; }
+  .an-val { color: #e2e8f0; }
+  .an-val.new { color: #f87171; }
+  .an-pos { color: #4ade80; }
+  .an-neg { color: #f87171; }
+  .an-empty { color: #475569; font-style: italic; font-size: 0.82em; margin-bottom: 10px; }
 </style>
 </head>
 <body>
@@ -62,27 +75,6 @@ let isAdmin = localStorage.getItem('yevm_gate_admin') === '1';
 function authHeaders() {
   return token ? { 'Authorization': 'Bearer ' + token } : {};
 }
-
-const F = {
-  STEP:       1 << 0,
-  CALL:       1 << 1,
-  RETURN:     1 << 2,
-  REVERT:     1 << 3,
-  HALT:       1 << 4,
-  GET:        1 << 5,
-  PUT:        1 << 6,
-  LOG:        1 << 7,
-  CREATE:     1 << 8,
-  DELETE:     1 << 9,
-  MOVE:       1 << 10,
-  FEE:        1 << 11,
-  HASH:       1 << 12,
-  CODE:       1 << 13,
-};
-F.TOP        = F.CALL | F.RETURN | F.REVERT | F.HALT | F.CREATE | F.DELETE | F.LOG | F.FEE | F.GET | F.PUT | F.HASH | F.CODE;
-F.ALL        = 0xFFFFFFFF;
-
-const EVENT_FILTER = F.TOP;
 
 let wasmReady = false;
 let wasmExecute = null;
@@ -154,15 +146,9 @@ async function connect(provider) {
   load();
 }
 
-// "0x1234abcd...5678efab" - first and last 4 bytes, so a full address stays
-// recognizable at a glance without blowing out the button's fixed width.
-function shortAddr(a) {
-  return a.length <= 21 ? a : a.slice(0, 6) + '...' + a.slice(-4);
-}
-
 function updateHeader() {
   const btn = document.getElementById('session');
-  btn.textContent = address ? shortAddr(address) : 'Connect Wallet';
+  btn.textContent = address ? _fmtAcc(address, true) : 'Connect Wallet';
 }
 
 // EIP-6963 (Multi Injected Provider Discovery): each installed wallet extension
@@ -255,12 +241,14 @@ async function loadChains() {
 }
 
 let currentList = [];
-// hash -> { status: 'pending'|'done'|'failed', gasUsed, success, created, traces, error }
+// hash -> { status: 'pending'|'done'|'failed', analysis, error }
 const simResults = new Map();
 
 // Run the decoded pending tx (exactly as signed - real nonce/fees/access list)
 // against the chain it was captured on. Never touches `raw`: simulation only
-// needs the decoded `call`/`tx` the API already returned.
+// needs the decoded `call`/`tx` the API already returned. The raw event stream
+// is fed straight into analyse() - we surface the structured effects it derives
+// (ETH/token movements, approvals, proxy swaps), not the individual events.
 async function simulateCard(item) {
   const { hash, tx } = item;
   simResults.set(hash, { status: 'pending' });
@@ -269,17 +257,24 @@ async function simulateCard(item) {
     const urls = await loadChains();
     const url = urls[parseInt(tx.chainId, 16)];
     if (!url) throw new Error(`no RPC configured for chain ${tx.chainId}`);
+    const EVENT_FILTER = 0xFFFFFFFF - 1; // exclude STEP events
     const stream = await wasmExecute(url, item.call, tx, EVENT_FILTER);
     const traces = [];
     for (;;) {
       const t = await stream.next();
       if (t == null) break;
-      // console.log(t);
+      if (t.event && t.event.Undo) {
+        // mark the reverted span for analyse() to be aware of it.
+        const [from, to] = t.event.Undo;
+        for (const p of traces) 
+          if (p.seq >= from && p.seq < to) 
+            p.reverted = true;
+      }
       traces.push(t);
     }
     simResults.set(hash, {
       status: 'done',
-      traces,
+      analysis: wasmAnalyse(traces),
     });
   } catch (e) {
     simResults.set(hash, { status: 'failed', error: (e && e.message) || String(e) });
@@ -296,8 +291,9 @@ function render() {
 
   el.innerHTML = currentList.map(({ hash, from, call }) => {
     const sim = simResults.get(hash) || { status: 'pending' };
+    const gas = sim.analysis?.fee?.gasUsed;
     const meta = sim.status === 'done'
-      ? ''
+      ? (gas != null ? `<span>gas: ${Number(gas).toLocaleString()}</span>` : '')
       : sim.status === 'failed'
       ? `<span class="bad">${sim.error}</span>`
       : '<span>simulating…</span>';
@@ -315,7 +311,7 @@ function render() {
       ${toLine}
       <div class="status ${sim.status}">${sim.status.toUpperCase()}</div>
       <div class="meta">${meta}</div>
-      ${renderTraces(sim.traces)}
+      ${sim.status === 'done' ? renderAnalysis(sim.analysis) : ''}
       ${actions}
     </div>`;
   }).join('');
@@ -336,88 +332,127 @@ async function load() {
   currentList = await res.json();
   render();
 
-  console.log(currentList);
-
   if (wasmReady) for (const item of currentList) {
     if (!simResults.has(item.hash)) simulateCard(item);
   }
 }
 
-
-function fmtInt(hex) {
-  try { return BigInt(hex).toString(); } catch { return hex; }
-}
-
-function weiToEth(wei) {
-  const E18 = BigInt('1000000000000000000');
-  const whole = wei / E18;
-  const frac = (wei % E18).toString().padStart(18, '0').replace(/0+$/, '');
-  return whole.toString() + (frac ? '.' + frac : '') + ' ETH';
-}
-
-function fmtEth(hex) {
-  try {
-    const wei = BigInt(hex);
-    return weiToEth(wei);
-  } catch { return hex; }
-}
-
-function fmtEthDiff(hexOld, hexNew) {
-  try {
-    const diff = BigInt(hexNew) - BigInt(hexOld);
-    if (diff === 0n) return null;
-    const cls = diff > 0n ? 'tok' : 'tbad';
-    const abs = diff < 0n ? -diff : diff;
-    return `<span class="${cls}">${diff > 0n ? '+' : '-'}${weiToEth(abs)}</span>`;
-  } catch { return null; }
-}
-
-function fmtHex(hex) {
-  if (typeof hex !== 'string') return hex;
-  const stripped = hex.replace(/^0x0*/, '');
-  return stripped === '' ? '0' : '0x' + stripped;
-}
-
-function renderTrace(t) {
-  const e = t.event;
-  const cls = t.reverted ? 'trace-line reverted' : 'trace-line';
-  let body = '';
-  if (e.Move) {
-    const [from, to, val] = e.Move;
-    body = `<span class="tkey">move</span>${from} → ${to}: <span class="tok">${fmtEth(val)}</span>`;
-  } else if (e.Fee) {
-    const [sender, coinbase, burn, tip, gas] = e.Fee;
-    const total  = weiToEth(BigInt(burn) + BigInt(tip));
-    body = `<span class="tkey">fee</span>${sender}: ${gas} gas | ${total}`;
-  } else if (e.Put) {
-    const [target, next] = e.Put;
-    if (target.Value) {
-      const diff = fmtEthDiff(target.Value.val, next);
-      body = `<span class="tkey">balance</span>${target.Value.acc}: ${fmtEth(target.Value.val)} → ${fmtEth(next)}${diff ? ' (' + diff + ')' : ''}`;
-    } else if (target.Store) {
-      body = `<span class="tkey">store</span>${target.Store.acc}[${fmtHex(target.Store.key)}]: ${fmtHex(target.Store.val)} → <span class="tok">${fmtHex(next)}</span>`;
-    } else if (target.Nonce) {
-      body = `<span class="tkey">nonce</span>${target.Nonce.acc}: ${fmtInt(target.Nonce.val)} → <span class="tok">${fmtInt(next)}</span>`;
-    } else {
-      body = `<span class="tkey">put</span>${JSON.stringify(target)}`;
-    }
-  } else if (e.Log) {
-    const [topics] = e.Log;
-    body = `<span class="tkey">log</span>${topics.join(' ')}`;
-  } else if (e.Create) {
-    body = `<span class="tkey">create</span><span class="tok">${e.Create}</span>`;
-  } else if (e.Delete) {
-    body = `<span class="tkey">delete</span><span class="tbad">${e.Delete}</span>`;
-  } else {
-    return '';
+function _fmtAcc(hex, short = false) {
+  if (!short) {
+    return hex;
   }
-  return `<div class="${cls}">${body}</div>`;
+  return hex.length <= 21 ? hex : hex.slice(0, 7) + '...' + hex.slice(-5);
 }
 
-function renderTraces(traces) {
-  if (!traces || !traces.length) return '';
-  const lines = traces.map(renderTrace).filter(Boolean).join('');
-  return lines ? `<div class="traces">${lines}</div>` : '';
+// A wei value (hex or BigInt) as human ETH: whole ETH down to 6 fractional
+// digits, or raw wei for dust below 1e-6 ETH. "0" for zero/empty.
+function _fmtValue(val) {
+  if (val == null) return '0';
+  let wei;
+  try { wei = BigInt(val); } catch { return String(val); }
+  if (wei === 0n) return '0';
+  const ETH = 10n ** 18n, MICRO = 10n ** 12n;
+  if (wei < MICRO) return `${wei} wei`;
+  const whole = wei / ETH, frac = wei % ETH;
+  if (frac === 0n) return `${whole} ETH`;
+  const fracStr = frac.toString().padStart(18, '0').replace(/0+$/, '').slice(0, 6);
+  return `${whole}.${fracStr} ETH`;
+}
+
+// Signed ETH delta (BigInt) -> "+1.5 ETH" / "−0.2 ETH".
+function _fmtDelta(delta) {
+  const pos = delta > 0n;
+  const abs = pos ? delta : -delta;
+  return (pos ? '+' : '-') + _fmtValue('0x' + abs.toString(16));
+}
+
+// Render analyse() output (a lens `Alerts`): the structured effects of the tx,
+// not the raw event stream. Empty struct -> an explicit "nothing notable" note.
+function renderAnalysis(a) {
+  if (!a) return '';
+  const sections = [];
+
+  if (a.proxySwaps?.length) {
+    sections.push(a.proxySwaps.map(s => `
+      <div class="an-row warn">
+        <span class="an-label red">⚠ Proxy implementation replaced</span>
+        <span class="an-addr">${_fmtAcc(s.proxy)}</span>
+        <span><span class="an-val">${_fmtAcc(s.oldImpl)}</span> → <span class="an-val new">${_fmtAcc(s.newImpl)}</span></span>
+      </div>`).join(''));
+  }
+
+  if (a.ethChanges?.length) {
+    const sender = a.fee?.sender?.toLowerCase?.();
+    const coinbase = a.fee?.coinbase?.toLowerCase?.();
+    // Multiple entries per account are possible; sum their per-entry deltas.
+    const byAcc = new Map();
+    for (const c of a.ethChanges) {
+      const key = c.acc?.toLowerCase?.() ?? c.acc;
+      const delta = BigInt(c.after) - BigInt(c.before);
+      byAcc.set(key, { acc: c.acc, delta: (byAcc.get(key)?.delta ?? 0n) + delta });
+    }
+    const rows = [...byAcc.values()].filter(c => c.delta !== 0n).map(c => {
+      const key = c.acc?.toLowerCase?.() ?? c.acc;
+      const role = key === sender ? 'sender' : key === coinbase ? 'coinbase' : null;
+      const pos = c.delta > 0n;
+      return `
+        <div class="an-row neutral">
+          <span class="an-label dim">ETH${role ? ` <span class="an-role">${role}</span>` : ''}</span>
+          <span class="an-addr">${_fmtAcc(c.acc)}</span>
+          <span class="${pos ? 'an-pos' : 'an-neg'}">${_fmtDelta(c.delta)}</span>
+        </div>`;
+    }).join('');
+    if (rows) sections.push(`<div><div class="an-section-title">ETH balance changes</div>${rows}</div>`);
+  }
+
+  if (a.erc20Transfers?.length) {
+    const rows = a.erc20Transfers.map(t => `
+      <div class="an-row neutral">
+        <span class="an-label dim">${_fmtAcc(t.token)}</span>
+        <span class="an-addr">${_fmtAcc(t.from)} → ${_fmtAcc(t.to)}</span>
+        <span class="an-val">${t.amount != null ? BigInt(t.amount).toLocaleString() : '?'}</span>
+      </div>`).join('');
+    sections.push(`<div><div class="an-section-title">ERC-20 transfers</div>${rows}</div>`);
+  }
+
+  if (a.erc721Transfers?.length) {
+    const rows = a.erc721Transfers.map(t => `
+      <div class="an-row neutral">
+        <span class="an-label dim">${_fmtAcc(t.token)}</span>
+        <span class="an-addr">${_fmtAcc(t.from)} → ${_fmtAcc(t.to)}</span>
+        <span class="an-val">Token ID: ${t.tokenId != null ? BigInt(t.tokenId).toLocaleString() : '?'}</span>
+      </div>`).join('');
+    sections.push(`<div><div class="an-section-title">ERC-721 transfers</div>${rows}</div>`);
+  }
+
+  if (a.erc20Approvals?.length) {
+    const MAX_UINT256 = (1n << 256n) - 1n;
+    const rows = a.erc20Approvals.map(ap => {
+      const val = ap.allowance != null ? BigInt(ap.allowance) : null;
+      const revoke = val === 0n;
+      const valStr = val == null ? '?' : val === MAX_UINT256 ? 'Unlimited' : val.toLocaleString();
+      return `
+        <div class="an-row ${revoke ? 'neutral' : 'caution'}">
+          <span class="an-label ${revoke ? 'dim' : 'yel'}">${_fmtAcc(ap.token)}</span>
+          <span class="an-addr">${_fmtAcc(ap.owner)} → ${_fmtAcc(ap.spender)}</span>
+          <span class="an-val">${valStr}</span>
+        </div>`;
+    }).join('');
+    sections.push(`<div><div class="an-section-title">ERC-20 approvals</div>${rows}</div>`);
+  }
+
+  if (a.forgedTransfers?.length) {
+    const rows = a.forgedTransfers.map(t => `
+      <div class="an-row warn">
+        <span class="an-label red">⚠ Forged transfer (log without state change)</span>
+        <span class="an-addr">ERC-20 ${_fmtAcc(t.token)}</span>
+        <span class="an-addr">${_fmtAcc(t.from)} → ${_fmtAcc(t.to)}</span>
+      </div>`).join('');
+    sections.push(`<div>${rows}</div>`);
+  }
+
+  if (!sections.length) return '<div class="an-empty">No notable effects detected.</div>';
+  return `<div class="analysis">${sections.join('')}</div>`;
 }
 
 async function submit(hash) {
