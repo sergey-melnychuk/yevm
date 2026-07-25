@@ -20,7 +20,11 @@
   .wallet-menu button:hover { background: rgba(56,189,248,0.12); }
   #list { display: flex; flex-direction: column; gap: 12px; }
   .card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 14px 16px; }
+  .hash-row { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
   .hash { color: #94a3b8; font-size: 0.85em; margin-bottom: 4px; word-break: break-all; }
+  .hash-row .hash { margin-bottom: 0; flex: 1; min-width: 0; }
+  .chain-chip { flex: none; font-size: 0.72em; color: #7dd3fc; background: rgba(56,189,248,0.12);
+                border: 1px solid rgba(56,189,248,0.3); border-radius: 4px; padding: 1px 6px; white-space: nowrap; }
   .from { color: #64748b; font-size: 0.78em; margin-bottom: 8px; }
   .status { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; font-weight: 600; margin-bottom: 8px; }
   .status.pending { background: rgba(251,191,36,0.15);  color: #fbbf24; }
@@ -148,7 +152,7 @@ async function connect(provider) {
 
 function updateHeader() {
   const btn = document.getElementById('session');
-  btn.textContent = address ? _fmtAcc(address, true) : 'Connect Wallet';
+  btn.textContent = address ? _fmtAcc(address, null, true) : 'Connect Wallet';
 }
 
 // EIP-6963 (Multi Injected Provider Discovery): each installed wallet extension
@@ -282,6 +286,30 @@ async function simulateCard(item) {
   render();
 }
 
+// chainId -> display name. Covers the gate's seeded chains plus a few common
+// ones; anything else shows as "chain <n>". `tx.chainId` arrives as a hex string
+// (zero-padded Hex<8>), so parse it as base-16.
+const CHAIN_NAMES = {
+  1: 'Ethereum',
+  10: 'Optimism',
+  56: 'BNB Chain',
+  100: 'Gnosis',
+  137: 'Polygon',
+  8453: 'Base',
+  42161: 'Arbitrum',
+  43114: 'Avalanche',
+  11155111: 'Sepolia',
+};
+// tx.chainId arrives as a hex string (zero-padded Hex<8>); normalize to a number
+// for both the label lookup and the per-chain address registry keys.
+function _chainId(chainId) {
+  return typeof chainId === 'number' ? chainId : parseInt(chainId, 16);
+}
+function _chainLabel(chainId) {
+  const n = _chainId(chainId);
+  return CHAIN_NAMES[n] ?? `chain ${n}`;
+}
+
 function render() {
   const el = document.getElementById('list');
   if (!currentList.length) {
@@ -289,8 +317,9 @@ function render() {
     return;
   }
 
-  el.innerHTML = currentList.map(({ hash, from, call }) => {
+  el.innerHTML = currentList.map(({ hash, from, call, tx }) => {
     const sim = simResults.get(hash) || { status: 'pending' };
+    const cid = _chainId(tx?.chainId);
     const gas = sim.analysis?.fee?.gasUsed;
     const meta = sim.status === 'done'
       ? (gas != null ? `<span>gas: ${Number(gas).toLocaleString()}</span>` : '')
@@ -299,19 +328,22 @@ function render() {
       : '<span>simulating…</span>';
     const fromLine = from && from.toLowerCase() !== (address || '').toLowerCase()
       ? `<div class="from">from: ${from}</div>` : '';
-    const toLine = `<div class="from">${call && call.to ? 'to: ' + _fmtAcc(call.to) : '(create)'}</div>`;
+    const toLine = `<div class="from">${call && call.to ? 'to: ' + _fmtAcc(call.to, cid) : '(create)'}</div>`;
     const actions = `
       <div class="actions">
         ${sim.status === 'done' ? `<button class="btn" onclick="submit('${hash}')">Submit</button>` : ''}
         <button class="btn danger" onclick="remove('${hash}')">Remove</button>
       </div>`;
     return `<div class="card">
-      <div class="hash">${hash}</div>
+      <div class="hash-row">
+        <span class="hash">${hash}</span>
+        <span class="chain-chip">${_chainLabel(tx?.chainId)}</span>
+      </div>
       ${fromLine}
       ${toLine}
       <div class="status ${sim.status}">${sim.status.toUpperCase()}</div>
       <div class="meta">${meta}</div>
-      ${sim.status === 'done' ? renderAnalysis(sim.analysis) : ''}
+      ${sim.status === 'done' ? renderAnalysis(sim.analysis, cid) : ''}
       ${actions}
     </div>`;
   }).join('');
@@ -337,56 +369,15 @@ async function load() {
   }
 }
 
-// Mainnet-only known-address registry: address -> { symbol, decimals? }.
-// `decimals` is present for ERC-20 tokens (a fixed on-chain constant, so it's
-// baked in here rather than fetched - see _fmtAmount) and absent for routers /
-// precompiles / contracts. This is a deliberate shortcut: proper enrichment is
-// the same table keyed per chain and exported from Rust, which is trivial but
-// out of scope for the hackathon. Anything not listed falls back to raw hex.
-const KNOWN_ADDRS = {
-  // Stablecoins
-  '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48': { symbol: 'USDC',   decimals: 6  },
-  '0xdac17f958d2ee523a2206206994597c13d831ec7': { symbol: 'USDT',   decimals: 6  },
-  '0x6b175474e89094c44da98b954eedeac495271d0f': { symbol: 'DAI',    decimals: 18 },
-  '0x853d955acef822db058eb8505911ed77f175b99e': { symbol: 'FRAX',   decimals: 18 },
-  '0x5f98805a4e8be255a32880fdec7f6728c6568ba0': { symbol: 'LUSD',   decimals: 18 },
-  '0x6c3ea9036406852006290770bedfcaba0e23a0e8': { symbol: 'PYUSD',  decimals: 6  },
-  '0xf939e0a03fb07f59a73314e73794be0e57ac1b4e': { symbol: 'crvUSD', decimals: 18 },
-  '0x4c9edd5852cd905f086c759e8383e09bff1e68b3': { symbol: 'USDe',   decimals: 18 },
-  '0x056fd409e1d7a124bd7017459dfea2f387b6d5cd': { symbol: 'GUSD',   decimals: 2  },
-  // Majors
-  '0x2260fac5e5542a773aa44fbcfedf7c193bc2c599': { symbol: 'WBTC',   decimals: 8  },
-  '0x1f9840a85d5af5bf1d1762f925bdaddc4201f984': { symbol: 'UNI',    decimals: 18 },
-  '0x7fc66500c84a76ad7e9c93437bfc5ac33e2ddae9': { symbol: 'AAVE',   decimals: 18 },
-  '0x514910771af9ca656af840dff83e8264ecf986ca': { symbol: 'LINK',   decimals: 18 },
-  '0x9f8f72aa9304c8b593d555f12ef6589cc3a579a2': { symbol: 'MKR',    decimals: 18 },
-  '0xd533a949740bb3306d119cc777fa900ba034cd52': { symbol: 'CRV',    decimals: 18 },
-  '0x5a98fcbea516cf06857215779fd812ca3bef1b32': { symbol: 'LDO',    decimals: 18 },
-  '0xc00e94cb662c3520282e6f5717214004a7f26888': { symbol: 'COMP',   decimals: 18 },
-  '0xc011a73ee8576fb46f5e1c5751ca3b9fe0af2a6f': { symbol: 'SNX',    decimals: 18 },
-  '0xc18360217d8f7ab5e7c516566761ea12ce7f9d72': { symbol: 'ENS',    decimals: 18 },
-  '0x4d224452801aced8b2f0aebe155379bb5d594381': { symbol: 'APE',    decimals: 18 },
-  '0xc944e90c64b2c07662a292be6244bdf05cda44a7': { symbol: 'GRT',    decimals: 18 },
-  '0x0f5d2fb29fb7d3cfee444a200298f468908cc942': { symbol: 'MANA',   decimals: 18 },
-  '0x3845badade8e6dff049820680d1f14bd3903a5d0': { symbol: 'SAND',   decimals: 18 },
-  '0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce': { symbol: 'SHIB',   decimals: 18 },
-  '0x6982508145454ce325ddbe47a25d4ec3d2311933': { symbol: 'PEPE',   decimals: 18 },
-  // Wrapped / liquid-staked ETH
-  '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2': { symbol: 'WETH',   decimals: 18 },
-  '0xae7ab96520de3a18e5e111b5eaab095312d7fe84': { symbol: 'stETH',  decimals: 18 },
-  '0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0': { symbol: 'wstETH', decimals: 18 },
-  '0xae78736cd615f374d3085123a210448e74fc6393': { symbol: 'rETH',   decimals: 18 },
-  '0xbe9895146f7af43049ca1c1ae358b0541ea49704': { symbol: 'cbETH',  decimals: 18 },
-
-  // Routers
-  '0x7a250d5630b4cf539739df2c5dacb4c659f2488d': { symbol: 'Uniswap V2 Router' },
-  '0xe592427a0aece92de3edee1f18e0157c05861564': { symbol: 'Uniswap V3 Router' },
-  '0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45': { symbol: 'Uniswap V3 Router2' },
-  '0xd9e1ce17f2641f24ae83637ab66a2cca9c378b9f': { symbol: 'SushiSwap Router' },
-  '0x1111111254eeb25477b68fb85ed929f73a960582': { symbol: '1inch V5' },
-  '0x881d40237659c251811cec9c364ef91dc08d300c': { symbol: 'Metamask Swap' },
-  '0x00000000219ab540356cbb839cbe05303d7705fa': { symbol: 'ETH2 Deposit' },
-  // Precompiles
+// Known-address registry: chainId -> address -> { symbol, decimals? }.
+// Addresses are chain-specific (USDC on Base != USDC on mainnet), so the outer
+// key is the chain the tx was captured on. `decimals` is present for ERC-20
+// tokens (a fixed on-chain constant, baked in rather than fetched - see
+// _fmtAmount) and absent for routers/infra. Curated static shortcut: the "real"
+// version is the same table exported from Rust, keyed per chain; static is fine
+// for the hackathon. Unlisted addresses fall back to raw hex. COMMON_ADDRS holds
+// entries identical on every EVM chain (precompiles), checked as a fallback.
+const COMMON_ADDRS = {
   '0x0000000000000000000000000000000000000001': { symbol: 'ecRecover' },
   '0x0000000000000000000000000000000000000002': { symbol: 'SHA-256' },
   '0x0000000000000000000000000000000000000003': { symbol: 'RIPEMD-160' },
@@ -399,12 +390,101 @@ const KNOWN_ADDRS = {
   '0x000000000000000000000000000000000000000a': { symbol: 'pointEval' },
 };
 
-function _known(hex) {
-  return KNOWN_ADDRS[hex?.toLowerCase?.()] ?? null;
+const KNOWN_ADDRS = {
+  // Ethereum
+  1: {
+    // Stablecoins
+    '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48': { symbol: 'USDC',   decimals: 6  },
+    '0xdac17f958d2ee523a2206206994597c13d831ec7': { symbol: 'USDT',   decimals: 6  },
+    '0x6b175474e89094c44da98b954eedeac495271d0f': { symbol: 'DAI',    decimals: 18 },
+    '0x853d955acef822db058eb8505911ed77f175b99e': { symbol: 'FRAX',   decimals: 18 },
+    '0x5f98805a4e8be255a32880fdec7f6728c6568ba0': { symbol: 'LUSD',   decimals: 18 },
+    '0x6c3ea9036406852006290770bedfcaba0e23a0e8': { symbol: 'PYUSD',  decimals: 6  },
+    '0xf939e0a03fb07f59a73314e73794be0e57ac1b4e': { symbol: 'crvUSD', decimals: 18 },
+    '0x4c9edd5852cd905f086c759e8383e09bff1e68b3': { symbol: 'USDe',   decimals: 18 },
+    '0x056fd409e1d7a124bd7017459dfea2f387b6d5cd': { symbol: 'GUSD',   decimals: 2  },
+    '0x1abaea1f7c830bd89acc67ec4af516284b1bc33c': { symbol: 'EURC',   decimals: 6  },
+    // Majors
+    '0x2260fac5e5542a773aa44fbcfedf7c193bc2c599': { symbol: 'WBTC',   decimals: 8  },
+    '0x1f9840a85d5af5bf1d1762f925bdaddc4201f984': { symbol: 'UNI',    decimals: 18 },
+    '0x7fc66500c84a76ad7e9c93437bfc5ac33e2ddae9': { symbol: 'AAVE',   decimals: 18 },
+    '0x514910771af9ca656af840dff83e8264ecf986ca': { symbol: 'LINK',   decimals: 18 },
+    '0x9f8f72aa9304c8b593d555f12ef6589cc3a579a2': { symbol: 'MKR',    decimals: 18 },
+    '0xd533a949740bb3306d119cc777fa900ba034cd52': { symbol: 'CRV',    decimals: 18 },
+    '0x5a98fcbea516cf06857215779fd812ca3bef1b32': { symbol: 'LDO',    decimals: 18 },
+    '0xc00e94cb662c3520282e6f5717214004a7f26888': { symbol: 'COMP',   decimals: 18 },
+    '0xc011a73ee8576fb46f5e1c5751ca3b9fe0af2a6f': { symbol: 'SNX',    decimals: 18 },
+    '0xc18360217d8f7ab5e7c516566761ea12ce7f9d72': { symbol: 'ENS',    decimals: 18 },
+    '0x4d224452801aced8b2f0aebe155379bb5d594381': { symbol: 'APE',    decimals: 18 },
+    '0xc944e90c64b2c07662a292be6244bdf05cda44a7': { symbol: 'GRT',    decimals: 18 },
+    '0x0f5d2fb29fb7d3cfee444a200298f468908cc942': { symbol: 'MANA',   decimals: 18 },
+    '0x3845badade8e6dff049820680d1f14bd3903a5d0': { symbol: 'SAND',   decimals: 18 },
+    '0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce': { symbol: 'SHIB',   decimals: 18 },
+    '0x6982508145454ce325ddbe47a25d4ec3d2311933': { symbol: 'PEPE',   decimals: 18 },
+    // Wrapped / liquid-staked ETH
+    '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2': { symbol: 'WETH',   decimals: 18 },
+    '0xae7ab96520de3a18e5e111b5eaab095312d7fe84': { symbol: 'stETH',  decimals: 18 },
+    '0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0': { symbol: 'wstETH', decimals: 18 },
+    '0xae78736cd615f374d3085123a210448e74fc6393': { symbol: 'rETH',   decimals: 18 },
+    '0xbe9895146f7af43049ca1c1ae358b0541ea49704': { symbol: 'cbETH',  decimals: 18 },
+    // Routers / infra
+    '0x7a250d5630b4cf539739df2c5dacb4c659f2488d': { symbol: 'Uniswap V2 Router' },
+    '0xe592427a0aece92de3edee1f18e0157c05861564': { symbol: 'Uniswap V3 Router' },
+    '0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45': { symbol: 'Uniswap V3 Router2' },
+    '0xd9e1ce17f2641f24ae83637ab66a2cca9c378b9f': { symbol: 'SushiSwap Router' },
+    '0x1111111254eeb25477b68fb85ed929f73a960582': { symbol: '1inch V5' },
+    '0x881d40237659c251811cec9c364ef91dc08d300c': { symbol: 'Metamask Swap' },
+    '0x00000000219ab540356cbb839cbe05303d7705fa': { symbol: 'ETH2 Deposit' },
+  },
+  // Optimism
+  10: {
+    '0x4200000000000000000000000000000000000006': { symbol: 'WETH',   decimals: 18 },
+    '0x0b2c639c533813f4aa9d7837caf62653d097ff85': { symbol: 'USDC',   decimals: 6  },
+    '0x7f5c764cbc14f9669b88837ca1490cca17c31607': { symbol: 'USDC.e', decimals: 6  },
+    '0x94b008aa00579c1307b0ef2c499ad98a8ce58e58': { symbol: 'USDT',   decimals: 6  },
+    '0xda10009cbd5d07dd0cecc66161fc93d7c9000da1': { symbol: 'DAI',    decimals: 18 },
+    '0x68f180fcce6836688e9084f035309e29bf0a2095': { symbol: 'WBTC',   decimals: 8  },
+    '0x4200000000000000000000000000000000000042': { symbol: 'OP',     decimals: 18 },
+    '0x1f32b1c2345538c0c6f582fcb022739c4a194ebb': { symbol: 'wstETH', decimals: 18 },
+    '0x350a791bfc2c21f9ed5d10980dad2e2638ffa7f6': { symbol: 'LINK',   decimals: 18 },
+  },
+  // Base
+  8453: {
+    '0x4200000000000000000000000000000000000006': { symbol: 'WETH',   decimals: 18 },
+    '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913': { symbol: 'USDC',   decimals: 6  },
+    '0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42': { symbol: 'EURC',   decimals: 6  },
+    '0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca': { symbol: 'USDbC',  decimals: 6  },
+    '0xfde4c96c8593536e31f229ea8f37b2ada2699bb2': { symbol: 'USDT',   decimals: 6  },
+    '0x50c5725949a6f0c72e6c4a641f24049a917db0cb': { symbol: 'DAI',    decimals: 18 },
+    '0x2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22': { symbol: 'cbETH',  decimals: 18 },
+    '0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf': { symbol: 'cbBTC',  decimals: 8  },
+    '0xc1cba3fcea344f92d9239c08c0568f6f2f0ee452': { symbol: 'wstETH', decimals: 18 },
+    '0x940181a94a35a4569e4529a3cdfb74e38fd98631': { symbol: 'AERO',   decimals: 18 },
+  },
+  // Arbitrum One
+  42161: {
+    '0x82af49447d8a07e3bd95bd0d56f35241523fbab1': { symbol: 'WETH',   decimals: 18 },
+    '0xaf88d065e77c8cc2239327c5edb3a432268e5831': { symbol: 'USDC',   decimals: 6  },
+    '0xff970a61a04b1ca14834a43f5de4533ebddb5cc8': { symbol: 'USDC.e', decimals: 6  },
+    '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9': { symbol: 'USDT',   decimals: 6  },
+    '0xda10009cbd5d07dd0cecc66161fc93d7c9000da1': { symbol: 'DAI',    decimals: 18 },
+    '0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f': { symbol: 'WBTC',   decimals: 8  },
+    '0x912ce59144191c1204e64559fe8253a0e49e6548': { symbol: 'ARB',    decimals: 18 },
+    '0xf97f4df75117a78c1a5a0dbb814af92458539fb4': { symbol: 'LINK',   decimals: 18 },
+    '0xfc5a1a6eb076a2c7ad06ed22c90d7e710e35ad0a': { symbol: 'GMX',    decimals: 18 },
+    '0x5979d7b546e38e414f7e9822514be443a4800529': { symbol: 'wstETH', decimals: 18 },
+  },
+};
+
+// Look up an address on a given chain; falls back to chain-agnostic precompiles.
+function _known(chainId, hex) {
+  const a = hex?.toLowerCase?.();
+  if (!a) return null;
+  return KNOWN_ADDRS[chainId]?.[a] ?? COMMON_ADDRS[a] ?? null;
 }
 
-function _fmtAcc(hex, short = false) {
-  const known = _known(hex);
+function _fmtAcc(hex, chainId, short = false) {
+  const known = _known(chainId, hex);
   if (known) return known.symbol;
   if (!short) {
     return hex;
@@ -412,11 +492,11 @@ function _fmtAcc(hex, short = false) {
   return hex.length <= 21 ? hex : hex.slice(0, 7) + '...' + hex.slice(-5);
 }
 
-function _fmtAmount(token, amount) {
+function _fmtAmount(token, amount, chainId) {
   if (amount == null) return '?';
   let raw;
   try { raw = BigInt(amount); } catch { return String(amount); }
-  const known = _known(token);
+  const known = _known(chainId, token);
   if (known?.decimals == null) return raw.toLocaleString();
   const base = 10n ** BigInt(known.decimals);
   const whole = raw / base, frac = raw % base;
@@ -448,17 +528,21 @@ function _fmtDelta(delta) {
 }
 
 // Render analyse() output (a lens `Alerts`): the structured effects of the tx,
-// not the raw event stream. Empty struct -> an explicit "nothing notable" note.
-function renderAnalysis(a) {
+// not the raw event stream. `chainId` selects the address/token registry so
+// labels and decimals match the chain the tx was captured on. Empty struct ->
+// an explicit "nothing notable" note.
+function renderAnalysis(a, chainId) {
   if (!a) return '';
+  const acc = h => _fmtAcc(h, chainId);
+  const amt = (token, v) => _fmtAmount(token, v, chainId);
   const sections = [];
 
   if (a.proxySwaps?.length) {
     sections.push(a.proxySwaps.map(s => `
       <div class="an-row warn">
         <span class="an-label red">⚠ Proxy implementation replaced</span>
-        <span class="an-addr">${_fmtAcc(s.proxy)}</span>
-        <span><span class="an-val">${_fmtAcc(s.oldImpl)}</span> → <span class="an-val new">${_fmtAcc(s.newImpl)}</span></span>
+        <span class="an-addr">${acc(s.proxy)}</span>
+        <span><span class="an-val">${acc(s.oldImpl)}</span> → <span class="an-val new">${acc(s.newImpl)}</span></span>
       </div>`).join(''));
   }
 
@@ -479,7 +563,7 @@ function renderAnalysis(a) {
       return `
         <div class="an-row neutral">
           <span class="an-label dim">ETH${role ? ` <span class="an-role">${role}</span>` : ''}</span>
-          <span class="an-addr">${_fmtAcc(c.acc)}</span>
+          <span class="an-addr">${acc(c.acc)}</span>
           <span class="${pos ? 'an-pos' : 'an-neg'}">${_fmtDelta(c.delta)}</span>
         </div>`;
     }).join('');
@@ -489,9 +573,9 @@ function renderAnalysis(a) {
   if (a.erc20Transfers?.length) {
     const rows = a.erc20Transfers.map(t => `
       <div class="an-row neutral">
-        <span class="an-label dim">${_fmtAcc(t.token)}</span>
-        <span class="an-addr">${_fmtAcc(t.from)} → ${_fmtAcc(t.to)}</span>
-        <span class="an-val">${_fmtAmount(t.token, t.amount)}</span>
+        <span class="an-label dim">${acc(t.token)}</span>
+        <span class="an-addr">${acc(t.from)} → ${acc(t.to)}</span>
+        <span class="an-val">${amt(t.token, t.amount)}</span>
       </div>`).join('');
     sections.push(`<div><div class="an-section-title">ERC-20 transfers</div>${rows}</div>`);
   }
@@ -499,8 +583,8 @@ function renderAnalysis(a) {
   if (a.erc721Transfers?.length) {
     const rows = a.erc721Transfers.map(t => `
       <div class="an-row neutral">
-        <span class="an-label dim">${_fmtAcc(t.token)}</span>
-        <span class="an-addr">${_fmtAcc(t.from)} → ${_fmtAcc(t.to)}</span>
+        <span class="an-label dim">${acc(t.token)}</span>
+        <span class="an-addr">${acc(t.from)} → ${acc(t.to)}</span>
         <span class="an-val">Token ID: ${t.tokenId != null ? BigInt(t.tokenId).toLocaleString() : '?'}</span>
       </div>`).join('');
     sections.push(`<div><div class="an-section-title">ERC-721 transfers</div>${rows}</div>`);
@@ -511,11 +595,11 @@ function renderAnalysis(a) {
     const rows = a.erc20Approvals.map(ap => {
       const val = ap.allowance != null ? BigInt(ap.allowance) : null;
       const revoke = val === 0n;
-      const valStr = val == null ? '?' : val === MAX_UINT256 ? 'Unlimited' : _fmtAmount(ap.token, val);
+      const valStr = val == null ? '?' : val === MAX_UINT256 ? 'Unlimited' : amt(ap.token, val);
       return `
         <div class="an-row ${revoke ? 'neutral' : 'caution'}">
-          <span class="an-label ${revoke ? 'dim' : 'yel'}">${_fmtAcc(ap.token)}</span>
-          <span class="an-addr">${_fmtAcc(ap.owner)} → ${_fmtAcc(ap.spender)}</span>
+          <span class="an-label ${revoke ? 'dim' : 'yel'}">${acc(ap.token)}</span>
+          <span class="an-addr">${acc(ap.owner)} → ${acc(ap.spender)}</span>
           <span class="an-val">${valStr}</span>
         </div>`;
     }).join('');
@@ -526,8 +610,8 @@ function renderAnalysis(a) {
     const rows = a.forgedTransfers.map(t => `
       <div class="an-row warn">
         <span class="an-label red">⚠ Forged transfer (log without state change)</span>
-        <span class="an-addr">ERC-20 ${_fmtAcc(t.token)}</span>
-        <span class="an-addr">${_fmtAcc(t.from)} → ${_fmtAcc(t.to)}</span>
+        <span class="an-addr">ERC-20 ${acc(t.token)}</span>
+        <span class="an-addr">${acc(t.from)} → ${acc(t.to)}</span>
       </div>`).join('');
     sections.push(`<div>${rows}</div>`);
   }
