@@ -1,92 +1,159 @@
+use chrono::{DateTime, Utc};
 use eyre::{Result, eyre};
 use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
 use rand::Rng;
+use sqlx::SqlitePool;
 use std::{
-    collections::HashMap,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::RwLock;
 use yevm_base::Acc;
-use yevm_misc::keccak256;
+use yevm_misc::{hex::parse_vec, keccak256};
 
-const NONCE_TTL: Duration = Duration::from_secs(60);
-const SESSION_TTL: Duration = Duration::from_secs(8 * 3600);
+const NONCE_TTL_SECS: i64 = 60;
+const SESSION_TTL_SECS: i64 = 8 * 3600;
+const CLOCK_DRIFT_SECS: i64 = 60;
 
 pub struct AuthStore {
-    challenges: RwLock<HashMap<String, Instant>>,
-    sessions: RwLock<HashMap<String, (Acc, Instant)>>, // token -> (address, expiry)
+    pool: SqlitePool,
 }
 
 impl AuthStore {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self {
-            challenges: RwLock::new(HashMap::new()),
-            sessions: RwLock::new(HashMap::new()),
-        })
+    pub fn new(pool: SqlitePool) -> Arc<Self> {
+        Arc::new(Self { pool })
     }
 
-    pub async fn new_challenge(&self) -> String {
+    pub async fn new_challenge(&self) -> Result<String> {
         let nonce = random_hex(32);
-        self.challenges
-            .write()
-            .await
-            .insert(nonce.clone(), Instant::now());
-        nonce
+        sqlx::query("INSERT INTO auth_challenges (nonce, created_at) VALUES (?, ?)")
+            .bind(&nonce)
+            .bind(unix_now())
+            .execute(&self.pool)
+            .await?;
+        Ok(nonce)
     }
 
-    // Verify an EIP-4361 (SIWE) message + signature.
-    pub async fn verify(&self, message: &str, signature: &str) -> Result<(Acc, String)> {
-        let nonce = siwe_field(message, "Nonce: ")?;
-
-        {
-            let mut challenges = self.challenges.write().await;
-            let created = challenges
-                .remove(&nonce)
-                .ok_or_else(|| eyre!("unknown or expired nonce"))?;
-            if created.elapsed() > NONCE_TTL {
-                return Err(eyre!("nonce expired"));
-            }
+    pub async fn verify(
+        &self,
+        message: &str,
+        signature: &str,
+        host: &str,
+    ) -> Result<(Acc, String)> {
+        let domain = siwe_domain(message)?;
+        if !domain.eq_ignore_ascii_case(host) {
+            return Err(eyre!("SIWE domain {domain:?} does not match host {host:?}"));
+        }
+        let uri = find_and_strip_prefix(message, "URI: ")?;
+        if !uri_host(&uri).eq_ignore_ascii_case(host) {
+            return Err(eyre!("SIWE URI {uri:?} does not match host {host:?}"));
         }
 
-        let address = recover_personal_sign(message.as_bytes(), signature)?;
+        // Reject messages outside their own validity window (EIP-4361).
+        let now = unix_now();
+        let issued = parse_iso8601_utc(&find_and_strip_prefix(message, "Issued At: ")?)?;
+        if issued > now + CLOCK_DRIFT_SECS {
+            return Err(eyre!("SIWE issued in the future"));
+        }
+        let expires = parse_iso8601_utc(&find_and_strip_prefix(message, "Expiration Time: ")?)?;
+        if now > expires {
+            return Err(eyre!("SIWE message expired"));
+        }
 
-        // Address in the message must match the recovered signer.
+        let nonce = find_and_strip_prefix(message, "Nonce: ")?;
+
+        sqlx::query("DELETE FROM auth_challenges WHERE created_at < ?")
+            .bind(now - NONCE_TTL_SECS)
+            .execute(&self.pool)
+            .await?;
+        let consumed = sqlx::query("DELETE FROM auth_challenges WHERE nonce = ?")
+            .bind(&nonce)
+            .execute(&self.pool)
+            .await?;
+        if consumed.rows_affected() == 0 {
+            return Err(eyre!("unknown or expired nonce"));
+        }
+
+        let address = recover_signer(message.as_bytes(), signature)?;
+
         let msg_addr = siwe_address(message)?;
         if format!("{address}").to_lowercase() != msg_addr.to_lowercase() {
             return Err(eyre!("address mismatch"));
         }
 
         let token = random_hex(32);
-        self.sessions
-            .write()
-            .await
-            .insert(token.clone(), (address, Instant::now()));
+        sqlx::query("INSERT INTO auth_sessions (token, signer, created_at) VALUES (?, ?, ?)")
+            .bind(&token)
+            .bind(format!("{address}"))
+            .bind(now)
+            .execute(&self.pool)
+            .await?;
         Ok((address, token))
     }
 
     pub async fn authenticate(&self, token: &str) -> Option<Acc> {
-        let sessions = self.sessions.read().await;
-        sessions.get(token).and_then(|(addr, created)| {
-            if created.elapsed() < SESSION_TTL {
-                Some(*addr)
-            } else {
-                None
-            }
-        })
+        let now = unix_now();
+        sqlx::query("DELETE FROM auth_sessions WHERE created_at < ?")
+            .bind(now - SESSION_TTL_SECS)
+            .execute(&self.pool)
+            .await
+            .ok()?;
+        let (signer,): (String,) =
+            sqlx::query_as("SELECT signer FROM auth_sessions WHERE token = ?")
+                .bind(token)
+                .fetch_optional(&self.pool)
+                .await
+                .ok()??;
+        signer.as_str().try_into().ok()
     }
 }
 
 // Extract a named field value from a SIWE message, e.g. "Nonce: abc123" -> "abc123".
-fn siwe_field(message: &str, prefix: &str) -> Result<String> {
+fn find_and_strip_prefix(message: &str, prefix: &str) -> Result<String> {
     message
         .lines()
-        .find(|l| l.starts_with(prefix))
-        .map(|l| l[prefix.len()..].trim().to_string())
+        .filter_map(|line| line.strip_prefix(prefix))
+        .next()
+        .map(|line| line.to_string())
         .ok_or_else(|| eyre!("SIWE message missing field: {prefix}"))
 }
 
-// The address is on the second line of a SIWE message.
+fn siwe_domain(message: &str) -> Result<String> {
+    const SUFFIX: &str = " wants you to sign in with your Ethereum account:";
+    message
+        .lines()
+        .next()
+        .and_then(|l| l.strip_suffix(SUFFIX))
+        .map(|d| d.trim().to_string())
+        .ok_or_else(|| eyre!("malformed SIWE first line"))
+}
+
+// Reduce "https://host:8000/path" to "host[:port]" 
+// to be later comparable to the Host header value.
+fn uri_host(uri: &str) -> String {
+    uri.split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(uri)
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('/')
+        .to_string()
+}
+
+fn unix_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn parse_iso8601_utc(s: &str) -> Result<i64> {
+    s.trim()
+        .parse::<DateTime<Utc>>()
+        .map(|dt| dt.timestamp())
+        .map_err(|e| eyre!("bad timestamp: {s}: {e}"))
+}
+
 fn siwe_address(message: &str) -> Result<String> {
     message
         .lines()
@@ -95,10 +162,8 @@ fn siwe_address(message: &str) -> Result<String> {
         .ok_or_else(|| eyre!("SIWE message too short"))
 }
 
-// Recover address from a MetaMask personal_sign signature.
-// personal_sign prepends "\x19Ethereum Signed Message:\n{len}" before hashing.
-fn recover_personal_sign(message: &[u8], sig_hex: &str) -> Result<Acc> {
-    let sig_bytes = hex_decode(sig_hex)?;
+fn recover_signer(message: &[u8], sig_hex: &str) -> Result<Acc> {
+    let sig_bytes = parse_vec(sig_hex).map_err(|e| eyre!("{e}"))?;
     if sig_bytes.len() != 65 {
         return Err(eyre!("signature must be 65 bytes, got {}", sig_bytes.len()));
     }
@@ -132,9 +197,4 @@ fn random_hex(bytes: usize) -> String {
     let mut rng = rand::thread_rng();
     let bytes: Vec<u8> = (0..bytes).map(|_| rng.r#gen()).collect();
     hex::encode(bytes)
-}
-
-fn hex_decode(s: &str) -> Result<Vec<u8>> {
-    let s = s.strip_prefix("0x").unwrap_or(s);
-    hex::decode(s).map_err(|e| eyre!("hex: {e}"))
 }
