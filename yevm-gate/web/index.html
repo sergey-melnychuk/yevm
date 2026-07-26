@@ -3,6 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- WalletConnect project id, injected at request time from YEVM_WALLETCONNECT_PROJECT_ID (empty if unset). -->
+<meta name="walletconnect-project-id" content="__WALLETCONNECT_PROJECT_ID__">
 <title>yevm · gate</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -56,6 +58,9 @@
   .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
   .modal-head h2 { color: #7dd3fc; font-size: 1em; letter-spacing: 0.04em; }
   .modal-close { background: none; border: none; color: #94a3b8; font-size: 1.2em; cursor: pointer; padding: 0 4px; }
+  /* WalletConnect QR modal: center the title, pin the close button to the right. */
+  #wc-modal .modal-head { justify-content: center; position: relative; }
+  #wc-modal .modal-close { position: absolute; right: 0; top: 0; }
   .modal-note { color: #64748b; font-size: 0.78em; margin-bottom: 14px; }
   .chain-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
   .chain-id { flex: none; width: 12ch; color: #94a3b8; font-size: 0.82em; }
@@ -137,10 +142,33 @@
     <div class="chain-err" id="add-chain-err"></div>
   </div>
 </div>
+
+<!-- WalletConnect pairing QR — rendered from the display_uri event -->
+<div id="wc-modal" class="modal-overlay" onclick="if (event.target === this) closeWcQr()">
+  <div class="modal" style="max-width:340px;text-align:center">
+    <div class="modal-head">
+      <h2>WalletConnect</h2>
+      <button class="modal-close" onclick="closeWcQr()">✕</button>
+    </div>
+    <div class="modal-note">Scan with your mobile wallet</div>
+    <div id="wc-qr" style="background:#fff;padding:12px;border-radius:8px;display:inline-block;line-height:0"></div>
+    <div style="margin-top:12px"><button class="btn sm" onclick="copyWcUri()">Copy URI</button></div>
+  </div>
+</div>
+
+<!-- Self-contained QR encoder (vendored, served same-origin) → defines window.qrcode -->
+<script src="/static/qr.js"></script>
 <script>
 let token = localStorage.getItem('yevm_gate_token');
 let address = localStorage.getItem('yevm_gate_address');
 let isAdmin = localStorage.getItem('yevm_gate_admin') === '1';
+
+// Wallet provider backing the active connection (injected or WalletConnect).
+let activeProvider = null;
+
+const WC_PROJECT_ID =
+  (document.querySelector('meta[name="walletconnect-project-id"]')?.content || '').replace(/^__.*__$/, '');
+let wcProvider = null;   // reused across reconnects within a page load
 
 function authHeaders() {
   return token ? { 'Authorization': 'Bearer ' + token } : {};
@@ -167,6 +195,7 @@ async function loadWasm() {
 
 async function connect(provider) {
   if (!provider) { alert('No wallet detected.'); return; }
+  activeProvider = provider;   // keep for later wallet actions and WC lifecycle
 
   const accounts = await provider.request({ method: 'eth_requestAccounts' });
   if (!accounts || !accounts.length) {
@@ -247,18 +276,116 @@ function closeWalletMenu() {
 function openWalletMenu() {
   const menu = document.getElementById('wallet-menu');
   menu.innerHTML = '';
-  wallets.forEach((w, i) => {
+  const addItem = (label, onclick) => {
     const btn = document.createElement('button');
-    btn.textContent = w.info.name;
-    btn.onclick = () => selectWallet(i);
+    btn.textContent = label;
+    btn.onclick = onclick;
     menu.appendChild(btn);
-  });
+  };
+  // EIP-6963 injected wallets, by name.
+  wallets.forEach((w, i) => addItem(w.info.name, () => selectWallet(i)));
+  // A legacy window.ethereum that didn't announce via EIP-6963.
+  if (!wallets.length && window.ethereum) {
+    addItem('Browser Wallet', () => { closeWalletMenu(); connect(window.ethereum); });
+  }
+  // WalletConnect is always offered.
+  addItem('WalletConnect', connectWalletConnect);
   menu.classList.add('open');
 }
 
 function selectWallet(i) {
   closeWalletMenu();
   connect(wallets[i].provider);
+}
+
+// Lazily load the vendored WalletConnect bundle (served same-origin) only when
+// chosen - it's a ~3MB import most sessions never need. The resulting provider is
+// EIP-1193, so it flows through the same connect()/SIWE path as injected wallets.
+// Lazily create (once) the WalletConnect provider: import the vendored bundle,
+// init with the exact options, and wire the session-end handlers. Reused within a
+// page load (wcProvider.session reflects whether we're still paired). NB: do NOT
+// pass a `metadata` object to init() - supplying one (esp. with empty icons)
+// breaks the QR modal render; let WC derive defaults from the page.
+async function initWcProvider() {
+  if (wcProvider) return wcProvider;
+  const { EthereumProvider } = await import('/static/wc.js');
+  const wc = await EthereumProvider.init({
+    projectId: WC_PROJECT_ID,
+    showQrModal: false,
+    chains: [1],
+    optionalChains: [10, 8453, 42161],
+    methods: ['personal_sign'],
+    events: ['chainChanged', 'accountsChanged'],
+  });
+  // WC emits the pairing URI here; render our own QR so there's no dependency on
+  // WC's modal backend (api.web3modal.org), which content blockers routinely kill.
+  wc.on('display_uri', showWcQr);
+  // Wallet ends the session from its side -> forget the provider so the next
+  // attempt re-pairs, and clear the page state if this WC session was the signer.
+  const onDown = () => {
+    if (wcProvider === wc) wcProvider = null;
+    if (activeProvider === wc) signOut();
+  };
+  wc.on('disconnect', onDown);
+  wc.on('session_delete', onDown);
+  wcProvider = wc;
+  return wcProvider;
+}
+
+// Our self-rendered WalletConnect pairing modal (window.qrcode is the vendored
+// encoder loaded via /static/qr.js).
+let _wcUri = '';
+function showWcQr(uri) {
+  _wcUri = uri;
+  const box = document.getElementById('wc-qr');
+  try {
+    const qr = qrcode(0, 'M');   // 0 = auto-pick the smallest fitting version
+    qr.addData(uri);
+    qr.make();
+    box.innerHTML = qr.createSvgTag(5, 2);
+  } catch (e) {
+    // Fallback: at least show the URI to copy if QR encoding somehow fails.
+    box.innerHTML = `<div style="color:#000;font-size:11px;word-break:break-all;max-width:280px">${uri}</div>`;
+  }
+  document.getElementById('wc-modal').classList.add('open');
+}
+function closeWcQr() {
+  document.getElementById('wc-modal').classList.remove('open');
+}
+function copyWcUri() {
+  if (_wcUri) navigator.clipboard?.writeText(_wcUri);
+}
+
+async function connectWalletConnect() {
+  closeWalletMenu();
+  if (!WC_PROJECT_ID) { alert('WalletConnect is not configured'); return; }
+  try {
+    await initWcProvider();
+    // connect() emits display_uri -> our QR modal; resolves once the phone pairs.
+    if (!wcProvider.session) await wcProvider.connect();
+    closeWcQr();                                           // paired -> drop the QR
+    await connect(wcProvider);                             // identical SIWE flow
+    localStorage.setItem('yevm_gate_wc', '1');             // mark this session WC-backed
+  } catch (err) {
+    closeWcQr();
+    console.error('WalletConnect', err);
+    alert('WalletConnect failed: ' + (err?.message ?? err));
+  }
+}
+
+// On load, if the stored session was WalletConnect-backed, the WC session may have
+// been ended from the wallet while the tab was closed (no event reaches us then).
+// Lazily restore the provider and reconcile: still live -> keep it as the active
+// signer; gone -> drop the stale "connected" UI.
+async function reconcileWcSession() {
+  if (!token || !WC_PROJECT_ID || localStorage.getItem('yevm_gate_wc') !== '1') return;
+  try {
+    await initWcProvider();
+    if (wcProvider.session) activeProvider = wcProvider;
+    else signOut();
+  } catch (e) {
+    console.error('WC reconcile', e);
+  }
 }
 
 // Click outside the button/menu closes the menu.
@@ -272,25 +399,21 @@ function onSessionClick() {
     if (confirm(`Sign out of ${address}?`)) signOut();
     return;
   }
-  if (wallets.length >= 2) {
-    document.getElementById('wallet-menu').classList.contains('open')
-      ? closeWalletMenu()
-      : openWalletMenu();
-    return;
-  }
-  // Zero or one EIP-6963 wallet: fall back to the legacy single-provider global.
-  const provider = wallets[0]?.provider || window.ethereum;
-  if (!provider) { alert('No wallet detected.'); return; }
-  connect(provider);
+  // WalletConnect is always an option, so there's always a menu to show.
+  document.getElementById('wallet-menu').classList.contains('open')
+    ? closeWalletMenu()
+    : openWalletMenu();
 }
 
 function signOut() {
   token = null;
   address = null;
   isAdmin = false;
+  activeProvider = null;
   localStorage.removeItem('yevm_gate_token');
   localStorage.removeItem('yevm_gate_address');
   localStorage.removeItem('yevm_gate_admin');
+  localStorage.removeItem('yevm_gate_wc');
   currentList = [];
   simResults.clear();
   updateHeader();
@@ -1086,6 +1209,7 @@ updateSimBanner();
 load();
 setInterval(load, 30000);
 loadWasm();
+reconcileWcSession();
 
 </script>
 </body>

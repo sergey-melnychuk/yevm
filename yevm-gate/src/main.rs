@@ -28,6 +28,14 @@ const WASM_BG: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../yevm-wasm/pkg/yevm_wasm_bg.wasm"
 ));
+const WC_JS: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/web/vendor/wc/wc.js"
+));
+const QR_JS: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/web/vendor/qr/qr.js"
+));
 
 struct AppState {
     client: reqwest::Client,
@@ -526,14 +534,17 @@ async fn chains_set(
     Ok(Json(json!({ "stored": stored, "errors": errors })))
 }
 
-async fn ui() -> Html<&'static str> {
-    Html(include_str!("../web/index.html"))
+async fn ui() -> Html<String> {
+    let wc_project_id = std::env::var("YEVM_WALLETCONNECT_PROJECT_ID").unwrap_or_default();
+    Html(include_str!("../web/index.html").replace("__WALLETCONNECT_PROJECT_ID__", &wc_project_id))
 }
 
 async fn serve(Path(path): Path<String>) -> Response {
     let asset: Option<(&'static [u8], &'static str)> = match path.as_str() {
         "yevm_wasm.js" => Some((WASM_JS, "application/javascript")),
         "yevm_wasm_bg.wasm" => Some((WASM_BG, "application/wasm")),
+        "wc.js" => Some((WC_JS, "application/javascript")),
+        "qr.js" => Some((QR_JS, "application/javascript")),
         _ => None,
     };
     match asset {
