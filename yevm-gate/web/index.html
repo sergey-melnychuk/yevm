@@ -121,6 +121,12 @@
       <input id="sim-block-input" placeholder="latest" style="width:14ch;flex:none">
       <button class="btn sm" onclick="applySimBlock()">Apply</button>
     </div>
+    <div class="sim-block">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="ens-toggle" style="flex:none;width:auto" onchange="setEns(this.checked)">
+        Resolve ENS names <span style="color:#64748b">(mainnet; adds an RPC call per address)</span>
+      </label>
+    </div>
     <div class="modal-note" id="settings-note"></div>
     <div id="chain-rows"></div>
     <div class="chain-add">
@@ -670,6 +676,17 @@ function _known(chainId, hex) {
 const ENS_UNIVERSAL_RESOLVER = '0xce01f8eee7e479c928f8919abd53e553a36cef67';
 // address(lowercase) -> name | null. null = resolved, no name.
 const ensCache = new Map();
+// Opt-in (off by default): resolution adds an eth_call per shown address to the
+// chain-1 RPC, which during an archive-heavy replay competes for the same
+// endpoint - so it's operator-controlled, browser-local, and gates BOTH the
+// lookups (enrichEns) and the display (_fmtAcc) so "off" is truly off.
+let ensOn = localStorage.getItem('yevm_gate_ens') === '1';
+function setEns(on) {
+  ensOn = on;
+  if (on) localStorage.setItem('yevm_gate_ens', '1');
+  else localStorage.removeItem('yevm_gate_ens');
+  render(); // on -> triggers resolution; off -> _fmtAcc stops showing names
+}
 
 // DNS-wire-encode "<addr_hex_lower>.addr.reverse": [len][label]…[0x00]. No hashing.
 function _ensReverseName(addr) {
@@ -722,6 +739,7 @@ async function ensReverse(addr) {
 // re-render once names arrive. Token/router contracts are already symbol-labelled
 // and won't have primary names, so we skip anything with a known symbol.
 async function enrichEns() {
+  if (!ensOn) return;
   const addrs = new Set();
   const add = a => { if (a && !_known(1, a)) addrs.add(a.toLowerCase()); };
   if (address) add(address);
@@ -743,7 +761,7 @@ async function enrichEns() {
 function _fmtAcc(hex, chainId, short = false) {
   const known = _known(chainId, hex);
   if (known) return known.symbol;
-  const ens = hex && ensCache.get(hex.toLowerCase());  // forward-verified name, if any
+  const ens = ensOn && hex && ensCache.get(hex.toLowerCase());  // forward-verified name, if any
   if (ens) return ens;
   if (!short) {
     return hex;
@@ -921,6 +939,7 @@ async function openSettings() {
     : 'Changes are saved to this browser only (local override) and never affect other users.';
   const sb = getSimBlock();
   document.getElementById('sim-block-input').value = sb == null ? '' : String(sb);
+  document.getElementById('ens-toggle').checked = ensOn;
   document.getElementById('add-chain-err').textContent = '';
   document.getElementById('settings').classList.add('open');
   await renderChainRows();
