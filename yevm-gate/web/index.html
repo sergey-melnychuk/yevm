@@ -520,6 +520,10 @@ function render() {
       ${actions}
     </div>`;
   }).join('');
+
+  // Resolve ENS names for the addresses just rendered; re-renders if any resolve.
+  // Idempotent (cached), so this settles after one enrichment pass.
+  enrichEns();
 }
 
 async function load() {
@@ -656,9 +660,91 @@ function _known(chainId, hex) {
   return KNOWN_ADDRS[chainId]?.[a] ?? COMMON_ADDRS[a] ?? null;
 }
 
+// ENS reverse resolution (address -> primary name)
+//
+// Always queries mainnet (chain 1) via the gate's RPC proxy, using the ENS
+// Universal Resolver's reverse() - which forward-verifies (resolves the claimed
+// name back to the address). Verification matters here: an unverified reverse
+// record can *claim* any name (e.g. "vitalik.eth"), which in a firewall would be
+// a spoofing vector. reverse() reverts for addresses with no primary name.
+const ENS_UNIVERSAL_RESOLVER = '0xce01f8eee7e479c928f8919abd53e553a36cef67';
+// address(lowercase) -> name | null. null = resolved, no name.
+const ensCache = new Map();
+
+// DNS-wire-encode "<addr_hex_lower>.addr.reverse": [len][label]…[0x00]. No hashing.
+function _ensReverseName(addr) {
+  let hex = '';
+  for (const label of [addr.toLowerCase().replace(/^0x/, ''), 'addr', 'reverse']) {
+    hex += label.length.toString(16).padStart(2, '0');
+    for (let i = 0; i < label.length; i++) hex += label.charCodeAt(i).toString(16).padStart(2, '0');
+  }
+  return hex + '00';
+}
+
+// abi-encode reverse(bytes): selector + offset(0x20) + length + right-padded data.
+function _ensCalldata(addr) {
+  const dns = _ensReverseName(addr);
+  const pad = '0'.repeat((64 - (dns.length % 64)) % 64);
+  return '0xec11c823'
+    + (32).toString(16).padStart(64, '0')
+    + (dns.length / 2).toString(16).padStart(64, '0')
+    + dns + pad;
+}
+
+async function ensReverse(addr) {
+  const key = addr.toLowerCase();
+  if (ensCache.has(key)) return ensCache.get(key);
+  ensCache.set(key, null); // mark before awaiting so concurrent callers dedupe
+  try {
+    const res = await fetch('/rpc/1', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call',
+        params: [{ to: ENS_UNIVERSAL_RESOLVER, data: _ensCalldata(addr) }, 'latest'] }),
+    });
+    const j = await res.json();
+    if (!j.result || j.result === '0x') return null;   // revert => no primary name
+    const hex = j.result.slice(2);
+    // returns (string name, address resolvedAddress, address, address)
+    const resolved = '0x' + hex.slice(64 + 24, 128);   // word[1] low 20 bytes
+    if (resolved.toLowerCase() !== key) return null;    // belt-and-suspenders verify
+    const off = parseInt(hex.slice(0, 64), 16) * 2;     // word[0]: offset to string
+    const len = parseInt(hex.slice(off, off + 64), 16);
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) bytes[i] = parseInt(hex.substr(off + 64 + i * 2, 2), 16);
+    const name = new TextDecoder().decode(bytes) || null;
+    ensCache.set(key, name);
+    return name;
+  } catch { return null; }
+}
+
+// After a render, resolve ENS for the (human, likely-EOA) addresses on screen and
+// re-render once names arrive. Token/router contracts are already symbol-labelled
+// and won't have primary names, so we skip anything with a known symbol.
+async function enrichEns() {
+  const addrs = new Set();
+  const add = a => { if (a && !_known(1, a)) addrs.add(a.toLowerCase()); };
+  if (address) add(address);
+  for (const it of currentList) {
+    add(it.from); add(it.call?.to);
+    const a = simResults.get(it.hash)?.analysis;
+    if (!a) continue;
+    (a.ethChanges || []).forEach(c => add(c.acc));
+    (a.erc20Transfers || []).forEach(t => { add(t.from); add(t.to); });
+    (a.erc721Transfers || []).forEach(t => { add(t.from); add(t.to); });
+    (a.erc20Approvals || []).forEach(p => { add(p.owner); add(p.spender); });
+  }
+  const pending = [...addrs].filter(a => !ensCache.has(a));
+  if (!pending.length) return;
+  const names = await Promise.all(pending.map(ensReverse));
+  if (names.some(Boolean)) { render(); updateHeader(); }
+}
+
 function _fmtAcc(hex, chainId, short = false) {
   const known = _known(chainId, hex);
   if (known) return known.symbol;
+  const ens = hex && ensCache.get(hex.toLowerCase());  // forward-verified name, if any
+  if (ens) return ens;
   if (!short) {
     return hex;
   }
