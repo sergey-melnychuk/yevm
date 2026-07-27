@@ -25,6 +25,8 @@
   .hash-row { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
   .hash { color: #94a3b8; font-size: 0.85em; margin-bottom: 4px; word-break: break-all; }
   .hash-row .hash { margin-bottom: 0; flex: 1; min-width: 0; }
+  a.hash.link { color: #94a3b8; text-decoration: none; }
+  a.hash.link:hover { color: #7dd3fc; text-decoration: underline; }
   .chain-chip { flex: none; font-size: 0.72em; color: #7dd3fc; background: rgba(56,189,248,0.12);
                 border: 1px solid rgba(56,189,248,0.3); border-radius: 4px; padding: 1px 6px; white-space: nowrap; }
   .from { color: #64748b; font-size: 0.78em; margin-bottom: 8px; }
@@ -42,6 +44,11 @@
   .btn:hover { background: rgba(56,189,248,0.22); }
   .btn.danger { background: rgba(248,113,113,0.10); border-color: rgba(248,113,113,0.3); color: #f87171; }
   .btn.danger:hover { background: rgba(248,113,113,0.20); }
+  .btn:disabled { opacity: 0.5; cursor: default; }
+  .btn:disabled:hover { background: rgba(56,189,248,0.12); }
+  .list-title { color: #7dd3fc; font-size: 0.72em; text-transform: uppercase; letter-spacing: 0.08em; }
+  .card.sent { border-color: rgba(255,255,255,0.12); }
+  .submit-err { color: #f87171; font-size: 0.78em; margin-bottom: 10px; word-break: break-all; }
   .empty { color: #475569; font-style: italic; }
   .header-right { display: flex; align-items: center; gap: 8px; }
   #admin-badge { display: none; align-self: stretch; align-items: center; color: #f87171; font-size: 0.72em;
@@ -414,8 +421,12 @@ function signOut() {
   localStorage.removeItem('yevm_gate_address');
   localStorage.removeItem('yevm_gate_admin');
   localStorage.removeItem('yevm_gate_wc');
+  localStorage.removeItem('yevm_gate_submitted');
   currentList = [];
   simResults.clear();
+  submitState.clear();
+  submitted = {};
+  ensurePolling();
   updateHeader();
   load();
 }
@@ -601,6 +612,33 @@ const CHAIN_NAMES = {
   43114: 'Avalanche',
   11155111: 'Sepolia',
 };
+
+// Block explorer per chain, for looking up a tx the gate has already broadcast.
+// Only ever a link the user clicks - the page never fetches from these, so the
+// "no third-party at runtime" property holds. Chains without an entry (and any
+// browser-added chain) simply render an unlinked hash.
+const EXPLORERS = {
+  1: 'https://etherscan.io',
+  10: 'https://optimistic.etherscan.io',
+  56: 'https://bscscan.com',
+  100: 'https://gnosisscan.io',
+  137: 'https://polygonscan.com',
+  8453: 'https://basescan.org',
+  42161: 'https://arbiscan.io',
+  43114: 'https://snowtrace.io',
+  11155111: 'https://sepolia.etherscan.io',
+};
+
+// The tx hash, linked to its explorer when we know one. noreferrer keeps the
+// gate's own URL out of the explorer's logs.
+function _txLink(cid, hash) {
+  const base = EXPLORERS[cid];
+  if (!base) return `<span class="hash">${hash}</span>`;
+  return `<a class="hash link" href="${base}/tx/${_attr(hash)}"
+             target="_blank" rel="noopener noreferrer"
+             title="View on ${base.replace('https://', '')}">${hash}</a>`;
+}
+
 // tx.chainId arrives as a hex string (zero-padded Hex<8>); normalize to a number
 // for both the label lookup and the per-chain address registry keys.
 function _chainId(chainId) {
@@ -611,44 +649,54 @@ function _chainLabel(chainId) {
   return CHAIN_NAMES[n] ?? `chain ${n}`;
 }
 
+function renderCard({ hash, from, call, tx }) {
+  const sim = simResults.get(hash) || { status: 'pending' };
+  const cid = _chainId(tx?.chainId);
+  const gas = sim.analysis?.fee?.gasUsed;
+  const meta = sim.status === 'done'
+    ? (gas != null ? `<span>gas: ${Number(gas).toLocaleString()}</span>` : '')
+    : sim.status === 'failed'
+    ? `<span class="bad">${sim.error}</span>`
+    : '<span>simulating…</span>';
+  const fromLine = from && from.toLowerCase() !== (address || '').toLowerCase()
+    ? `<div class="from">from: ${from}</div>` : '';
+  const toLine = `<div class="from">${call && call.to ? 'to: ' + _fmtAcc(call.to, cid) : '(create)'}</div>`;
+  // Broadcast is a one-shot, irreversible action: block the button while the
+  // request is in flight, and keep the upstream's rejection on the card (the
+  // gate keeps the tx held, so it can be retried).
+  const state = submitState.get(hash);
+  const sending = state === 'sending';
+  const submitErr = state && !sending
+    ? `<div class="submit-err">submit failed: ${_attr(state)}</div>` : '';
+  const actions = `
+    <div class="actions">
+      ${sim.status === 'done'
+        ? `<button class="btn" onclick="submit('${hash}')" ${sending ? 'disabled' : ''}>${sending ? 'Submitting…' : 'Submit'}</button>`
+        : ''}
+      <button class="btn danger" onclick="remove('${hash}')">Remove</button>
+    </div>`;
+  return `<div class="card">
+    <div class="hash-row">
+      <span class="hash">${hash}</span>
+      <span class="chain-chip">${_chainLabel(tx?.chainId)}</span>
+    </div>
+    ${fromLine}
+    ${toLine}
+    <div class="status ${sim.status}">${sim.status.toUpperCase()}</div>
+    <div class="meta">${meta}</div>
+    ${renderNonceWarning(sim)}
+    ${sim.status === 'done' ? renderAnalysis(sim.analysis, cid) : ''}
+    ${submitErr}
+    ${actions}
+  </div>`;
+}
+
 function render() {
   const el = document.getElementById('list');
-  if (!currentList.length) {
-    el.innerHTML = '<p class="empty">No pending transactions.</p>';
-    return;
-  }
-
-  el.innerHTML = currentList.map(({ hash, from, call, tx }) => {
-    const sim = simResults.get(hash) || { status: 'pending' };
-    const cid = _chainId(tx?.chainId);
-    const gas = sim.analysis?.fee?.gasUsed;
-    const meta = sim.status === 'done'
-      ? (gas != null ? `<span>gas: ${Number(gas).toLocaleString()}</span>` : '')
-      : sim.status === 'failed'
-      ? `<span class="bad">${sim.error}</span>`
-      : '<span>simulating…</span>';
-    const fromLine = from && from.toLowerCase() !== (address || '').toLowerCase()
-      ? `<div class="from">from: ${from}</div>` : '';
-    const toLine = `<div class="from">${call && call.to ? 'to: ' + _fmtAcc(call.to, cid) : '(create)'}</div>`;
-    const actions = `
-      <div class="actions">
-        ${sim.status === 'done' ? `<button class="btn" onclick="submit('${hash}')">Submit</button>` : ''}
-        <button class="btn danger" onclick="remove('${hash}')">Remove</button>
-      </div>`;
-    return `<div class="card">
-      <div class="hash-row">
-        <span class="hash">${hash}</span>
-        <span class="chain-chip">${_chainLabel(tx?.chainId)}</span>
-      </div>
-      ${fromLine}
-      ${toLine}
-      <div class="status ${sim.status}">${sim.status.toUpperCase()}</div>
-      <div class="meta">${meta}</div>
-      ${renderNonceWarning(sim)}
-      ${sim.status === 'done' ? renderAnalysis(sim.analysis, cid) : ''}
-      ${actions}
-    </div>`;
-  }).join('');
+  const pending = currentList.length
+    ? currentList.map(renderCard).join('')
+    : '<p class="empty">No pending transactions.</p>';
+  el.innerHTML = renderSubmitted() + pending;
 
   // Resolve ENS names for the addresses just rendered; re-renders if any resolve.
   // Idempotent (cached), so this settles after one enrichment pass.
@@ -1041,8 +1089,160 @@ function renderAnalysis(a, chainId) {
   return `<div class="analysis">${sections.join('')}</div>`;
 }
 
+// ---------------------------------------------------------------------------
+// Submitted transactions
+//
+// The gate broadcasts on approval and drops the queue entry, so an approved tx
+// would simply vanish from the list on the next load(). Instead the page keeps
+// watching what it just released: hash -> { cid, at, status, block, gasUsed },
+// persisted per-browser so a reload doesn't lose sight of an in-flight tx.
+// Cleared on sign-out along with the rest of the session's view.
+let submitted = loadSubmitted();
+
+function loadSubmitted() {
+  try { return JSON.parse(localStorage.getItem('yevm_gate_submitted') || '{}'); }
+  catch { return {}; }
+}
+function saveSubmitted() {
+  localStorage.setItem('yevm_gate_submitted', JSON.stringify(submitted));
+}
+
+// hash -> 'sending' | error message, for a card mid-submit. Not persisted: an
+// in-flight request doesn't survive a reload anyway.
+const submitState = new Map();
+
+const POLL_MS = 5000;
+// A tx missing from both the chain and the mempool is only "dropped" once it has
+// had time to propagate - the node answering us may just not have seen it yet.
+const DROP_GRACE_MS = 60_000;
+// Upper bound on watching one tx, so polling always terminates: the receipt may
+// never arrive (unreachable RPC, or a tx broadcast through a browser-only chain
+// override that the gate's own proxy can't read back).
+const WATCH_MS = 10 * 60_000;
+let pollTimer = null;
+
+// One JSON-RPC call through the gate's own proxy (same-origin, CORS-safe - the
+// tx may well have been broadcast through an RPC that doesn't allow browsers).
+async function rpcCall(cid, method, params) {
+  const res = await fetch('/rpc/' + cid, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+  });
+  const j = await res.json();
+  if (j?.error) throw new Error(j.error.message || 'rpc error');
+  return j?.result ?? null;
+}
+
+function trackSubmitted(hash, cid) {
+  submitted[hash] = { cid, at: Date.now(), status: 'pending' };
+  saveSubmitted();
+  ensurePolling();
+}
+
+function dismiss(hash) {
+  delete submitted[hash];
+  saveSubmitted();
+  ensurePolling();
+  render();
+}
+
+// Poll only while something is actually in flight; stop once every tracked tx
+// has reached a terminal state.
+function ensurePolling() {
+  const busy = Object.values(submitted).some(s => s.status === 'pending');
+  if (busy && !pollTimer) pollTimer = setInterval(pollSubmitted, POLL_MS);
+  if (!busy && pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+async function pollSubmitted() {
+  const pending = Object.entries(submitted).filter(([, s]) => s.status === 'pending');
+  if (!pending.length) { ensurePolling(); return; }
+  await Promise.all(pending.map(async ([hash, s]) => {
+    try {
+      const receipt = await rpcCall(s.cid, 'eth_getTransactionReceipt', [hash]);
+      if (receipt) {
+        // Mined is not the same as succeeded - a reverted tx still gets a receipt.
+        s.status = receipt.status === '0x1' ? 'mined' : 'reverted';
+        s.block = receipt.blockNumber != null ? parseInt(receipt.blockNumber, 16) : null;
+        s.gasUsed = receipt.gasUsed != null ? parseInt(receipt.gasUsed, 16) : null;
+        return;
+      }
+      if (Date.now() - s.at > DROP_GRACE_MS) {
+        const known = await rpcCall(s.cid, 'eth_getTransactionByHash', [hash]);
+        if (known == null) { s.status = 'dropped'; return; }
+      }
+    } catch { /* transient RPC failure: fall through to the give-up check */ }
+    if (Date.now() - s.at > WATCH_MS) s.status = 'unknown';
+  }));
+  saveSubmitted();
+  ensurePolling();
+  render();   // also refreshes the elapsed-time counter on pending cards
+}
+
+const SENT_STATUS = {
+  pending:  { text: '⏳ Pending', row: 'caution', label: 'yel' },
+  mined:    { text: '✓ Accepted', row: 'neutral', label: 'dim' },
+  reverted: { text: '⚠ Reverted', row: 'warn', label: 'red' },
+  dropped:  { text: '⚠ Dropped', row: 'warn', label: 'red' },
+  unknown:  { text: '? Unknown', row: 'caution', label: 'yel' },
+};
+
+function renderSubmitted() {
+  const rows = Object.entries(submitted).sort((a, b) => b[1].at - a[1].at);
+  if (!rows.length) return '';
+  const cards = rows.map(([hash, s]) => {
+    const kind = SENT_STATUS[s.status] ?? SENT_STATUS.pending;
+    const detail = s.status === 'pending'
+      ? `waiting for a receipt — ${Math.round((Date.now() - s.at) / 1000)}s`
+      : s.status === 'dropped'
+      ? 'not mined and no longer in the mempool — replaced or evicted'
+      : s.status === 'unknown'
+      ? 'no receipt after 10 min and the RPC stopped answering — check an explorer'
+      : `block ${s.block?.toLocaleString() ?? '?'}${s.gasUsed != null ? ` · gas ${s.gasUsed.toLocaleString()}` : ''}`;
+    return `<div class="card sent">
+      <div class="hash-row">
+        ${_txLink(s.cid, hash)}
+        <span class="chain-chip">${_chainLabel(s.cid)}</span>
+      </div>
+      <div class="analysis"><div class="an-row ${kind.row}">
+        <span class="an-label ${kind.label}">${kind.text}</span>
+        <span class="an-addr">${detail}</span>
+      </div></div>
+      <div class="actions"><button class="btn sm" onclick="dismiss('${hash}')">Dismiss</button></div>
+    </div>`;
+  }).join('');
+  return `<div class="list-title">Submitted</div>${cards}`;
+}
+
+// Approve: the gate broadcasts and drops the queue entry. A browser-local chain
+// override only exists here, so pass it along - the gate re-verifies that the
+// endpoint serves this chain before sending. Without one it uses its registry.
 async function submit(hash) {
-  await fetch('/api/txs/' + hash + '/submit', { method: 'POST', headers: authHeaders() });
+  const item = currentList.find(i => i.hash === hash);
+  const cid = _chainId(item?.tx?.chainId);
+  const url = loadOverrides()[String(cid)] || null;
+  submitState.set(hash, 'sending');
+  render();
+  try {
+    const res = await fetch('/api/txs/' + hash + '/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(url ? { url } : {}),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      submitState.set(hash, j.error || ('HTTP ' + res.status));
+      render();
+      return;
+    }
+    submitState.delete(hash);
+    trackSubmitted(j.hash || hash, cid);
+  } catch (e) {
+    submitState.set(hash, (e && e.message) || String(e));
+    render();
+    return;
+  }
   load();
 }
 
@@ -1207,6 +1407,7 @@ async function addChain() {
 updateHeader();
 updateSimBanner();
 load();
+ensurePolling();   // resume watching txs submitted before this page load
 setInterval(load, 30000);
 loadWasm();
 reconcileWcSession();

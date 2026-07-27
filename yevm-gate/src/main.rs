@@ -14,7 +14,6 @@ use axum::{
 use eyre::eyre;
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
-use yevm_misc::hex::Hex;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
@@ -179,8 +178,18 @@ async fn resolve_url(state: &AppState, chain_id: i64) -> Option<String> {
     state.chains.read().await.get(&chain_id).cloned()
 }
 
+// Chain ids reach us spelled both ways: 0x-prefixed (how JSON-RPC and this
+// gate's own /chain API write them) and bare decimal (how wallets show them and
+// how anyone typing an RPC URL by hand writes them). An unprefixed value is
+// therefore decimal - reading "10" as hex silently pointed Optimism traffic at
+// chain 16, and "8453" at chain 33875.
 fn parse_chain_id(s: &str) -> Option<i64> {
-    s.try_into().ok().map(|hex: Hex<8>| hex.as_u64() as i64)
+    let s = s.trim();
+    let parsed = match s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        Some(hex) => i64::from_str_radix(hex, 16).ok()?,
+        None => s.parse::<i64>().ok()?,
+    };
+    (parsed > 0).then_some(parsed)
 }
 
 async fn handle_rpc(
@@ -392,17 +401,87 @@ async fn api_get(
     Ok(Json(decoded_json(&tx)?))
 }
 
+// Approving a held tx resumes the relay that `store_raw_tx` paused: the gate
+// broadcasts it, exactly as it forwards every other RPC method. The queue entry
+// is dropped only once the upstream accepted it - a rejected send keeps the tx
+// held so it stays visible (and retryable) instead of vanishing.
+//
+// Body is optional: `{ "url": "https://…" }` broadcasts through a caller-chosen
+// endpoint instead of the global registry, which is how a browser-local chain
+// override reaches the server (those live in localStorage; the gate never sees
+// them otherwise). Any session can name a URL here, so the endpoint must first
+// prove it serves this tx's chain before we hand it a signed transaction.
 async fn api_submit(
     AxumState(state): AxumState<Shared>,
     axum::Extension(Caller(caller)): axum::Extension<Caller>,
     Path(hash): Path<String>,
+    body: String,
 ) -> Result<Json<Value>, AppError> {
     let signed = owned(&state, &caller, &hash).await?;
-    let url = resolve_url(&state, signed.chain_id).await;
+
+    // Taken as a raw string rather than `Json<..>`: the body is optional, and a
+    // bare `curl -X POST .../submit` (no body, no content-type) has to work.
+    let chosen = if body.trim().is_empty() {
+        None
+    } else {
+        let body: Value = serde_json::from_str(&body)
+            .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, eyre!("invalid JSON body: {e}")))?;
+        body.get("url")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+
+    let url = match chosen {
+        Some(url) => {
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                let e = eyre!("url must be http(s): {url}");
+                return Err(AppError::new(StatusCode::BAD_REQUEST, e));
+            }
+            verify_chain(&state.client, &url, signed.chain_id)
+                .await
+                .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, eyre!("{e}")))?;
+            url
+        }
+        None => resolve_url(&state, signed.chain_id).await.ok_or_else(|| {
+            let e = eyre!("chain {} not configured", signed.chain_id);
+            AppError::new(StatusCode::BAD_REQUEST, e)
+        })?,
+    };
+
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_sendRawTransaction",
+        "params": [signed.raw],
+    });
+    let resp: Value = state.client.post(&url).json(&req).send().await?.json().await?;
+
+    if let Some(error) = resp.get("error") {
+        let message = error
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("upstream rejected the transaction");
+        return Err(AppError::new(StatusCode::BAD_GATEWAY, eyre!("{message}")));
+    }
+    let sent = resp
+        .get("result")
+        .and_then(|r| r.as_str())
+        .ok_or_else(|| {
+            let e = eyre!("upstream returned neither result nor error");
+            AppError::new(StatusCode::BAD_GATEWAY, e)
+        })?
+        .to_string();
+
+    db::delete(&state.pool, &signed.hash).await?;
+    tracing::info!(
+        "submitted tx hash={} chain={} via {url}",
+        signed.hash,
+        signed.chain_id
+    );
     Ok(Json(json!({
-        "raw": signed.raw,
+        "hash": sent,
         "chain_id": format!("0x{:x}", signed.chain_id),
-        "url": url,
     })))
 }
 
@@ -580,5 +659,32 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let body = json!({ "error": self.report.to_string() });
         (self.status, Json(body)).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_chain_id;
+
+    #[test]
+    fn chain_id_hex_and_decimal_agree() {
+        for (hex, dec, want) in [
+            ("0x1", "1", 1),
+            ("0xa", "10", 10),
+            ("0x2105", "8453", 8453),
+            ("0xa4b1", "42161", 42161),
+            ("0xaa36a7", "11155111", 11155111),
+        ] {
+            assert_eq!(parse_chain_id(hex), Some(want), "hex {hex}");
+            assert_eq!(parse_chain_id(dec), Some(want), "decimal {dec}");
+        }
+        assert_eq!(parse_chain_id("0X2105"), Some(8453));
+    }
+
+    #[test]
+    fn chain_id_rejects_junk() {
+        for s in ["", "0x", "-1", "0", "nope", "0xzz", "1.5", "0x1p"] {
+            assert_eq!(parse_chain_id(s), None, "{s:?} should not parse");
+        }
     }
 }
