@@ -38,7 +38,8 @@
   .meta span { margin-right: 16px; }
   .meta .ok  { color: #4ade80; }
   .meta .bad { color: #f87171; }
-  .actions { display: flex; gap: 8px; }
+  .actions { display: flex; gap: 8px; align-items: center; }
+  .actions .an-label { font-size: 0.78em; }
   .btn { background: rgba(56,189,248,0.12); border: 1px solid rgba(56,189,248,0.3); color: #7dd3fc;
          padding: 6px 16px; border-radius: 6px; cursor: pointer; font-family: monospace; font-size: 0.85em; }
   .btn:hover { background: rgba(56,189,248,0.22); }
@@ -523,10 +524,11 @@ async function fetchAccountNonce(cid, from, blockTag = 'latest') {
 //            UNLESS this gate is already holding those in-between txs from the
 //            same sender (a legit stacked tx), in which case it's 'queued'.
 // Returns null (no badge) when the account nonce couldn't be fetched.
-async function checkNonce(item, cid) {
+async function checkNonce(item, cid, block) {
   // Check against the same block the simulation runs at, so a pinned-block replay
   // stays consistent (the tx reads 'ok' at its own era, not 'behind' vs head).
-  const accountNonce = await fetchAccountNonce(cid, item.from, simBlockTag());
+  const tag = block != null ? '0x' + block.toString(16) : simBlockTag();
+  const accountNonce = await fetchAccountNonce(cid, item.from, tag);
   if (accountNonce == null) return null;
   let txNonce;
   try { txNonce = BigInt(item.tx.nonce); } catch { return null; }
@@ -551,6 +553,17 @@ let currentList = [];
 // hash -> { status: 'pending'|'done'|'failed', analysis, nonceCheck, error }
 const simResults = new Map();
 
+// The block a tx was mined in, or null if it isn't on-chain. A tx already in a
+// block is a replay, not a preview: simulating it at latest (or at a configured
+// block) runs it against state that already contains it.
+async function minedBlock(cid, hash) {
+  try {
+    const receipt = await rpcCall(cid, 'eth_getTransactionReceipt', [hash]);
+    const block = receipt?.blockNumber != null ? parseInt(receipt.blockNumber, 16) : NaN;
+    return Number.isFinite(block) && block > 0 ? block : null;
+  } catch { return null; }
+}
+
 // Run the decoded pending tx (exactly as signed - real nonce/fees/access list)
 // against the chain it was captured on. Never touches `raw`: simulation only
 // needs the decoded `call`/`tx` the API already returned. The raw event stream
@@ -561,15 +574,20 @@ async function simulateCard(item) {
   simResults.set(hash, { status: 'pending' });
   render();
   const cid = _chainId(tx.chainId);
+  // An already-mined tx replays against the block before the one it landed in -
+  // the state it actually executed against. That overrides the configured sim
+  // block, which would otherwise run it against a world that already has it.
+  const mined = await minedBlock(cid, hash);
+  const block = mined != null ? mined - 1 : getSimBlock() ?? undefined;
   // Nonce sanity runs alongside the simulation - an independent RPC read, so a
   // slow/failing nonce lookup never blocks the analysis (and vice versa).
-  const noncePromise = checkNonce(item, cid);
+  const noncePromise = checkNonce(item, cid, block);
   try {
     const urls = await loadChains();
     const url = urls[cid];
     if (!url) throw new Error(`no RPC configured for chain ${tx.chainId}`);
     const EVENT_FILTER = 0xFFFFFFFF - 1; // exclude STEP events
-    const stream = await wasmExecute(url, item.call, tx, EVENT_FILTER, getSimBlock() ?? undefined);
+    const stream = await wasmExecute(url, item.call, tx, EVENT_FILTER, block);
     const traces = [];
     for (;;) {
       const t = await stream.next();
@@ -587,12 +605,14 @@ async function simulateCard(item) {
       status: 'done',
       analysis: wasmAnalyse(traces),
       nonceCheck: await noncePromise,
+      mined,
     });
   } catch (e) {
     simResults.set(hash, {
       status: 'failed',
       error: (e && e.message) || String(e),
       nonceCheck: await noncePromise.catch(() => null),
+      mined,
     });
   }
   render();
@@ -668,7 +688,14 @@ function renderCard({ hash, from, call, tx }) {
   const sending = state === 'sending';
   const submitErr = state && !sending
     ? `<div class="submit-err">submit failed: ${_attr(state)}</div>` : '';
-  const actions = `
+  // A tx that is already on-chain was replayed, not previewed: there is nothing
+  // to broadcast, so the card states where it landed instead of offering actions.
+  const actions = sim.mined != null
+    ? `<div class="actions">
+        <button class="btn sm" onclick="remove('${hash}')">Dismiss</button>
+        <span class="an-label red">⚠ Historic transaction: mined in block ${sim.mined.toLocaleString()}</span>
+      </div>`
+    : `
     <div class="actions">
       ${sim.status === 'done'
         ? `<button class="btn" onclick="submit('${hash}')" ${sending ? 'disabled' : ''}>${sending ? 'Submitting…' : 'Submit'}</button>`
