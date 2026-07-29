@@ -2007,6 +2007,13 @@ function _fmtDelta(delta) {
   return _fmtValue('0x' + abs.toString(16));
 }
 
+function _sdelta(before, after) {
+  let d = BigInt(after) - BigInt(before);
+  if (d >= 1n << 255n) d -= 1n << 256n;
+  else if (d < -(1n << 255n)) d += 1n << 256n;
+  return d;
+}
+
 function analyse(traces) {
   return wasm_analyse(traces);
 }
@@ -2219,7 +2226,7 @@ class AnalysisCard {
       const byAcc = new Map();
       for (const c of ethChanges) {
         const key = c.acc?.toLowerCase?.() ?? c.acc;
-        const delta = BigInt(c.after) - BigInt(c.before);
+        const delta = _sdelta(c.before, c.after);
         byAcc.set(key, { acc: c.acc, delta: (byAcc.get(key)?.delta ?? 0n) + delta });
       }
 
