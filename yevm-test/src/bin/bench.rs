@@ -33,9 +33,7 @@ fn args(block: u64, iters: usize) -> eyre::Result<(u64, usize)> {
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     let rpc = Rpc::offline();
-
     let (block, iters) = args(BLOCK, ITERS)?;
-    println!("bench: block={block} iters={iters}");
 
     let path = format!("fetch/{}.json", block);
     let fetches = Path::new(&path);
@@ -56,6 +54,8 @@ async fn main() -> eyre::Result<()> {
         };
         (block, chain_id, fetched)
     };
+    let (num, txs) = (block.head.number.as_u64(), block.txs.len());
+    println!("bench: block={num} txs={txs} iters={iters}", );
 
     let head = block.head.clone();
     for i in 0..iters {
