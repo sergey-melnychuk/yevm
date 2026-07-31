@@ -22,16 +22,16 @@ Intended for:
 
 ## Crates
 
-| Crate        | Description                                                        |
-| ------------ | ------------------------------------------------------------------ |
+| Crate        | Description                                                       |
+| ------------ | ------------------------------------------------------------------|
 | `yevm-base`  | Primitive types: `Acc` (address), `Int` (uint256), `Head`, `Tx`   |
-| `yevm-misc`  | Utilities and helpers                                              |
+| `yevm-misc`  | Utilities and helpers                                             |
 | `yevm-core`  | EVM engine: opcode dispatch, stack/memory, `State`/`Chain` traits |
 | `yevm-lens`  | Side-effect decoder: ERC-20/721 transfers, approvals, proxy swaps |
-| `yevm-gate`  | Local RPC proxy: simulate and approve transactions before sending  |
-| `yevm-wasm`  | WebAssembly bindings for in-browser transaction simulation         |
-| `yevm`       | Full integration: ties all crates together                         |
-| `yevm-test`  | Test harness and fixtures (not published)                          |
+| `yevm-gate`  | Local RPC proxy: simulate and approve transactions before sending |
+| `yevm-wasm`  | WebAssembly bindings for in-browser transaction simulation        |
+| `yevm`       | Full integration: ties all crates together                        |
+| `yevm-test`  | Test harness and fixtures (not published)                         |
 
 ## Links
 
