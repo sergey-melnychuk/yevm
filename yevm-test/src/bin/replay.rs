@@ -26,17 +26,6 @@ const YEVM_RPC_URL: &str = "YEVM_RPC_URL";
 // ./target/release/replay <block> - replay the block number
 // ./target/release/replay <block>:<index> | <hash> - replay specific transaction
 
-// ## replaying number of consecutive blocks (inclusive interval, replays 11 blocks):
-// rm -rf tmp/ && mkdir tmp && cp ./target/release/replay ./tmp
-// for i in {0..10}; do x=$(($i + 24935457)); ./tmp/replay $x; done > 10.log &
-// ## cat 10.log | grep FAIL | cut -d '=' -f 2 | cut -d ' ' -f 1 >> todo.log
-// for i in {0..100}; do x=$(($i + 24935681)); ./tmp/replay $x; done > 100.log &
-// for i in {0..200}; do x=$(($i + 24938068)); ./tmp/replay $x; done > 200.log &
-// for i in {0..300}; do x=$(($i + 24978072)); ./tmp/replay $x; done > 300.log &
-// for i in {0..400}; do x=$(($i + 24994424)); ./tmp/replay $x; done > 400.log &
-// for i in {0..999}; do x=$(($i + 24984743)); ./tmp/replay $x; done > 999.log &
-// for x in $(cat todo.log); do ./target/release/replay $x; done > todo.run.log
-
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
@@ -53,8 +42,11 @@ async fn run() -> eyre::Result<()> {
     let mut rpc = Rpc::latest(url.clone()).await?;
     let chain_id = rpc.chain_id().await?;
 
+    let skip_check = std::env::args().skip(1).any(|arg| arg == "--skip-check");
+
     let (block, index) = {
         let arg = std::env::args()
+            .filter(|arg| !arg.starts_with("--"))
             .nth(1)
             .unwrap_or_else(|| String::from("latest"));
 
@@ -91,7 +83,8 @@ async fn run() -> eyre::Result<()> {
     };
 
     let (ytx, mut yrx) = mpsc::channel(4 * 1024 * 1024);
-    let mut cache = Cache::with_sender(ytx, filter::STEP);
+    let filter = if !skip_check { filter::STEP } else { filter::NONE };
+    let mut cache = Cache::with_sender(ytx, filter);
 
     // TODO: make single-tx also replayable? just save all fetches to block:index.js
     std::fs::create_dir_all("fetch")?;
@@ -128,6 +121,9 @@ async fn run() -> eyre::Result<()> {
 
     let (rtx, mut rrx) = tokio::sync::mpsc::channel(4096);
     let handle = tokio::spawn(async move {
+        if skip_check {
+            return;
+        }
         let is_trace = std::env::var("TRACE").is_ok();
         if is_trace {
             println!("---\nSTREAMING OPENED");
@@ -167,6 +163,9 @@ async fn run() -> eyre::Result<()> {
 
     let provider = ProviderBuilder::new().connect(&url).await?;
     tokio::task::spawn_blocking(move || {
+        if skip_check {
+            return;
+        }
         let (txs, head, index, network_chain_id) = pack;
         if let Some(i) = index {
             let tx = &txs[i];
@@ -200,7 +199,7 @@ async fn run() -> eyre::Result<()> {
     let n = txs.len();
     let mut ok = 0;
     let mut gas_total = 0;
-    let mut ms_total = 0;
+    let mut sec_total = 0;
     let mut revm_drift: Vec<(Acc, Int)> = Vec::new();
     for (i, tx) in txs.into_iter().enumerate() {
         if std::env::var("TRACE").is_ok() {
@@ -219,10 +218,23 @@ async fn run() -> eyre::Result<()> {
 
         let gas = result.gas().finalized;
         let (fetches, fetching) = cache.fetch_stats();
+
+        let stats = if fetching > 0 {
+            format!("{ms}ms/{}ms, fetches:{fetches}/{fetching}ms", ms - fetching)
+        } else {
+            format!("{ms}ms")
+        };
+
+        if skip_check {
+            ok += 1;
+            gas_total += gas;
+            sec_total += ms - fetching;
+            println!("{hash}: [{}/{n}, {gas} gas, {stats}]", i + 1);
+            continue;
+        }
+
         let receipt = rpc.receipt(hash).await?;
         let ty = receipt.r#type.as_u8();
-
-        // TODO: make revm checks optional? (e.g. --revm flag)
         let Some(RevmResult {
             call: revm_call,
             state: revm_state,
@@ -245,14 +257,9 @@ async fn run() -> eyre::Result<()> {
         );
         revm_drift.extend(new_drift);
 
-        let stats = if fetching > 0 {
-            format!("{ms}ms/{}ms, fetches:{fetches}/{fetching}ms", ms - fetching)
-        } else {
-            format!("{ms}ms")
-        };
         if violations.is_empty() {
             gas_total += gas;
-            ms_total += ms - fetching;
+            sec_total += ms - fetching;
             println!("{hash} [type:{ty}]: OK [{}/{n}, {gas} gas, {stats}]", i + 1);
             ok += 1;
         } else {
@@ -279,10 +286,10 @@ async fn run() -> eyre::Result<()> {
     } else {
         String::new()
     };
-    let stat = if gas_total > 0 && ms_total > 0 {
+    let stat = if gas_total > 0 && sec_total > 0 {
         format!(
-            "{gas_total} gas, {ms_total}ms: ~{:.2} gas/sec",
-            gas_total as f64 * 1000.0 / ms_total as f64
+            "{gas_total} gas, {sec_total}ms: ~{:.2} gas/sec",
+            gas_total as f64 * 1000.0 / sec_total as f64
         )
     } else {
         String::new()
