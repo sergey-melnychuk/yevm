@@ -83,7 +83,11 @@ async fn run() -> eyre::Result<()> {
     };
 
     let (ytx, mut yrx) = mpsc::channel(4 * 1024 * 1024);
-    let filter = if !skip_check { filter::STEP } else { filter::NONE };
+    let filter = if !skip_check {
+        filter::STEP
+    } else {
+        filter::NONE
+    };
     let mut cache = Cache::with_sender(ytx, filter);
 
     // TODO: make single-tx also replayable? just save all fetches to block:index.js

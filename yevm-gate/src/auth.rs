@@ -127,7 +127,7 @@ fn siwe_domain(message: &str) -> Result<String> {
         .ok_or_else(|| eyre!("malformed SIWE first line"))
 }
 
-// Reduce "https://host:8000/path" to "host[:port]" 
+// Reduce "https://host:8000/path" to "host[:port]"
 // to be later comparable to the Host header value.
 fn uri_host(uri: &str) -> String {
     uri.split_once("://")

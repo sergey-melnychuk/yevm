@@ -27,14 +27,8 @@ const WASM_BG: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../yevm-wasm/pkg/yevm_wasm_bg.wasm"
 ));
-const WC_JS: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/web/vendor/wc/wc.js"
-));
-const QR_JS: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/web/vendor/qr/qr.js"
-));
+const WC_JS: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/web/vendor/wc/wc.js"));
+const QR_JS: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/web/vendor/qr/qr.js"));
 
 struct AppState {
     client: reqwest::Client,
@@ -70,7 +64,7 @@ async fn main() -> eyre::Result<()> {
     }
 
     let db_path = std::env::var("YEVM_DB").unwrap_or_else(|_| "gate.db".into());
-    let pool = db::open(&db_path).await?;   // runs migrations (seeds default networks)
+    let pool = db::open(&db_path).await?; // runs migrations (seeds default networks)
     let chains: HashMap<i64, String> = db::list_chains(&pool).await?.into_iter().collect();
     tracing::info!("configured chains: {:?}", chains.keys().collect::<Vec<_>>());
 
@@ -118,16 +112,18 @@ async fn require_auth(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or_else(|| {
-            AppError::new(StatusCode::UNAUTHORIZED, eyre!("missing Authorization header"))
+            AppError::new(
+                StatusCode::UNAUTHORIZED,
+                eyre!("missing Authorization header"),
+            )
         })?;
 
-    let addr = state
-        .auth
-        .authenticate(token)
-        .await
-        .ok_or_else(|| {
-            AppError::new(StatusCode::UNAUTHORIZED, eyre!("invalid or expired session"))
-        })?;
+    let addr = state.auth.authenticate(token).await.ok_or_else(|| {
+        AppError::new(
+            StatusCode::UNAUTHORIZED,
+            eyre!("invalid or expired session"),
+        )
+    })?;
 
     req.extensions_mut().insert(Caller(addr));
     Ok(next.run(req).await)
@@ -156,9 +152,7 @@ async fn auth_verify(
     let host = headers
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
-        .or(headers
-            .get(header::FORWARDED)
-            .and_then(|v| v.to_str().ok()))
+        .or(headers.get(header::FORWARDED).and_then(|v| v.to_str().ok()))
         .ok_or_else(|| bad("missing Host header"))?;
 
     let (address, token) = state
@@ -217,8 +211,9 @@ async fn proxy(state: Shared, chain_id: i64, body: Value) -> Result<Response, Ap
         Some(url) => url,
         None => {
             let id: Value = body.get("id").cloned().unwrap_or(Value::Null);
-            return Ok(rpc_error(id, -32602, format!("chain {chain_id} not configured"))
-                .into_response());
+            return Ok(
+                rpc_error(id, -32602, format!("chain {chain_id} not configured")).into_response(),
+            );
         }
     };
 
@@ -226,7 +221,11 @@ async fn proxy(state: Shared, chain_id: i64, body: Value) -> Result<Response, Ap
         let has_send_raw_tx = arr
             .iter()
             .any(|e| e.get("method").and_then(|m| m.as_str()) == Some("eth_sendRawTransaction"));
-        tracing::info!("proxy chain={chain_id} batch[{}]{}", arr.len(), if has_send_raw_tx { " +send" } else { "" });
+        tracing::info!(
+            "proxy chain={chain_id} batch[{}]{}",
+            arr.len(),
+            if has_send_raw_tx { " +send" } else { "" }
+        );
         if has_send_raw_tx {
             return handle_batch(state, chain_id, &url, arr).await;
         }
@@ -236,7 +235,9 @@ async fn proxy(state: Shared, chain_id: i64, body: Value) -> Result<Response, Ap
     let method = body.get("method").and_then(|m| m.as_str()).unwrap_or("");
     tracing::info!("proxy chain={chain_id} {method}");
     if method == "eth_sendRawTransaction" {
-        return Ok(intercept_send_raw(state, body, chain_id).await?.into_response());
+        return Ok(intercept_send_raw(state, body, chain_id)
+            .await?
+            .into_response());
     }
     relay(&state, &url, &body).await
 }
@@ -272,7 +273,12 @@ async fn handle_batch(
         }
     }
     if !forward.is_empty() {
-        let resp = state.client.post(url).json(&Value::Array(forward)).send().await?;
+        let resp = state
+            .client
+            .post(url)
+            .json(&Value::Array(forward))
+            .send()
+            .await?;
         let items = match resp.json::<Value>().await? {
             Value::Array(v) => v,
             other => vec![other], // some nodes answer a 1-element batch with a bare object
@@ -283,7 +289,9 @@ async fn handle_batch(
                 .iter()
                 .find(|r| r.get("id") == Some(&id))
                 .cloned()
-                .unwrap_or_else(|| rpc_error_json(id, -32603, "no matching response from upstream"));
+                .unwrap_or_else(|| {
+                    rpc_error_json(id, -32603, "no matching response from upstream")
+                });
         }
     }
     Ok(Json(Value::Array(slots)).into_response())
@@ -306,13 +314,17 @@ fn rpc_error(id: Value, code: i64, message: impl Into<String>) -> Json<Value> {
 
 async fn store_raw_tx(state: &AppState, entry: &Value, chain_id: i64) -> Value {
     let id = entry.get("id").cloned().unwrap_or(Value::Null);
-    let raw = match entry.get("params").and_then(|p| p.get(0)).and_then(|v| v.as_str()) {
+    let raw = match entry
+        .get("params")
+        .and_then(|p| p.get(0))
+        .and_then(|v| v.as_str())
+    {
         Some(raw) => raw.to_string(),
         None => return rpc_error_json(id, -32602, "missing params[0]"),
     };
     let decoded = match tx::decode_raw(&raw) {
         Ok(decoded) => decoded,
-        Err(e) => return rpc_error_json(id, -32602, format!("cannot decode raw tx: {e}"))
+        Err(e) => return rpc_error_json(id, -32602, format!("cannot decode raw tx: {e}")),
     };
     let hash = format!("{}", decoded.tx.hash);
     let from = decoded.call.by;
@@ -455,7 +467,14 @@ async fn api_submit(
         "method": "eth_sendRawTransaction",
         "params": [signed.raw],
     });
-    let resp: Value = state.client.post(&url).json(&req).send().await?.json().await?;
+    let resp: Value = state
+        .client
+        .post(&url)
+        .json(&req)
+        .send()
+        .await?
+        .json()
+        .await?;
 
     if let Some(error) = resp.get("error") {
         let message = error
@@ -507,7 +526,10 @@ async fn chains_get(AxumState(state): AxumState<Shared>) -> Json<Value> {
 fn require_chain_admin(state: &AppState, caller: &Acc) -> Result<(), AppError> {
     match &state.admin {
         Some(admin) if admin == caller => Ok(()),
-        _ => Err(AppError::new(StatusCode::FORBIDDEN, eyre!("network config is admin-only"))),
+        _ => Err(AppError::new(
+            StatusCode::FORBIDDEN,
+            eyre!("network config is admin-only"),
+        )),
     }
 }
 
@@ -519,7 +541,10 @@ async fn verify_chain(client: &reqwest::Client, url: &str, expected: i64) -> Res
         .send()
         .await
         .map_err(|e| format!("request failed: {e}"))?;
-    let v: Value = resp.json().await.map_err(|e| format!("non-JSON response: {e}"))?;
+    let v: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("non-JSON response: {e}"))?;
     let got = v
         .get("result")
         .and_then(|r| r.as_str())
@@ -527,7 +552,9 @@ async fn verify_chain(client: &reqwest::Client, url: &str, expected: i64) -> Res
     let got = i64::from_str_radix(got.trim_start_matches("0x"), 16)
         .map_err(|_| format!("bad chainId: {got}"))?;
     if got != expected {
-        return Err(format!("eth_chainId returned 0x{got:x}, expected 0x{expected:x}"));
+        return Err(format!(
+            "eth_chainId returned 0x{got:x}, expected 0x{expected:x}"
+        ));
     }
     Ok(())
 }
@@ -539,8 +566,9 @@ async fn chain_set(
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
     require_chain_admin(&state, &caller)?;
-    let chain_id = parse_chain_id(&chain)
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, eyre!("invalid chain id: {chain}")))?;
+    let chain_id = parse_chain_id(&chain).ok_or_else(|| {
+        AppError::new(StatusCode::BAD_REQUEST, eyre!("invalid chain id: {chain}"))
+    })?;
     let url = body
         .get("rpc")
         .and_then(|v| v.as_str())
@@ -553,7 +581,9 @@ async fn chain_set(
         .map_err(|e| AppError::new(StatusCode::BAD_REQUEST, eyre!("{e}")))?;
     db::update_chain(&state.pool, chain_id, &url).await?;
     state.chains.write().await.insert(chain_id, url.clone());
-    Ok(Json(json!({ "chain_id": format!("0x{chain_id:x}"), "url": url })))
+    Ok(Json(
+        json!({ "chain_id": format!("0x{chain_id:x}"), "url": url }),
+    ))
 }
 
 async fn chain_delete(
@@ -562,8 +592,9 @@ async fn chain_delete(
     Path(chain): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     require_chain_admin(&state, &caller)?;
-    let chain_id = parse_chain_id(&chain)
-        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, eyre!("invalid chain id: {chain}")))?;
+    let chain_id = parse_chain_id(&chain).ok_or_else(|| {
+        AppError::new(StatusCode::BAD_REQUEST, eyre!("invalid chain id: {chain}"))
+    })?;
     db::delete_chain(&state.pool, chain_id).await?;
     state.chains.write().await.remove(&chain_id);
     Ok(Json(json!({ "deleted": format!("0x{chain_id:x}") })))
@@ -576,7 +607,10 @@ async fn chains_set(
 ) -> Result<Json<Value>, AppError> {
     require_chain_admin(&state, &caller)?;
     let obj = body.as_object().ok_or_else(|| {
-        AppError::new(StatusCode::BAD_REQUEST, eyre!("expected a JSON object of chainId -> url"))
+        AppError::new(
+            StatusCode::BAD_REQUEST,
+            eyre!("expected a JSON object of chainId -> url"),
+        )
     })?;
     let mut stored = serde_json::Map::new();
     let mut errors = serde_json::Map::new();
@@ -591,7 +625,10 @@ async fn chains_set(
         let url = match val.as_str().map(str::trim).filter(|s| !s.is_empty()) {
             Some(u) => u.to_string(),
             None => {
-                errors.insert(key.clone(), Value::String("url must be a non-empty string".into()));
+                errors.insert(
+                    key.clone(),
+                    Value::String("url must be a non-empty string".into()),
+                );
                 continue;
             }
         };

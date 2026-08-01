@@ -55,7 +55,7 @@ async fn main() -> eyre::Result<()> {
         (block, chain_id, fetched)
     };
     let (num, txs) = (block.head.number.as_u64(), block.txs.len());
-    println!("bench: block={num} txs={txs} iters={iters}", );
+    println!("bench: block={num} txs={txs} iters={iters}",);
 
     let head = block.head.clone();
     for i in 0..iters {

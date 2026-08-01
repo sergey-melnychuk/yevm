@@ -34,17 +34,21 @@ fn row_to_tx(hash: String, signer: String, raw: String, chain_id: i64) -> Option
 
 pub async fn list(pool: &SqlitePool, signer: Option<&Acc>) -> Result<Vec<SignedTx>> {
     let rows = match signer {
-        Some(acc) => sqlx::query_as::<_, (String, String, String, i64)>(
+        Some(acc) => {
+            sqlx::query_as::<_, (String, String, String, i64)>(
                 "SELECT hash, signer, raw, chain_id FROM txs WHERE signer = ?",
             )
             .bind(format!("{acc}"))
             .fetch_all(pool)
-            .await?,
-        None => sqlx::query_as::<_, (String, String, String, i64)>(
+            .await?
+        }
+        None => {
+            sqlx::query_as::<_, (String, String, String, i64)>(
                 "SELECT hash, signer, raw, chain_id FROM txs",
             )
             .fetch_all(pool)
-            .await?,
+            .await?
+        }
     };
     Ok(rows
         .into_iter()
@@ -77,7 +81,13 @@ pub async fn get(pool: &SqlitePool, hash: &str) -> Result<Option<SignedTx>> {
     Ok(row.and_then(|(hash, signer, raw, chain_id)| row_to_tx(hash, signer, raw, chain_id)))
 }
 
-pub async fn insert(pool: &SqlitePool, hash: &str, from: &Acc, raw: &str, chain_id: i64) -> Result<()> {
+pub async fn insert(
+    pool: &SqlitePool,
+    hash: &str,
+    from: &Acc,
+    raw: &str,
+    chain_id: i64,
+) -> Result<()> {
     let signer = format!("{from}");
     sqlx::query("INSERT OR IGNORE INTO txs (hash, signer, raw, chain_id) VALUES (?, ?, ?, ?)")
         .bind(hash)

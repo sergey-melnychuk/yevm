@@ -15,8 +15,7 @@ pub struct DecodedTx {
 
 pub fn decode_raw(raw: &str) -> Result<DecodedTx> {
     let bytes = hex_decode(raw)?;
-    let envelope =
-        TxEnvelope::decode_2718(&mut bytes.as_slice()).map_err(|e| eyre!("rlp: {e}"))?;
+    let envelope = TxEnvelope::decode_2718(&mut bytes.as_slice()).map_err(|e| eyre!("rlp: {e}"))?;
     let from = envelope
         .recover_signer()
         .map_err(|e| eyre!("ecrecover: {e}"))?;
