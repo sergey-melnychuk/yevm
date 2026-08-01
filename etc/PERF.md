@@ -59,6 +59,43 @@ stack-allocated, eliminating heap churn on every opcode that touches access list
 
 ---
 
+## Future
+
+Profile at 0.077 s: `Evm::step` 30%, `ec_mul` 21%, `ecrecover` 17%, `ec_pairing` 10%.
+Roughly half of block time is elliptic-curve precompile work.
+
+### §E — `secp256k1` (libsecp256k1) for `ecrecover` on native targets
+
+**Estimate:** ~17% → ~6% of block time
+
+`pre/ecrecover.rs` uses pure-Rust `k256`, which recovers roughly 2-3× slower than
+libsecp256k1. revm uses the `secp256k1` crate on native targets for this reason.
+
+All 17% is precompile 0x01 invoked from contracts (permit-style signature checks) — `bench`
+takes the sender from prefetched RPC data, so none of it is tx sender recovery.
+
+Must be feature-gated with `k256` as the default, so `yevm-wasm` keeps building without a
+C toolchain.
+
+### §F — `pairing_batch` for `ec_pairing`
+
+**Estimate:** ~10% → ~6% of block time
+
+`pre/bn128.rs` computes `acc = acc * pairing(g1, g2)` per pair, running a full Miller loop
+*and* a final exponentiation each time. Final exponentiation is ~40-50% of a pairing, so
+collecting the pairs and issuing one `bn::pairing_batch(&[(G1, G2)])` (verified present in
+`substrate-bn` 0.6) is close to 2× on the multi-pair inputs Groth16 verifiers produce.
+Contained to one function, no dependency or feature changes.
+
+### Not worth doing
+
+`ec_mul` (21%) already runs on `substrate-bn`, the backend revm defaults to — no library
+swap closes it, and arkworks is a port rather than a drop-in. BN128 gas is underpriced
+relative to plain opcodes for every client, so a mainnet-block gas/sec figure partly
+measures block composition rather than interpreter speed.
+
+---
+
 ## Priority
 
 | Item | Change | Status |
@@ -69,3 +106,5 @@ stack-allocated, eliminating heap churn on every opcode that touches access list
 | §B | PUSH immediate: direct slice, no alloc | **done** (~18% combined) |
 | §C | `mem_put`: write direct, drop pending `Vec<u8>` | **done** (~18% combined) |
 | §D | `Option`/fixed array for pending warmup buffers | **done** (~18% combined) |
+| §E | `secp256k1` for `ecrecover` on native (feature-gated) | todo (~11% est.) |
+| §F | `pairing_batch` for `ec_pairing` | todo (~4% est.) |
