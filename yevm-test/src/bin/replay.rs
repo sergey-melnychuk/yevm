@@ -25,6 +25,8 @@ const YEVM_RPC_URL: &str = "YEVM_RPC_URL";
 // ./target/release/replay - replay the latest block
 // ./target/release/replay <block> - replay the block number
 // ./target/release/replay <block>:<index> | <hash> - replay specific transaction
+// ./target/release/replay ... --skip-check - do not check against revm
+// ./target/release/replay ... --skip-cache - ignore cached state
 
 #[tokio::main]
 async fn main() {
@@ -43,6 +45,7 @@ async fn run() -> eyre::Result<()> {
     let chain_id = rpc.chain_id().await?;
 
     let skip_check = std::env::args().skip(1).any(|arg| arg == "--skip-check");
+    let skip_cache = std::env::args().skip(1).any(|arg| arg == "--skip-cache");
 
     let (block, index) = {
         let arg = std::env::args()
@@ -94,7 +97,7 @@ async fn run() -> eyre::Result<()> {
     std::fs::create_dir_all("fetch")?;
     let path = format!("fetch/{}.json", block);
     let fetches = Path::new(&path);
-    let block = if fetches.exists() && index.is_none() {
+    let block = if !skip_cache && fetches.exists() && index.is_none() {
         let file = File::open(fetches)?;
         let mut reader = BufReader::new(file);
         let mut content = String::new();
@@ -277,7 +280,7 @@ async fn run() -> eyre::Result<()> {
         }
     }
 
-    if !fetches.exists() && index.is_none() {
+    if !skip_cache && !fetches.exists() && index.is_none() {
         let fetched = std::mem::take(&mut cache.fetched);
         let file = File::create(fetches)?;
         let mut writer = BufWriter::new(file);
