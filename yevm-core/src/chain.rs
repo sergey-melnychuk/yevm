@@ -52,7 +52,7 @@ pub async fn fetch(f: Fetch, state: &mut impl State, chain: &impl Chain) -> Resu
                 #[cfg(not(target_arch = "wasm32"))]
                 let millis = now.elapsed().as_micros() as f64 / 1000.0;
                 #[cfg(target_arch = "wasm32")]
-                let millis = 0;
+                let millis = 0.0;
 
                 state.merge(&acc, account.clone());
                 state.save_fetched(Fetched::Account(acc, account), millis);
@@ -81,7 +81,7 @@ pub async fn fetch(f: Fetch, state: &mut impl State, chain: &impl Chain) -> Resu
                 #[cfg(not(target_arch = "wasm32"))]
                 let millis = now.elapsed().as_micros() as f64 / 1000.0;
                 #[cfg(target_arch = "wasm32")]
-                let millis = 0;
+                let millis = 0.0;
 
                 state.hash(number, hash);
                 state.save_fetched(Fetched::Hash(number, hash), millis);
@@ -106,7 +106,7 @@ pub async fn fetch(f: Fetch, state: &mut impl State, chain: &impl Chain) -> Resu
                 #[cfg(not(target_arch = "wasm32"))]
                 let millis = now.elapsed().as_micros() as f64 / 1000.;
                 #[cfg(target_arch = "wasm32")]
-                let millis = 0;
+                let millis = 0.0;
 
                 state.init(&acc, &key, val);
                 state.save_fetched(Fetched::State(acc, key, val), millis);
