@@ -50,7 +50,7 @@ pub async fn fetch(f: Fetch, state: &mut impl State, chain: &impl Chain) -> Resu
                 let account = chain.acc(&acc).await?;
 
                 #[cfg(not(target_arch = "wasm32"))]
-                let millis = now.elapsed().as_millis() as u64;
+                let millis = now.elapsed().as_micros() as f64 / 1000.0;
                 #[cfg(target_arch = "wasm32")]
                 let millis = 0;
 
@@ -79,7 +79,7 @@ pub async fn fetch(f: Fetch, state: &mut impl State, chain: &impl Chain) -> Resu
                     .unwrap_or(Int::ZERO);
 
                 #[cfg(not(target_arch = "wasm32"))]
-                let millis = now.elapsed().as_millis() as u64;
+                let millis = now.elapsed().as_micros() as f64 / 1000.0;
                 #[cfg(target_arch = "wasm32")]
                 let millis = 0;
 
@@ -104,7 +104,7 @@ pub async fn fetch(f: Fetch, state: &mut impl State, chain: &impl Chain) -> Resu
                 let val = chain.get(&acc, &key).await?;
 
                 #[cfg(not(target_arch = "wasm32"))]
-                let millis = now.elapsed().as_millis() as u64;
+                let millis = now.elapsed().as_micros() as f64 / 1000.;
                 #[cfg(target_arch = "wasm32")]
                 let millis = 0;
 

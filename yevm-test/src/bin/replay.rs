@@ -115,10 +115,10 @@ async fn run() -> eyre::Result<()> {
     } else {
         let chain_id = rpc.chain_id().await?;
         cache.set_chain_id(chain_id);
-        cache.save_fetched(Fetched::ChainId(chain_id), 0);
+        cache.save_fetched(Fetched::ChainId(chain_id), 0.0);
 
         let block = rpc.block(block).await?;
-        cache.save_fetched(Fetched::Block(block.clone()), 0);
+        cache.save_fetched(Fetched::Block(block.clone()), 0.0);
         block
     };
 
@@ -206,7 +206,7 @@ async fn run() -> eyre::Result<()> {
     let n = txs.len();
     let mut ok = 0;
     let mut gas_total = 0;
-    let mut sec_total = 0;
+    let mut sec_total = 0.0;
     let mut revm_drift: Vec<(Acc, Int)> = Vec::new();
     for (i, tx) in txs.into_iter().enumerate() {
         if std::env::var("TRACE").is_ok() {
@@ -221,15 +221,15 @@ async fn run() -> eyre::Result<()> {
 
         let now = Instant::now();
         let result = exe.run(tx, head.clone(), &mut cache, &rpc).await?;
-        let ms = now.elapsed().as_millis() as u64;
+        let ms = now.elapsed().as_micros() as f64 / 1000.0;
 
         let gas = result.gas().finalized;
         let (fetches, fetching) = cache.fetch_stats();
 
-        let stats = if fetching > 0 {
-            format!("{ms}ms/{}ms, fetches:{fetches}/{fetching}ms", ms - fetching)
+        let stats = if fetches > 0 {
+            format!("{ms:5.3}ms/{:5.3}ms, F:{fetches}/{fetching:5.3}ms", ms - fetching)
         } else {
-            format!("{ms}ms")
+            format!("{ms:5.3}ms")
         };
 
         if skip_check {
@@ -245,10 +245,13 @@ async fn run() -> eyre::Result<()> {
         let Some(RevmResult {
             call: revm_call,
             state: revm_state,
+            millis,
         }) = revm_result_rx.recv().await
         else {
             eyre::bail!("revm result unavailable");
         };
+        let stats = stats + &format!(", R:{millis:5.3}ms");
+
         let (mut violations, revm_gas_ok) = check_result(result, receipt, Some(revm_call));
         let skip_value = if revm_gas_ok {
             vec![]
@@ -293,9 +296,9 @@ async fn run() -> eyre::Result<()> {
     } else {
         String::new()
     };
-    let stat = if gas_total > 0 && sec_total > 0 {
+    let stat = if gas_total > 0 && sec_total > 0.0 {
         format!(
-            "{gas_total} gas, {sec_total}ms: ~{:.2} gas/sec",
+            "{gas_total} gas, {sec_total:5.3}ms: ~{:.2} gas/sec",
             gas_total as f64 * 1000.0 / sec_total as f64
         )
     } else {
@@ -515,6 +518,7 @@ fn check_state(
 pub struct RevmResult {
     pub call: CallResult,
     pub state: Env,
+    pub millis: f64,
 }
 
 // TODO: run embedded database for acc/state storage
@@ -786,10 +790,12 @@ mod live {
                 .build()
                 .map_err(|e| eyre::eyre!("{e:?}"))?;
 
+            let ms = std::time::Instant::now();
             let ExecResultAndState { result, state } = evm.inspect_tx(tx)?;
             evm.commit(state.clone());
+            let ms = ms.elapsed().as_micros() as f64 / 1_000.0;
 
-            let revm_result = to_revm_result(result, state);
+            let revm_result = to_revm_result(result, state, ms);
             result_sender.blocking_send(revm_result)?;
         }
         let _ = evm.inspector.tx.take();
@@ -893,8 +899,12 @@ mod live {
             ..Tracer::default()
         };
         let mut evm = ctx.build_mainnet_with_inspector(inspector);
+        
+        let ms = std::time::Instant::now();
         let ExecResultAndState { result, state } = evm.inspect_tx(tx_env)?;
-        let revm_result = to_revm_result(result, state);
+        let ms = ms.elapsed().as_micros() as f64 / 1_000.0;
+
+        let revm_result = to_revm_result(result, state, ms);
         result_sender.blocking_send(revm_result)?;
         let _ = evm.inspector.tx.take();
         Ok(())
@@ -903,6 +913,7 @@ mod live {
     fn to_revm_result(
         result: ExecutionResult<HaltReason>,
         state: revm::primitives::HashMap<Address, revm::state::Account, FbBuildHasher<20>>,
+        millis: f64,
     ) -> RevmResult {
         RevmResult {
             call: match result {
@@ -1009,6 +1020,7 @@ mod live {
                     (acc, account, storage)
                 })
                 .collect(),
+            millis,
         }
     }
 }

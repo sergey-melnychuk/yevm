@@ -74,7 +74,7 @@ pub struct Cache {
     offline: bool,
     chain_id: u64,
     total_fetch_calls: u64,
-    total_fetch_millis: u64,
+    total_fetch_millis: f64,
 }
 
 impl Cache {
@@ -121,7 +121,7 @@ impl Cache {
         }
 
         self.total_fetch_calls = 0;
-        self.total_fetch_millis = 0;
+        self.total_fetch_millis = 0.0;
     }
 }
 
@@ -407,7 +407,7 @@ impl State for Cache {
         id
     }
 
-    fn save_fetched(&mut self, fetched: Fetched, millis: u64) {
+    fn save_fetched(&mut self, fetched: Fetched, millis: f64) {
         self.fetched.push(fetched);
         self.total_fetch_calls += 1;
         self.total_fetch_millis += millis;
@@ -428,7 +428,7 @@ impl State for Cache {
         self.offline
     }
 
-    fn fetch_stats(&self) -> (u64, u64) {
+    fn fetch_stats(&self) -> (u64, f64) {
         (self.total_fetch_calls, self.total_fetch_millis)
     }
 

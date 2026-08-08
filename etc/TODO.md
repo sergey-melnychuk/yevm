@@ -1,3 +1,18 @@
+FAST blocks: >1 GigaGas/second
+
+./target/release/bench 25640834
+./target/release/bench 25674043
+./target/release/bench 25691540
+./target/release/bench 25694118
+./target/release/bench 25702265
+./target/release/bench 25705775
+
+SLOW blocks:
+
+TBD
+
+---
+
 TODO:
 
 - add custom state overrides for tx simulation: address[slot] = value; make base64-encoded query param 'overrides' for it; consider allowing override nonce, value and code

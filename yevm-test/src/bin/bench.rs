@@ -14,7 +14,7 @@ use yevm_core::{
 };
 
 const BLOCK: u64 = 24929490;
-const ITERS: usize = 1000;
+const ITERS: usize = 10;
 
 fn args(block: u64, iters: usize) -> eyre::Result<(u64, usize)> {
     let mut args = std::env::args();
@@ -73,11 +73,10 @@ async fn main() -> eyre::Result<()> {
             let res = exe.run(tx, head.clone(), &mut cache, &rpc).await?;
             gas += res.gas().spent.max(0) as u64;
         }
-        let ms = now.elapsed().as_millis() as u64;
-        let t = ms as f64 / 1000.0;
+        let t = now.elapsed().as_micros() as f64 / 1_000_000.0;
         let n = block.txs.len() as f64 / t;
         let g = gas as f64 / t;
-        println!("I={i:03} T={t:6.4} Txn/s={n:6.2} Gas/s={g:8.2}");
+        println!("I={i:03} T={t:8.6} Txn/s={n:6.2} Gas/s={g:8.2}");
     }
     Ok(())
 }

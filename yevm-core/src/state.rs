@@ -54,7 +54,7 @@ pub trait State {
     fn set_depth(&mut self, _depth: usize) {}
     fn emit(&mut self, event: Event) -> usize;
 
-    fn save_fetched(&mut self, _fetched: Fetched, _millis: u64) {}
+    fn save_fetched(&mut self, _fetched: Fetched, _millis: f64) {}
     fn next_fetched(&mut self) -> Option<Fetched> {
         None
     }
@@ -62,8 +62,8 @@ pub trait State {
     fn is_offline(&self) -> bool {
         false
     }
-    fn fetch_stats(&self) -> (u64, u64) {
-        (0, 0)
+    fn fetch_stats(&self) -> (u64, f64) {
+        (0, 0.0)
     }
 
     fn reset(&mut self) {}
