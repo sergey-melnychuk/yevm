@@ -13,6 +13,10 @@ members = [
 
 [profile.release]
 debug = true
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+opt-level = 3
 
 [workspace.dependencies]
 eyre = "0.6"
