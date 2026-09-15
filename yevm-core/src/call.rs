@@ -207,12 +207,29 @@ pub struct TxFull {
 
 pub type TxHash = Int;
 
+/// EIP-4895: a validator withdrawal from the beacon chain, credited directly
+/// to `address` (no EVM execution) at the end of block processing. Distinct
+/// from EIP-7002 "withdrawal requests" (an execution-layer queue, handled by
+/// `exe::post_block`) -- this is consensus-layer-initiated and its `amount`
+/// is denominated in Gwei, not Wei.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Withdrawal {
+    pub index: Int,
+    pub validator_index: Int,
+    pub address: Acc,
+    pub amount: Int,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Block {
     #[serde(flatten)]
     pub head: Head,
     #[serde(rename = "transactions")]
     pub txs: Vec<TxFull>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub withdrawals: Vec<Withdrawal>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

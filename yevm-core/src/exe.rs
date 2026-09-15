@@ -6,6 +6,7 @@ use yevm_misc::buf::Buf;
 
 use crate::Fetch;
 use crate::Tx;
+use crate::call::Block;
 use crate::evm::{CallMode, Context, Evm, Gas, StepResult};
 use crate::misc::{create_address, is_precompile};
 use crate::{Acc, Call, Error, Int, Result};
@@ -60,6 +61,36 @@ pub async fn pre_block(head: &Head, state: &mut impl State, chain: &impl Chain) 
     Ok(())
 }
 
+/// EIP-4895: credit each validator withdrawal directly to its target
+/// account's balance -- a plain balance mutation, not EVM execution, so
+/// there's no call/transfer machinery involved beyond `State::set_value`
+/// (which emits the same `Event::Put(Target::Value ...)` a transfer would,
+/// so this shows up in any diff derived from the event stream same as
+/// everything else). `amount` is Gwei (per the beacon chain / EIP-4895),
+/// converted to Wei here. Distinct from `post_block`'s EIP-7002/7251
+/// request-queue processing: those are execution-layer predeploys driven
+/// purely by on-chain state, while withdrawals are consensus-layer input
+/// that must be supplied per block (the block body's `withdrawals` list) --
+/// runs once per block, order relative to `post_block` doesn't matter since
+/// they never touch the same accounts.
+pub async fn apply_withdrawals(
+    withdrawals: &[crate::call::Withdrawal],
+    state: &mut impl State,
+    chain: &impl Chain,
+) -> Result<()> {
+    let gwei_to_wei = lift(|[amount]| amount * U256::from(1_000_000_000u64));
+    let add = lift(|[a, b]| a + b);
+    for w in withdrawals {
+        if state.acc(&w.address).is_none() {
+            fetch(Fetch::Account(w.address), state, chain).await?;
+        }
+        let amount_wei = gwei_to_wei([w.amount]);
+        let balance = state.balance(&w.address).unwrap_or_default();
+        state.set_value(&w.address, add([balance, amount_wei]));
+    }
+    Ok(())
+}
+
 const WITHDRAWAL_REQUEST: Acc = yevm_base::acc::acc("0x00000961Ef480Eb55e80D19ad83579A64c007002");
 const CONSOLIDATION_REQUEST: Acc = yevm_base::acc::acc("0x0000BBdDc7CE488642fb579F8B00f3a590007251");
 
@@ -79,7 +110,8 @@ const REQUEST_QUEUE_TAIL_SLOT: u64 = 3;
 /// (used for the block's requestsHash) is not needed here -- only the storage side
 /// effects matter for state-root purposes.
 /// Not fork-timestamp-gated, same rationale as EIP-2935 above.
-pub async fn post_block(state: &mut impl State, chain: &impl Chain) -> Result<()> {
+pub async fn post_block(block: &Block, state: &mut impl State, chain: &impl Chain) -> Result<()> {
+    apply_withdrawals(&block.withdrawals, state, chain).await?;
     process_request_queue(WITHDRAWAL_REQUEST, 16, 2, state, chain).await?;
     process_request_queue(CONSOLIDATION_REQUEST, 2, 1, state, chain).await?;
     Ok(())

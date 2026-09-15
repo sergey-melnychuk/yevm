@@ -12845,6 +12845,7 @@ name = "yevm-reth"
 version = "0.1.0"
 dependencies = [
  "alloy-consensus 2.4.1",
+ "alloy-eips 2.4.1",
  "alloy-primitives",
  "async-trait",
  "eyre",

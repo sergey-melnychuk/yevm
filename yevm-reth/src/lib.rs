@@ -313,6 +313,15 @@ impl RethDb {
         }
     }
 
+    fn withdrawal(w: &alloy_eips::eip4895::Withdrawal) -> yevm_core::call::Withdrawal {
+        yevm_core::call::Withdrawal {
+            index: Int::from(w.index),
+            validator_index: Int::from(w.validator_index),
+            address: Self::acc(w.address),
+            amount: Int::from(w.amount),
+        }
+    }
+
     pub fn factory(&self) -> &Factory {
         &self.factory
     }
@@ -416,8 +425,19 @@ impl Chain for RethDb {
             .enumerate()
             .map(|(index, (sender, tx))| Self::tx_full(tx, *sender, index as u64))
             .collect();
+        let withdrawals = recovered
+            .body()
+            .withdrawals
+            .iter()
+            .flat_map(|list| list.iter())
+            .map(Self::withdrawal)
+            .collect();
 
-        Ok(Block { head, txs })
+        Ok(Block {
+            head,
+            txs,
+            withdrawals,
+        })
     }
 
     async fn chain_id(&self) -> eyre::Result<u64> {

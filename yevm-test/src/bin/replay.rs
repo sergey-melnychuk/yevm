@@ -13,7 +13,7 @@ use yevm_core::{
     cache::Cache,
     call::{Block, Head, Receipt},
     chain::{Chain, Fetched},
-    exe::{CallResult, Executor, pre_block},
+    exe::{CallResult, Executor, post_block, pre_block},
     rpc::Rpc,
     state::{Account, State},
     trace::filter,
@@ -529,6 +529,8 @@ async fn run() -> eyre::Result<()> {
                 );
             }
         }
+
+        post_block(&block, &mut cache, &chain).await?;
 
         if !skip_cache && !fetches.exists() && index.is_none() {
             let fetched = std::mem::take(&mut cache.fetched);
