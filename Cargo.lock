@@ -12790,6 +12790,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "yevm-demo"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "dotenv",
+ "eyre",
+ "futures",
+ "serde",
+ "serde_json",
+ "tokio",
+ "yevm",
+]
+
+[[package]]
 name = "yevm-gate"
 version = "0.1.0"
 dependencies = [

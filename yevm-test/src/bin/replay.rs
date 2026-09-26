@@ -11,7 +11,7 @@ use futures::{StreamExt, channel::mpsc};
 use yevm_base::{Acc, Int, int, math::lift};
 use yevm_core::{
     cache::Cache,
-    call::{Block, Head, Receipt},
+    call::{Block, Head, Receipt, TxFull},
     chain::{Chain, Fetched},
     exe::{CallResult, Executor, post_block, pre_block},
     rpc::Rpc,
@@ -455,12 +455,12 @@ async fn run() -> eyre::Result<()> {
 
             let hash = tx.tx.hash;
             let sender = tx.call.from;
-            let (tx, call) = (tx.tx.clone(), tx.call.into());
-            let mut exe = Executor::new(call);
+            let TxFull { tx, call } = tx;
+            let mut exe = Executor::new(call.into());
             cache.reset();
 
             let now = Instant::now();
-            let result = exe.run(tx, head.clone(), &mut cache, &chain).await?;
+            let result = exe.run(&tx, &head, &mut cache, &chain).await?;
             let ms = now.elapsed().as_micros() as f64 / 1000.0;
 
             let gas = result.gas().finalized;
@@ -530,7 +530,7 @@ async fn run() -> eyre::Result<()> {
             }
         }
 
-        post_block(&block, &mut cache, &chain).await?;
+        post_block(&block.withdrawals, &mut cache, &chain).await?;
 
         if !skip_cache && !fetches.exists() && index.is_none() {
             let fetched = std::mem::take(&mut cache.fetched);
@@ -985,7 +985,8 @@ mod live {
         // the next BPO fork lands.
         if let Some(excess) = head.excess_blob_gas {
             let fraction = 11_684_671u64;
-            ctx.block.set_blob_excess_gas_and_price(excess.as_u64(), fraction);
+            ctx.block
+                .set_blob_excess_gas_and_price(excess.as_u64(), fraction);
         }
 
         // let fork = revm::primitives::hardfork::SpecId::OSAKA;

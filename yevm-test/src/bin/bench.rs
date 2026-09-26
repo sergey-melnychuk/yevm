@@ -7,7 +7,7 @@ use std::{
 
 use yevm_core::{
     cache::Cache,
-    call::Block,
+    call::{Block, TxFull},
     chain::Fetched,
     exe::{Executor, post_block, pre_block},
     rpc::Rpc,
@@ -93,13 +93,13 @@ async fn bench_block(
         pre_block(&head, &mut cache, rpc).await?;
         let mut gas = 0;
         for tx in &block.txs {
-            let (tx, call) = (tx.tx.clone(), tx.call.clone().into());
-            let mut exe = Executor::new(call);
+            let TxFull { tx, call } = tx;
+            let mut exe = Executor::new(call.clone().into());
             cache.reset();
-            let res = exe.run(tx, head.clone(), &mut cache, rpc).await?;
+            let res = exe.run(&tx, &head, &mut cache, rpc).await?;
             gas += res.gas().spent.max(0) as u64;
         }
-        post_block(&block, &mut cache, rpc).await?;
+        post_block(&block.withdrawals, &mut cache, rpc).await?;
         let t = now.elapsed().as_micros() as f64 / 1_000_000.0;
         let n = block.txs.len() as f64 / t;
         let g = gas as f64 / t;

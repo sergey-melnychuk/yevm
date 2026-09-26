@@ -53,7 +53,8 @@ use yevm_core::{
 use yevm_misc::buf::Buf;
 
 pub type Factory = ProviderFactory<NodeTypesWithDBAdapter<EthereumNode, DatabaseEnv>>;
-pub type Provider = DatabaseProviderRO<DatabaseEnv, NodeTypesWithDBAdapter<EthereumNode, DatabaseEnv>>;
+pub type Provider =
+    DatabaseProviderRO<DatabaseEnv, NodeTypesWithDBAdapter<EthereumNode, DatabaseEnv>>;
 
 /// `open_read_only()` requires a `reth_tasks::Runtime`, and `Runtime::test()`
 /// -- reth's own "lightweight" constructor -- still unconditionally builds

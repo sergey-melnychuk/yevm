@@ -1,0 +1,16 @@
+[package]
+name = "yevm-demo"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eyre.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+
+tokio = { version = "1.50", features = ["macros", "rt-multi-thread"] }
+futures = "0.3"
+dotenv = "0.15"
+
+yevm = { version = "0.1.0", path = "../yevm" }

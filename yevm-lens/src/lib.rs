@@ -65,6 +65,53 @@ pub struct FeeInfo {
     pub gas_used: u64,
 }
 
+/// A token together with an amount (magnitude). Used for the input/output legs
+/// of a [`Swap`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenAmount {
+    pub token: Acc,
+    pub amount: Int,
+}
+
+/// Which AMM the swap's pools were, as corroborated by a cross-checked `Swap`
+/// log. `Unknown` means the swap was reconstructed from token flows alone (no
+/// recognized, verified pool event) -- it is still a real swap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SwapProtocol {
+    UniswapV2,
+    UniswapV3,
+    /// Both V2 and V3 pools appeared (e.g. a multi-leg route across versions).
+    Mixed,
+    /// Detected purely from confirmed token flows; no verified pool event.
+    Unknown,
+}
+
+/// A token swap, reconstructed end-to-end from the trace.
+///
+/// The result is stated from the swapper's point of view: `sold` is what left
+/// their account (net), `bought` (a.k.a. tokens taken) is what arrived (net).
+/// Intermediate hops of a multi-leg route cancel out and do not appear here --
+/// they show up as the `pools` that were touched, in execution order.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Swap {
+    /// The account whose net token flow defines the swap (the tx sender).
+    pub swapper: Acc,
+    /// Tokens the swapper net sent (the input side).
+    pub sold: Vec<TokenAmount>,
+    /// Tokens the swapper net received (the output side; "tokens taken").
+    pub bought: Vec<TokenAmount>,
+    /// Pools touched, de-duplicated in first-seen order. Derived from token
+    /// flows (an address that took in one token and paid out another), NOT from
+    /// `Swap` log events. A single-hop swap has one; more means a multi-leg route.
+    pub pools: Vec<Acc>,
+    /// Number of pool hops (== `pools.len()`).
+    pub legs: usize,
+    pub protocol: SwapProtocol,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Alerts {
@@ -74,6 +121,11 @@ pub struct Alerts {
     pub erc20_approvals: Vec<Erc20Approval>,
     pub erc721_transfers: Vec<Erc721Transfer>,
     pub forged_transfers: Vec<ForgedTransfer>,
+    pub swaps: Vec<Swap>,
+    /// Emitters of a `Swap` topic that no confirmed token flow backs -- a spoofed
+    /// or otherwise unverifiable pool event. The swap-log analog of
+    /// [`ForgedTransfer`].
+    pub unverified_swaps: Vec<Acc>,
     pub fee: Option<FeeInfo>,
 }
 

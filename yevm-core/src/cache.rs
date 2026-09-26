@@ -123,6 +123,16 @@ impl Cache {
         self.total_fetch_calls = 0;
         self.total_fetch_millis = 0.0;
     }
+
+    pub fn purge(&mut self) {
+        *self = Self {
+            sender: self.sender.take(),
+            filter: self.filter,
+            chain_id: self.chain_id,
+            offline: self.offline,
+            ..Default::default()
+        };
+    }
 }
 
 impl State for Cache {
@@ -399,9 +409,10 @@ impl State for Cache {
             depth: self.depth,
             reverted: false,
         };
-        if self.filter & trace.event.filter_bit() != 0
-            && let Some(sender) = self.sender.as_mut()
+        if let Some(sender) = self.sender.as_mut()
+            && self.filter & trace.event.filter_bit() != 0
         {
+            // TODO: FIXME: can drop traces on full channel
             let _ = sender.try_send(trace.clone());
         }
         self.events.push(trace);
@@ -527,9 +538,10 @@ impl State for Cache {
             }
         }
 
-        if self.filter & filter::REVERT != 0
-            && let Some(sender) = self.sender.as_mut()
+        if let Some(sender) = self.sender.as_mut()
+            && self.filter & filter::REVERT != 0
         {
+            // TODO: FIXME: can drop traces on full channel
             let _ = sender.try_send(Trace {
                 seq: cp,
                 event: Event::Undo(cp, to),

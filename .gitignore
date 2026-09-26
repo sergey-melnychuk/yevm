@@ -1,15 +1,20 @@
 /target
-
-*.log
-*.txt
+local/
+tmp/
 
 .vscode/
 .claude/
 .cursor/
 
+*.log
+*.txt
+
 .env
-tmp/
+./bin/
 fetch/
 
 ## profiling data (samply)
 profile.json.gz
+
+.DS_Store
+.cerp

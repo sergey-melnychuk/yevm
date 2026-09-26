@@ -365,10 +365,9 @@ pub fn blobbasefee(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> E
     // almost certainly used Prague's fraction (5_007_716) against a block
     // already on BPO1/BPO2 -- hardcoded here to BPO2's value (11_684_671),
     // matching the same hardcode used for the fee deduction in `exe.rs`.
-    let fee = evm
-        .head
-        .excess_blob_gas
-        .map_or(Int::ONE, |excess| Int::from(crate::call::blob_base_fee(excess.as_u64())));
+    let fee = evm.head.excess_blob_gas.map_or(Int::ONE, |excess| {
+        Int::from(crate::call::blob_base_fee(excess.as_u64()))
+    });
     evm.push(fee)?;
     Ok(())
 }

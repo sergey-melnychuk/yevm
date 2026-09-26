@@ -62,7 +62,7 @@ pub async fn run(
 
     let mut exe = Executor::new(call);
     let chain = EmptyChain;
-    let res = exe.run(tx, head, &mut state, &chain).await?;
+    let res = exe.run(&tx, &head, &mut state, &chain).await?;
 
     let steps = state
         .events

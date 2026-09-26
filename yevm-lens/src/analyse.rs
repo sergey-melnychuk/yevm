@@ -4,7 +4,7 @@ use yevm_misc::buf::Buf;
 
 use crate::{
     Alerts, Erc20Approval, Erc20Transfer, Erc721Transfer, EthChange, FeeInfo, ForgedTransfer,
-    ProxySwap,
+    ProxySwap, Swap, SwapProtocol, TokenAmount,
 };
 
 // keccak256("Transfer(address,address,uint256)")
@@ -13,6 +13,12 @@ const TOPIC_TRANSFER: [u8; 32] =
 // keccak256("Approval(address,address,uint256)")
 const TOPIC_APPROVAL: [u8; 32] =
     hex_lit!("8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925");
+// keccak256("Swap(address,uint256,uint256,uint256,uint256,address)") -- Uniswap V2 pair
+const TOPIC_SWAP_V2: [u8; 32] =
+    hex_lit!("d78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822");
+// keccak256("Swap(address,address,int256,int256,uint160,uint128,int24)") -- Uniswap V3 pool
+const TOPIC_SWAP_V3: [u8; 32] =
+    hex_lit!("c42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67");
 
 // ABI-encoded address: 12 zero bytes + 20-byte address
 fn abi_addr(int: &Int) -> Option<Acc> {
@@ -102,6 +108,14 @@ pub fn analyse(traces: &[Trace]) -> Alerts {
     let mut balance_writes: Vec<BalanceWrite> = Vec::new();
     let mut ctx_stack: Vec<Acc> = Vec::new(); // call context addresses
 
+    // Swap reconstruction. We do NOT trust Swap log events to mean a swap
+    // happened -- any contract can emit one. We only record (emitter, is_v3) for
+    // each, and later cross-check them against confirmed token flows; the swap
+    // itself is derived from flows. `first_caller` is the swapper fallback when
+    // no Fee event pins the sender.
+    let mut swap_logs: Vec<(Acc, bool)> = Vec::new();
+    let mut first_caller: Option<Acc> = None;
+
     for t in traces {
         if t.reverted {
             continue;
@@ -109,6 +123,9 @@ pub fn analyse(traces: &[Trace]) -> Alerts {
         match &t.event {
             Event::Call(call, mode) => {
                 use yevm_core::evm::CallMode;
+                if first_caller.is_none() {
+                    first_caller = Some(call.by);
+                }
                 let exec_addr = match mode {
                     CallMode::Delegate(..) | CallMode::CallCode(..) => {
                         ctx_stack.last().copied().unwrap_or(call.by)
@@ -186,6 +203,13 @@ pub fn analyse(traces: &[Trace]) -> Alerts {
                     continue;
                 }
                 let t0 = topics[0].as_ref();
+
+                // Swap topic: record the emitter as a *candidate* pool. Whether
+                // it was a real swap is decided later from token flows, not here.
+                if t0 == TOPIC_SWAP_V2 || t0 == TOPIC_SWAP_V3 {
+                    swap_logs.push((emitter, t0 == TOPIC_SWAP_V3));
+                    continue;
+                }
 
                 // ERC-721 Transfer: 4 topics, empty payload
                 if t0 == TOPIC_TRANSFER
@@ -276,6 +300,116 @@ pub fn analyse(traces: &[Trace]) -> Alerts {
             }
 
             _ => {}
+        }
+    }
+
+    // Reconstruct swaps from CONFIRMED, balance-verified token flows -- never
+    // from Swap log events alone, which any contract can emit. Swap logs only
+    // *label* the protocol, and are cross-checked: a Swap log whose emitter shows
+    // no real token-for-token flow is reported as `unverified_swaps`.
+    {
+        let add = yevm_base::math::lift(|[a, b]| a + b);
+        let sub = yevm_base::math::lift(|[a, b]| a - b);
+        // Keyed (holder, token). Built only from confirmed erc20_transfers, so
+        // forged Transfer logs (no backing balance write) never enter the flow.
+        let mut inflow: std::collections::HashMap<(Acc, Acc), Int> = Default::default();
+        let mut outflow: std::collections::HashMap<(Acc, Acc), Int> = Default::default();
+        let mut appearance: Vec<Acc> = Vec::new();
+        for tr in &alerts.erc20_transfers {
+            if let Some(amt) = tr.amount {
+                for h in [tr.from, tr.to] {
+                    if !appearance.contains(&h) {
+                        appearance.push(h);
+                    }
+                }
+                let o = outflow.entry((tr.from, tr.token)).or_insert(Int::ZERO);
+                *o = add([*o, amt]);
+                let i = inflow.entry((tr.to, tr.token)).or_insert(Int::ZERO);
+                *i = add([*i, amt]);
+            }
+        }
+
+        // Net (sold, bought) for one holder from the flow maps.
+        let net = |holder: Acc| -> (Vec<TokenAmount>, Vec<TokenAmount>) {
+            let mut tokens: Vec<Acc> = Vec::new();
+            for (h, tok) in inflow.keys().chain(outflow.keys()) {
+                if *h == holder && !tokens.contains(tok) {
+                    tokens.push(*tok);
+                }
+            }
+            tokens.sort();
+            let (mut sold, mut bought) = (Vec::new(), Vec::new());
+            for tok in tokens {
+                let i = inflow.get(&(holder, tok)).copied().unwrap_or(Int::ZERO);
+                let o = outflow.get(&(holder, tok)).copied().unwrap_or(Int::ZERO);
+                if o > i {
+                    sold.push(TokenAmount {
+                        token: tok,
+                        amount: sub([o, i]),
+                    });
+                } else if i > o {
+                    bought.push(TokenAmount {
+                        token: tok,
+                        amount: sub([i, o]),
+                    });
+                }
+            }
+            (sold, bought)
+        };
+
+        let swapper = alerts
+            .fee
+            .as_ref()
+            .map(|f| f.sender)
+            .or(first_caller)
+            .unwrap_or_default();
+
+        // A pool is any *other* address that took in one token and paid out a
+        // different one, both confirmed by balance writes. Routers net to zero
+        // per token and drop out on their own; the swapper is excluded explicitly.
+        let mut pools: Vec<Acc> = Vec::new();
+        for addr in &appearance {
+            if *addr == swapper {
+                continue;
+            }
+            let (sold, bought) = net(*addr);
+            if !sold.is_empty() && !bought.is_empty() {
+                pools.push(*addr);
+            }
+        }
+
+        // Cross-check Swap logs against the flow-derived pools: matches set the
+        // protocol label; any that don't correspond to a real swap are flagged.
+        let (mut saw_v2, mut saw_v3) = (false, false);
+        for (emitter, is_v3) in &swap_logs {
+            if pools.contains(emitter) {
+                if *is_v3 {
+                    saw_v3 = true;
+                } else {
+                    saw_v2 = true;
+                }
+            } else if !alerts.unverified_swaps.contains(emitter) {
+                alerts.unverified_swaps.push(*emitter);
+            }
+        }
+
+        if !pools.is_empty() {
+            let (sold, bought) = net(swapper);
+            let protocol = match (saw_v2, saw_v3) {
+                (true, true) => SwapProtocol::Mixed,
+                (true, false) => SwapProtocol::UniswapV2,
+                (false, true) => SwapProtocol::UniswapV3,
+                (false, false) => SwapProtocol::Unknown,
+            };
+            let legs = pools.len();
+            alerts.swaps.push(Swap {
+                swapper,
+                sold,
+                bought,
+                pools,
+                legs,
+                protocol,
+            });
         }
     }
 
@@ -766,5 +900,279 @@ mod tests {
         let alerts = analyse(&traces);
         assert_eq!(alerts.erc20_approvals.len(), 1);
         assert_eq!(alerts.erc20_approvals[0].token, proxy);
+    }
+
+    fn swap_v2_log(seq: usize, pool_ctx: &Acc) -> Trace {
+        // topic0 only is inspected; the emitter comes from the call context.
+        let _ = pool_ctx;
+        trace(
+            seq,
+            Event::Log(vec![Int::from(TOPIC_SWAP_V2.as_ref())], Buf::default()),
+        )
+    }
+
+    fn swap_v3_log(seq: usize) -> Trace {
+        trace(
+            seq,
+            Event::Log(vec![Int::from(TOPIC_SWAP_V3.as_ref())], Buf::default()),
+        )
+    }
+
+    fn fee(seq: usize, sender: &Acc) -> Trace {
+        let coinbase = addr("0x9999999999999999999999999999999999999999");
+        trace(
+            seq,
+            Event::Fee(*sender, coinbase, Int::ZERO, Int::ZERO, 100_000),
+        )
+    }
+
+    #[test]
+    fn swap_topic_hashes_match() {
+        use yevm_misc::keccak256;
+        assert_eq!(
+            keccak256("Swap(address,uint256,uint256,uint256,uint256,address)".as_bytes()).as_ref(),
+            &TOPIC_SWAP_V2[..],
+            "V2 Swap topic",
+        );
+        assert_eq!(
+            keccak256("Swap(address,address,int256,int256,uint160,uint128,int24)".as_bytes())
+                .as_ref(),
+            &TOPIC_SWAP_V3[..],
+            "V3 Swap topic",
+        );
+    }
+
+    #[test]
+    fn detects_v2_swap() {
+        let user = addr("0x2222222222222222222222222222222222222222");
+        let pair = addr("0x5555555555555555555555555555555555555555");
+        let usdc = addr("0x1111111111111111111111111111111111111111");
+        let weth = addr("0x4444444444444444444444444444444444444444");
+
+        let mut seq = 100;
+        let mut t = vec![trace(seq, call_ctx(user, pair))]; // ctx: pair
+        seq += 1;
+
+        // USDC user -> pair (input leg), emitted inside the USDC contract.
+        t.push(trace(seq, call_ctx(pair, usdc)));
+        seq += 1;
+        t.extend(balance_traces(&mut seq, usdc, user, 5000, 4000)); // user -1000
+        t.push(transfer_log(seq, &user, &pair, 1000));
+        seq += 1;
+        t.push(trace(seq, ret())); // pop usdc -> ctx: pair
+        seq += 1;
+
+        // WETH pair -> user (output leg), emitted inside the WETH contract.
+        t.push(trace(seq, call_ctx(pair, weth)));
+        seq += 1;
+        t.extend(balance_traces(&mut seq, weth, user, 0, 900)); // user +900
+        t.push(transfer_log(seq, &pair, &user, 900));
+        seq += 1;
+        t.push(trace(seq, ret())); // pop weth -> ctx: pair
+        seq += 1;
+
+        // The pair's Swap event (ctx top is the pair).
+        t.push(swap_v2_log(seq, &pair));
+        seq += 1;
+        t.push(trace(seq, ret())); // pop pair
+        seq += 1;
+        t.push(fee(seq, &user));
+
+        let alerts = analyse(&t);
+        assert_eq!(alerts.swaps.len(), 1, "expected one swap");
+        let s = &alerts.swaps[0];
+        assert_eq!(s.swapper, user);
+        assert_eq!(s.protocol, SwapProtocol::UniswapV2);
+        assert_eq!(s.pools, vec![pair]);
+        assert_eq!(s.legs, 1);
+        assert_eq!(
+            s.sold,
+            vec![TokenAmount {
+                token: usdc,
+                amount: Int::from(1000u64)
+            }]
+        );
+        assert_eq!(
+            s.bought,
+            vec![TokenAmount {
+                token: weth,
+                amount: Int::from(900u64)
+            }]
+        );
+    }
+
+    #[test]
+    fn detects_multi_leg_mixed_swap() {
+        // USDC --(V2 pair)--> WETH --(V3 pool)--> DAI, routed by a router.
+        let user = addr("0x2222222222222222222222222222222222222222");
+        let router = addr("0x6666666666666666666666666666666666666666");
+        let pair = addr("0x5555555555555555555555555555555555555555"); // V2
+        let pool = addr("0x7777777777777777777777777777777777777777"); // V3
+        let usdc = addr("0x1111111111111111111111111111111111111111");
+        let weth = addr("0x4444444444444444444444444444444444444444");
+        let dai = addr("0x8888888888888888888888888888888888888888");
+
+        let mut seq = 0;
+        let mut t = vec![trace(seq, call_ctx(user, router))]; // ctx: router
+        seq += 1;
+
+        // leg 1: USDC user -> pair
+        t.push(trace(seq, call_ctx(router, usdc)));
+        seq += 1;
+        t.extend(balance_traces(&mut seq, usdc, user, 5000, 4000)); // user -1000
+        t.push(transfer_log(seq, &user, &pair, 1000));
+        seq += 1;
+        t.push(trace(seq, ret()));
+        seq += 1;
+
+        // intermediate: WETH pair -> pool (does not touch the swapper)
+        t.push(trace(seq, call_ctx(router, weth)));
+        seq += 1;
+        t.extend(balance_traces(&mut seq, weth, pool, 0, 900)); // pool +900
+        t.push(transfer_log(seq, &pair, &pool, 900));
+        seq += 1;
+        t.push(trace(seq, ret()));
+        seq += 1;
+
+        // pair Swap event (V2)
+        t.push(trace(seq, call_ctx(router, pair)));
+        seq += 1;
+        t.push(swap_v2_log(seq, &pair));
+        seq += 1;
+        t.push(trace(seq, ret()));
+        seq += 1;
+
+        // leg 2: DAI pool -> user
+        t.push(trace(seq, call_ctx(router, dai)));
+        seq += 1;
+        t.extend(balance_traces(&mut seq, dai, user, 0, 800)); // user +800
+        t.push(transfer_log(seq, &pool, &user, 800));
+        seq += 1;
+        t.push(trace(seq, ret()));
+        seq += 1;
+
+        // pool Swap event (V3)
+        t.push(trace(seq, call_ctx(router, pool)));
+        seq += 1;
+        t.push(swap_v3_log(seq));
+        seq += 1;
+        t.push(trace(seq, ret()));
+        seq += 1;
+
+        t.push(fee(seq, &user));
+
+        let alerts = analyse(&t);
+        assert_eq!(alerts.swaps.len(), 1);
+        let s = &alerts.swaps[0];
+        assert_eq!(s.swapper, user);
+        assert_eq!(s.protocol, SwapProtocol::Mixed);
+        assert_eq!(s.pools, vec![pair, pool], "both pools, in order");
+        assert_eq!(s.legs, 2);
+        // End-to-end: only USDC in and DAI out; the WETH hop cancels.
+        assert_eq!(
+            s.sold,
+            vec![TokenAmount {
+                token: usdc,
+                amount: Int::from(1000u64)
+            }]
+        );
+        assert_eq!(
+            s.bought,
+            vec![TokenAmount {
+                token: dai,
+                amount: Int::from(800u64)
+            }]
+        );
+    }
+
+    #[test]
+    fn no_swap_without_pool_event() {
+        // A plain ERC-20 transfer must not be reported as a swap.
+        let token = addr("0x1111111111111111111111111111111111111111");
+        let from = addr("0x2222222222222222222222222222222222222222");
+        let to = addr("0x3333333333333333333333333333333333333333");
+        let mut seq = 0;
+        let mut t = vec![trace(seq, call_ctx(from, token))];
+        seq += 1;
+        t.extend(balance_traces(&mut seq, token, from, 2000, 1000));
+        t.push(transfer_log(seq, &from, &to, 1000));
+        seq += 1;
+        t.push(trace(seq, ret()));
+
+        assert!(analyse(&t).swaps.is_empty());
+    }
+
+    #[test]
+    fn ignores_spoofed_swap_log() {
+        // A contract emits a Swap event with no token movement behind it. It must
+        // NOT be reported as a swap, and must surface as unverified.
+        let user = addr("0x2222222222222222222222222222222222222222");
+        let evil = addr("0xdeaddeaddeaddeaddeaddeaddeaddeaddeaddead");
+
+        let traces = vec![
+            trace(0, call_ctx(user, evil)), // ctx: evil
+            swap_v2_log(1, &evil),          // emitter evil, but no real flow
+            trace(2, ret()),
+            fee(3, &user),
+        ];
+
+        let alerts = analyse(&traces);
+        assert!(
+            alerts.swaps.is_empty(),
+            "spoofed log must not fabricate a swap"
+        );
+        assert_eq!(alerts.unverified_swaps, vec![evil]);
+    }
+
+    #[test]
+    fn detects_swap_without_swap_log() {
+        // Real token-for-token flow through a pool, but no recognized Swap log:
+        // still detected, labeled Unknown, and not flagged as unverified.
+        let user = addr("0x2222222222222222222222222222222222222222");
+        let pair = addr("0x5555555555555555555555555555555555555555");
+        let usdc = addr("0x1111111111111111111111111111111111111111");
+        let weth = addr("0x4444444444444444444444444444444444444444");
+
+        let mut seq = 0;
+        let mut t = vec![trace(seq, call_ctx(user, pair))];
+        seq += 1;
+        t.push(trace(seq, call_ctx(pair, usdc)));
+        seq += 1;
+        t.extend(balance_traces(&mut seq, usdc, user, 5000, 4000));
+        t.push(transfer_log(seq, &user, &pair, 1000));
+        seq += 1;
+        t.push(trace(seq, ret()));
+        seq += 1;
+        t.push(trace(seq, call_ctx(pair, weth)));
+        seq += 1;
+        t.extend(balance_traces(&mut seq, weth, user, 0, 900));
+        t.push(transfer_log(seq, &pair, &user, 900));
+        seq += 1;
+        t.push(trace(seq, ret()));
+        seq += 1;
+        t.push(trace(seq, ret())); // pop pair
+        seq += 1;
+        t.push(fee(seq, &user));
+
+        let alerts = analyse(&t);
+        assert!(alerts.unverified_swaps.is_empty());
+        assert_eq!(alerts.swaps.len(), 1);
+        let s = &alerts.swaps[0];
+        assert_eq!(s.protocol, SwapProtocol::Unknown);
+        assert_eq!(s.pools, vec![pair]);
+        assert_eq!(
+            s.sold,
+            vec![TokenAmount {
+                token: usdc,
+                amount: Int::from(1000u64)
+            }]
+        );
+        assert_eq!(
+            s.bought,
+            vec![TokenAmount {
+                token: weth,
+                amount: Int::from(900u64)
+            }]
+        );
     }
 }

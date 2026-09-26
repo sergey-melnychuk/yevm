@@ -4,6 +4,7 @@ members = [
     "yevm",
     "yevm-base",
     "yevm-core",
+    "yevm-demo",
     "yevm-gate",
     "yevm-lens",
     "yevm-misc",

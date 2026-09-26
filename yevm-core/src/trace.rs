@@ -9,22 +9,23 @@ use crate::{
 
 pub mod filter {
     pub const NONE: u32 = 0;
-    pub const STEP: u32 = 1 << 0;
-    pub const CALL: u32 = 1 << 1;
-    pub const RETURN: u32 = 1 << 2;
-    pub const REVERT: u32 = 1 << 3;
-    pub const HALT: u32 = 1 << 4;
-    pub const GET: u32 = 1 << 5;
-    pub const PUT: u32 = 1 << 6;
-    pub const LOG: u32 = 1 << 7;
-    pub const CREATE: u32 = 1 << 8;
-    pub const DELETE: u32 = 1 << 9;
-    pub const MOVE: u32 = 1 << 10;
-    pub const FEE: u32 = 1 << 11;
-    pub const HASH: u32 = 1 << 12;
-    pub const CODE: u32 = 1 << 13;
+    pub const TAG: u32 = 1;
+    pub const STEP: u32 = 1 << 1;
+    pub const CALL: u32 = 1 << 2;
+    pub const RETURN: u32 = 1 << 3;
+    pub const REVERT: u32 = 1 << 4;
+    pub const HALT: u32 = 1 << 5;
+    pub const GET: u32 = 1 << 6;
+    pub const PUT: u32 = 1 << 7;
+    pub const LOG: u32 = 1 << 8;
+    pub const CREATE: u32 = 1 << 9;
+    pub const DELETE: u32 = 1 << 10;
+    pub const MOVE: u32 = 1 << 11;
+    pub const FEE: u32 = 1 << 12;
+    pub const HASH: u32 = 1 << 13;
+    pub const CODE: u32 = 1 << 14;
     pub const ALL: u32 = u32::MAX;
-    pub const TOP: u32 = ALL ^ STEP;
+    pub const TOP: u32 = ALL - (TAG | STEP);
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -58,7 +59,8 @@ pub enum Event {
     Blob(u64, Int),               // EIP-4844 BLOB carrying txs
 
     Step(Step),
-    // Full(Step, Vec<Int>, Buf),
+    // Full(Step, Vec<Int>, Buf), // Step with stack and memory contents
+    Tag(u64, u64, Int), // (block number, tx index, tx hash)
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -93,6 +95,7 @@ impl Event {
             Event::Fee(..) => filter::FEE,
             Event::Hash(..) => filter::HASH,
             Event::Code(..) => filter::CODE,
+            Event::Tag(_, _, _) => filter::TAG,
             _ => filter::NONE,
         }
     }

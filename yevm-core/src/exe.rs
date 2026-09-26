@@ -6,7 +6,7 @@ use yevm_misc::buf::Buf;
 
 use crate::Fetch;
 use crate::Tx;
-use crate::call::Block;
+use crate::call::Withdrawal;
 use crate::evm::{CallMode, Context, Evm, Gas, StepResult};
 use crate::misc::{create_address, is_precompile};
 use crate::{Acc, Call, Error, Int, Result};
@@ -45,16 +45,31 @@ pub async fn pre_block(head: &Head, state: &mut impl State, chain: &impl Chain) 
         // cell first so `put`'s recorded previous value is the real
         // on-chain one (the ring buffer reuses slots every ~8191 seconds,
         // so it's rarely zero), not `put`'s own cold-slot default.
-        fetch(Fetch::StateCell(BEACON_ROOTS, Int::from(slot)), state, chain).await?;
+        fetch(
+            Fetch::StateCell(BEACON_ROOTS, Int::from(slot)),
+            state,
+            chain,
+        )
+        .await?;
         state.put(&BEACON_ROOTS, &Int::from(slot), Int::from(timestamp));
-        fetch(Fetch::StateCell(BEACON_ROOTS, Int::from(slot2)), state, chain).await?;
+        fetch(
+            Fetch::StateCell(BEACON_ROOTS, Int::from(slot2)),
+            state,
+            chain,
+        )
+        .await?;
         state.put(&BEACON_ROOTS, &Int::from(slot2), root);
     }
 
     if let Some(number) = head.number.as_u64().checked_sub(1) {
         fetch(Fetch::Account(HISTORY_STORAGE), state, chain).await?;
         let slot = number % HISTORY_SERVE_WINDOW;
-        fetch(Fetch::StateCell(HISTORY_STORAGE, Int::from(slot)), state, chain).await?;
+        fetch(
+            Fetch::StateCell(HISTORY_STORAGE, Int::from(slot)),
+            state,
+            chain,
+        )
+        .await?;
         state.put(&HISTORY_STORAGE, &Int::from(slot), head.parent_hash);
     }
 
@@ -92,7 +107,8 @@ pub async fn apply_withdrawals(
 }
 
 const WITHDRAWAL_REQUEST: Acc = yevm_base::acc::acc("0x00000961Ef480Eb55e80D19ad83579A64c007002");
-const CONSOLIDATION_REQUEST: Acc = yevm_base::acc::acc("0x0000BBdDc7CE488642fb579F8B00f3a590007251");
+const CONSOLIDATION_REQUEST: Acc =
+    yevm_base::acc::acc("0x0000BBdDc7CE488642fb579F8B00f3a590007251");
 
 const REQUEST_QUEUE_EXCESS_SLOT: u64 = 0;
 const REQUEST_QUEUE_COUNT_SLOT: u64 = 1;
@@ -110,8 +126,12 @@ const REQUEST_QUEUE_TAIL_SLOT: u64 = 3;
 /// (used for the block's requestsHash) is not needed here -- only the storage side
 /// effects matter for state-root purposes.
 /// Not fork-timestamp-gated, same rationale as EIP-2935 above.
-pub async fn post_block(block: &Block, state: &mut impl State, chain: &impl Chain) -> Result<()> {
-    apply_withdrawals(&block.withdrawals, state, chain).await?;
+pub async fn post_block(
+    withdrawals: &[Withdrawal],
+    state: &mut impl State,
+    chain: &impl Chain,
+) -> Result<()> {
+    apply_withdrawals(withdrawals, state, chain).await?;
     process_request_queue(WITHDRAWAL_REQUEST, 16, 2, state, chain).await?;
     process_request_queue(CONSOLIDATION_REQUEST, 2, 1, state, chain).await?;
     Ok(())
@@ -132,7 +152,11 @@ async fn process_request_queue(
     if state.acc(&addr).is_none() {
         fetch(Fetch::Account(addr), state, chain).await?;
     }
-    if state.code(&addr).map(|(c, _)| c.0.is_empty()).unwrap_or(true) {
+    if state
+        .code(&addr)
+        .map(|(c, _)| c.0.is_empty())
+        .unwrap_or(true)
+    {
         // Predeploy not yet in state (pre-activation replay) -- nothing to do.
         return Ok(());
     }
@@ -175,11 +199,19 @@ async fn process_request_queue(
         state.put(&addr, &Int::from(REQUEST_QUEUE_HEAD_SLOT), Int::ZERO);
         state.put(&addr, &Int::from(REQUEST_QUEUE_TAIL_SLOT), Int::ZERO);
     } else {
-        state.put(&addr, &Int::from(REQUEST_QUEUE_HEAD_SLOT), Int::from(new_head));
+        state.put(
+            &addr,
+            &Int::from(REQUEST_QUEUE_HEAD_SLOT),
+            Int::from(new_head),
+        );
     }
 
     // EXCESS_INHIBITOR (2**256-1) marks pre-activation state; treat it as 0.
-    let previous_excess = if excess == Int::MAX { 0 } else { excess.as_u64() };
+    let previous_excess = if excess == Int::MAX {
+        0
+    } else {
+        excess.as_u64()
+    };
     let new_excess = (previous_excess + count).saturating_sub(target_per_block);
     state.put(
         &addr,
@@ -449,14 +481,20 @@ impl Executor {
 
     pub async fn run(
         &mut self,
-        mut tx: Tx,
-        head: Head,
+        tx: &Tx,
+        head: &Head,
         state: &mut impl State,
         chain: &impl Chain,
     ) -> Result<CallResult> {
         if !self.callstack.is_empty() {
             return Err(eyre::eyre!("inconsistent state: call stack empty").into());
         }
+
+        // Txs are executed sequentially and all events they emit land into the
+        // same channel. Emitting the `Tag` event is the only way to distinguish
+        // to which particular tx the event belongs.
+        state.emit(Event::Tag(head.number.as_u64(), tx.index.as_u64(), tx.hash));
+
         for acc in [&self.call.by, &head.coinbase] {
             if state.acc(acc).is_none() {
                 fetch(Fetch::Account(*acc), state, chain).await?;
@@ -470,11 +508,13 @@ impl Executor {
             state.warm_acc(acc);
         }
 
-        if tx.chain_id.is_zero() {
-            tx.chain_id = state.get_chain_id().into();
-            if tx.chain_id.is_zero() {
-                return Err(Error::UndefinedChainId);
-            }
+        let chain_id = if !tx.chain_id.is_zero() {
+            tx.chain_id
+        } else {
+            state.get_chain_id().into()
+        };
+        if chain_id.is_zero() {
+            return Err(Error::UndefinedChainId);
         }
 
         // Pre-transaction validation checks
