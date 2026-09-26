@@ -174,7 +174,7 @@ mod wasm {
         }
 
         let mut exe = Executor::new(call);
-        let result = exe.run(tx, head, &mut cache, &rpc).await?;
+        let result = exe.run(&tx, &head, &mut cache, &rpc).await?;
         let _ = cache.sender.take();
 
         let (yevm_status, yevm_gas) = match result {
@@ -262,7 +262,7 @@ mod wasm {
         for (i, prior) in prior_txs.into_iter().enumerate() {
             let prior_call: Call = prior.call.into();
             let mut exe = Executor::new(prior_call);
-            let _ = exe.run(prior.tx, head.clone(), &mut cache, &rpc).await;
+            let _ = exe.run(&prior.tx, &head, &mut cache, &rpc).await;
             cache.reset();
             release().await;
             let _ = on_progress.call2(&JsValue::NULL, &JsValue::from(i + 1), &JsValue::from(total));
@@ -275,7 +275,7 @@ mod wasm {
         cache.reset(); // reset warm sets / transient for the target tx
 
         let mut exe = Executor::new(call);
-        let result = exe.run(tx, head, &mut cache, &rpc).await?;
+        let result = exe.run(&tx, &head, &mut cache, &rpc).await?;
         let _ = cache.sender.take();
 
         let (yevm_status, yevm_gas) = match result {
@@ -349,7 +349,7 @@ mod wasm {
         cache.set_chain_id(chain_id);
 
         let mut exe = Executor::new(call);
-        let result = exe.run(tx, head, &mut cache, &rpc).await?;
+        let result = exe.run(&tx, &head, &mut cache, &rpc).await?;
         let _ = cache.sender.take();
 
         let (yevm_status, yevm_gas) = match result {
@@ -394,7 +394,7 @@ mod wasm {
         cache.set_chain_id(chain_id);
 
         let mut exe = Executor::new(call);
-        let result = exe.run(tx, head, &mut cache, &rpc).await?;
+        let result = exe.run(&tx, &head, &mut cache, &rpc).await?;
         let _ = cache.sender.take();
 
         let (yevm_status, yevm_gas) = match result {

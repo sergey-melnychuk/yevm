@@ -114,8 +114,8 @@ impl Cache {
         self.events.clear();
 
         // NOTE: profiling shows 0.7%, not a bottleneck, leaving as is
-        for (_, account) in self.accounts.iter_mut() {
-            for (_, slot) in account.storage.iter_mut() {
+        for account in self.accounts.values_mut() {
+            for slot in account.storage.values_mut() {
                 slot.original = slot.current;
             }
         }

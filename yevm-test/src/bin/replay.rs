@@ -198,6 +198,7 @@ async fn run() -> eyre::Result<()> {
     let (mut number, mut index) = if watch {
         (0u64, None) // resolved for real at the top of the loop below
     } else {
+        #[cfg_attr(not(feature = "reth"), allow(clippy::unnecessary_literal_unwrap))]
         let latest = reth_latest.unwrap_or(rpc.block_number);
 
         if arg.starts_with("0x") {
@@ -548,7 +549,7 @@ async fn run() -> eyre::Result<()> {
         let stat = if gas_total > 0 && sec_total > 0.0 {
             format!(
                 "{gas_total} gas, {sec_total:5.3}ms: ~{:.2} gas/sec",
-                gas_total as f64 * 1000.0 / sec_total as f64
+                gas_total as f64 * 1000.0 / sec_total
             )
         } else {
             String::new()

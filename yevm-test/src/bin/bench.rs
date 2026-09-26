@@ -96,7 +96,7 @@ async fn bench_block(
             let TxFull { tx, call } = tx;
             let mut exe = Executor::new(call.clone().into());
             cache.reset();
-            let res = exe.run(&tx, &head, &mut cache, rpc).await?;
+            let res = exe.run(tx, &head, &mut cache, rpc).await?;
             gas += res.gas().spent.max(0) as u64;
         }
         post_block(&block.withdrawals, &mut cache, rpc).await?;

@@ -171,7 +171,7 @@ async fn exec(
     cache.reset();
     let mut executor = Executor::new(call);
     let result = executor
-        .run(&tx(chain_id, head.base_fee), &head, cache, chain)
+        .run(&tx(chain_id, head.base_fee), head, cache, chain)
         .await?;
     match result {
         CallResult::Done { status, ret, gas } => Ok((!status.is_zero(), ret, gas.finalized)),

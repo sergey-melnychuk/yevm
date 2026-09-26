@@ -58,7 +58,7 @@ async fn run() -> eyre::Result<()> {
     let mut rpc = Rpc::latest(url.clone()).await?;
     let chain_id = rpc.chain_id().await?;
 
-    let mut block = if let Some(arg) = args().skip(1).next() {
+    let mut block = if let Some(arg) = args().nth(1) {
         let number = arg.parse::<u64>()?;
         rpc.block(number).await?
     } else {
@@ -161,7 +161,12 @@ async fn run() -> eyre::Result<()> {
     ret
 }
 
-async fn next_tip(rpc: &mut Rpc, tip: u64, delay: Duration, probe: Duration) -> eyre::Result<Block> {
+async fn next_tip(
+    rpc: &mut Rpc,
+    tip: u64,
+    delay: Duration,
+    probe: Duration,
+) -> eyre::Result<Block> {
     let now = Instant::now();
     loop {
         if let Ok(block) = rpc.block(tip + 1).await {

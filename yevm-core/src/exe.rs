@@ -564,10 +564,10 @@ impl Executor {
         state.inc_nonce(&self.call.by, Int::ONE);
 
         let eip7702_refund =
-            crate::eip7702::apply_authorization_list(&tx, tx.chain_id.as_u64(), state, chain)
+            crate::eip7702::apply_authorization_list(tx, tx.chain_id.as_u64(), state, chain)
                 .await?;
 
-        let (intrinsic, floor, effective_gas_price) = intrinsic(&self.call, &tx, &head, state)?;
+        let (intrinsic, floor, effective_gas_price) = intrinsic(&self.call, tx, head, state)?;
         self.effective_gas_price = effective_gas_price;
         if (self.call.gas as i64) < intrinsic {
             return Err(Error::GasTooLow {
@@ -612,8 +612,8 @@ impl Executor {
                 result.gas_mut().refund += eip7702_refund;
                 let gas_final = finalized(
                     &self.call,
-                    &tx,
-                    &head,
+                    tx,
+                    head,
                     effective_gas_price,
                     &result,
                     state,
@@ -668,8 +668,8 @@ impl Executor {
             result.gas_mut().refund += eip7702_refund;
             let gas_final = finalized(
                 &self.call,
-                &tx,
-                &head,
+                tx,
+                head,
                 effective_gas_price,
                 &result,
                 state,
@@ -1126,8 +1126,8 @@ impl Executor {
         result.gas_mut().refund += eip7702_refund;
         let gas_final = finalized(
             &self.call,
-            &tx,
-            &head,
+            tx,
+            head,
             effective_gas_price,
             &result,
             state,

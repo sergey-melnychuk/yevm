@@ -15,8 +15,7 @@
 //! touched. Two scenarios are recorded against the SAME pinned block:
 //!
 //!   * baseline  -- the victim swaps alone.
-//!   * sandwich  -- front-run, victim, back-run, sharing one state so each trade
-//!                  sees the previous trade's price impact.
+//!   * sandwich  -- front-run, victim, back-run, sharing one state so each trade sees the previous trade's price impact.
 //!
 //! Comparing the victim's WETH in the two scenarios is the harm the attack does.
 //!
