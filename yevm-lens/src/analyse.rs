@@ -1,24 +1,24 @@
 use yevm_base::{Acc, Int};
 use yevm_core::trace::{Event, Target, Trace};
-use yevm_misc::buf::Buf;
+use yevm_misc::{buf::Buf, hex::parse};
 
 use crate::{
     Alerts, Erc20Approval, Erc20Transfer, Erc721Transfer, EthChange, FeeInfo, ForgedTransfer,
-    ProxySwap, Swap, SwapProtocol, TokenAmount,
+    ProxyUpgrade, Swap, SwapProtocol, TokenAmount,
 };
 
 // keccak256("Transfer(address,address,uint256)")
 const TOPIC_TRANSFER: [u8; 32] =
-    hex_lit!("ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef");
+    parse("ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef");
 // keccak256("Approval(address,address,uint256)")
 const TOPIC_APPROVAL: [u8; 32] =
-    hex_lit!("8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925");
+    parse("8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925");
 // keccak256("Swap(address,uint256,uint256,uint256,uint256,address)") -- Uniswap V2 pair
 const TOPIC_SWAP_V2: [u8; 32] =
-    hex_lit!("d78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822");
+    parse("d78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822");
 // keccak256("Swap(address,address,int256,int256,uint160,uint128,int24)") -- Uniswap V3 pool
 const TOPIC_SWAP_V3: [u8; 32] =
-    hex_lit!("c42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67");
+    parse("c42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67");
 
 // ABI-encoded address: 12 zero bytes + 20-byte address
 fn abi_addr(int: &Int) -> Option<Acc> {
@@ -151,7 +151,7 @@ pub fn analyse(traces: &[Trace]) -> Alerts {
                             // Require the old impl to have been called or code-loaded:
                             // real proxy upgrades route through the old impl first.
                             if old_impl != new_impl && interacted.contains(&old_impl) {
-                                alerts.proxy_swaps.push(ProxySwap {
+                                alerts.proxy_upgrades.push(ProxyUpgrade {
                                     proxy: *acc,
                                     slot: *key,
                                     old_impl,
@@ -428,33 +428,6 @@ fn buf_to_int(b: &Buf) -> Option<Int> {
     Some(Int::from(s))
 }
 
-// Compile-time hex literal → [u8; N]
-macro_rules! hex_lit {
-    ($s:literal) => {{
-        const fn parse(s: &[u8]) -> [u8; 32] {
-            let mut out = [0u8; 32];
-            let mut i = 0;
-            while i < 32 {
-                let hi = hex_nibble(s[i * 2]);
-                let lo = hex_nibble(s[i * 2 + 1]);
-                out[i] = (hi << 4) | lo;
-                i += 1;
-            }
-            out
-        }
-        const fn hex_nibble(b: u8) -> u8 {
-            match b {
-                b'0'..=b'9' => b - b'0',
-                b'a'..=b'f' => b - b'a' + 10,
-                b'A'..=b'F' => b - b'A' + 10,
-                _ => panic!("invalid hex"),
-            }
-        }
-        parse($s.as_bytes())
-    }};
-}
-use hex_lit;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn detects_proxy_swap() {
+    fn detects_proxy_upgrade() {
         let old_impl = addr("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         let new_impl = addr("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
         let proxy = addr("0xcccccccccccccccccccccccccccccccccccccccc");
@@ -543,10 +516,10 @@ mod tests {
         ];
 
         let alerts = analyse(&traces);
-        assert_eq!(alerts.proxy_swaps.len(), 1);
-        assert_eq!(alerts.proxy_swaps[0].old_impl, old_impl);
-        assert_eq!(alerts.proxy_swaps[0].new_impl, new_impl);
-        assert_eq!(alerts.proxy_swaps[0].proxy, proxy);
+        assert_eq!(alerts.proxy_upgrades.len(), 1);
+        assert_eq!(alerts.proxy_upgrades[0].old_impl, old_impl);
+        assert_eq!(alerts.proxy_upgrades[0].new_impl, new_impl);
+        assert_eq!(alerts.proxy_upgrades[0].proxy, proxy);
     }
 
     #[test]
@@ -568,7 +541,7 @@ mod tests {
             ),
         )];
 
-        assert_eq!(analyse(&traces).proxy_swaps.len(), 0);
+        assert_eq!(analyse(&traces).proxy_upgrades.len(), 0);
     }
 
     #[test]
@@ -586,7 +559,7 @@ mod tests {
                 addr_as_storage(&impl_addr), // same → no swap
             ),
         )];
-        assert_eq!(analyse(&traces).proxy_swaps.len(), 0);
+        assert_eq!(analyse(&traces).proxy_upgrades.len(), 0);
     }
 
     #[test]
@@ -605,7 +578,7 @@ mod tests {
                 addr_as_storage(&new_impl),
             ),
         )];
-        assert_eq!(analyse(&traces).proxy_swaps.len(), 0);
+        assert_eq!(analyse(&traces).proxy_upgrades.len(), 0);
     }
 
     // Build a Hash trace + balance Store trace for one ERC-20 holder at mapping slot 0.

@@ -4,6 +4,17 @@ pub use analyse::analyse;
 
 use serde::{Deserialize, Serialize};
 use yevm_base::{Acc, Int};
+use yevm_core::trace::filter;
+
+pub const FILTER: u32 = filter::HASH
+    | filter::CALL
+    | filter::GET
+    | filter::PUT
+    | filter::RETURN
+    | filter::REVERT
+    | filter::HALT
+    | filter::FEE
+    | filter::LOG;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,7 +53,7 @@ pub struct Erc721Transfer {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ProxySwap {
+pub struct ProxyUpgrade {
     pub proxy: Acc,
     pub slot: Int,
     pub old_impl: Acc,
@@ -115,7 +126,7 @@ pub struct Swap {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Alerts {
-    pub proxy_swaps: Vec<ProxySwap>,
+    pub proxy_upgrades: Vec<ProxyUpgrade>,
     pub eth_changes: Vec<EthChange>,
     pub erc20_transfers: Vec<Erc20Transfer>,
     pub erc20_approvals: Vec<Erc20Approval>,
