@@ -1,10 +1,16 @@
 mod analyse;
+pub mod quotes;
 
 pub use analyse::analyse;
 
 use serde::{Deserialize, Serialize};
-use yevm_base::{Acc, Int};
+use yevm_base::{Acc, Int, acc};
 use yevm_core::trace::filter;
+
+/// Sentinel "token" address representing native ETH in swap flows (EIP-7528).
+/// Used in [`TokenAmount::token`] when a swap leg is native ETH rather than an
+/// ERC-20 (e.g. an ETH -> token swap routed through a WETH wrap).
+pub const ETH: Acc = acc("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
 
 pub const FILTER: u32 = filter::HASH
     | filter::CALL
@@ -93,7 +99,13 @@ pub struct TokenAmount {
 pub enum SwapProtocol {
     UniswapV2,
     UniswapV3,
-    /// Both V2 and V3 pools appeared (e.g. a multi-leg route across versions).
+    UniswapV4,
+    /// Balancer vault (V2 or V3); the vault itself holds the pool tokens, so
+    /// it is the account the flows identify as the pool.
+    Balancer,
+    /// Curve stable or crypto pool (`TokenExchange`).
+    Curve,
+    /// Pools of more than one protocol appeared (a multi-leg route across versions).
     Mixed,
     /// Detected purely from confirmed token flows; no verified pool event.
     Unknown,
@@ -102,17 +114,23 @@ pub enum SwapProtocol {
 /// A token swap, reconstructed end-to-end from the trace.
 ///
 /// The result is stated from the swapper's point of view: `sold` is what left
-/// their account (net), `bought` (a.k.a. tokens taken) is what arrived (net).
-/// Intermediate hops of a multi-leg route cancel out and do not appear here --
-/// they show up as the `pools` that were touched, in execution order.
+/// the swapper's account (net), `bought` (a.k.a. tokens taken) is what arrived
+/// (net, at `recipient`). Native ETH legs appear under the [`ETH`] sentinel
+/// token. Intermediate hops of a multi-leg route cancel out and do not appear
+/// here -- they show up as the `pools` that were touched, in execution order.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Swap {
-    /// The account whose net token flow defines the swap (the tx sender).
+    /// The account that paid the input side. Derived from the token flows and
+    /// the call graph -- a bot/settlement contract holding the funds counts,
+    /// not merely the tx sender.
     pub swapper: Acc,
+    /// The account that received the output side. Usually == `swapper`, but
+    /// routers can pay out to a different recipient.
+    pub recipient: Acc,
     /// Tokens the swapper net sent (the input side).
     pub sold: Vec<TokenAmount>,
-    /// Tokens the swapper net received (the output side; "tokens taken").
+    /// Tokens the recipient net received (the output side; "tokens taken").
     pub bought: Vec<TokenAmount>,
     /// Pools touched, de-duplicated in first-seen order. Derived from token
     /// flows (an address that took in one token and paid out another), NOT from
