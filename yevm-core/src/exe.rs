@@ -302,7 +302,7 @@ pub fn intrinsic(
         state.warm_acc(&to);
     }
     state.warm_acc(&head.coinbase);
-    for i in 1u64..=0xa {
+    for i in 1u64..=0x11 {
         state.warm_acc(&Acc::from(i));
     }
     state.warm_acc(&Acc::from(0x100u64)); // p256verify precompile

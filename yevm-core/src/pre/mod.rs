@@ -1,4 +1,5 @@
 mod blake2f;
+mod bls12_381;
 mod bn128;
 mod ecrecover;
 mod identity;
@@ -22,6 +23,7 @@ pub fn run(id: u64, input: &[u8], gas_limit: i64) -> (bool, Vec<u8>, i64) {
         8 => bn128::ec_pairing(input, gas_limit),
         9 => blake2f::blake2f(input, gas_limit),
         0xa => kzg::point_evaluation(input, gas_limit),
+        0x0b..=0x11 => bls12_381::run(id, input, gas_limit),
         0x100 => p256verify::p256verify(input, gas_limit),
         _ => (true, vec![], 0),
     }
