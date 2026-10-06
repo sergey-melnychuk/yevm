@@ -554,12 +554,16 @@ impl State for Cache {
     fn apply(&mut self) {
         let destroyed = std::mem::take(&mut self.destroyed);
         for acc in destroyed {
-            if let Some(entry) = self.accounts.get_mut(&acc) {
-                // do not reset nonce for self-destructed contracts
-                entry.account.value = Int::ZERO;
-                entry.account.code = (Buf::default(), Int::ZERO);
-                entry.storage.clear();
-            }
+            // EIP-6780 (Cancun): only contracts created in the same tx reach
+            // `destroyed` (the SELFDESTRUCT op gates on created-in-same-tx),
+            // and for those the account is deleted entirely -- balance, code,
+            // storage, AND nonce. Keeping the nonce made a later CREATE2 at
+            // the same address (same salt, next tx/block) hit the collision
+            // check and drain all gas. Replace the entry with an explicitly
+            // empty account rather than removing it, so follow-up reads see
+            // the post-destruction state instead of refetching stale pre-tx
+            // state from the chain backend.
+            self.accounts.insert(acc, AccountEntry::default());
             self.created.remove(&acc);
         }
     }
@@ -592,5 +596,55 @@ impl Cache {
         }
         ret.sort_by_key(|(acc, _, _)| *acc);
         ret
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use yevm_base::acc::acc;
+
+    /// EIP-6780 regression: a contract created and self-destructed in the
+    /// same tx is deleted entirely at `apply()` — balance, code, storage,
+    /// AND nonce. A retained nonce makes a later CREATE2 at the same address
+    /// (same salt, next tx/block) fail the collision check and drain all gas
+    /// (seen on mainnet replay: block 26135267, same-salt redeployer bot).
+    #[test]
+    fn apply_deletes_same_tx_destroyed_account_entirely() {
+        let target = acc("0x00000000000000000000000000000000000000d9");
+        let mut cache = Cache::new();
+
+        // What CREATE does: fresh account with nonce 1 (EIP-161), then the
+        // deployed contract writes code and storage and receives value.
+        cache.create(
+            target,
+            Account {
+                value: Int::from(5u32),
+                nonce: Int::ONE,
+                code: (Buf::default(), Int::ZERO),
+            },
+        );
+        cache.set_code(&target, vec![0x60, 0x00].into(), Int::from(7u32));
+        cache.init(&target, &Int::from(1u32), Int::ZERO);
+        cache.put(&target, &Int::from(1u32), Int::from(42u32));
+        assert_eq!(cache.nonce(&target), Some(Int::ONE));
+
+        // Same-tx SELFDESTRUCT, then tx-end apply.
+        cache.destroy(&target);
+        cache.apply();
+
+        let account = cache.acc(&target).expect("entry stays, explicitly empty");
+        assert!(account.nonce.is_zero(), "nonce must be cleared (EIP-6780)");
+        assert!(account.value.is_zero(), "balance must be cleared");
+        assert!(account.code.0.is_empty(), "code must be cleared");
+        assert_eq!(
+            cache.get(&target, &Int::from(1u32)),
+            None,
+            "storage must be cleared"
+        );
+        assert!(
+            cache.created().is_empty() && cache.destroyed().is_empty(),
+            "create/destroy bookkeeping must be drained"
+        );
     }
 }
