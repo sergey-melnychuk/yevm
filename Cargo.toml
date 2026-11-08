@@ -17,7 +17,6 @@ members = [
 #codegen-units = 1
 opt-level = 3
 panic = "abort"
-debug = true
 lto = "fat"
 
 [workspace.dependencies]
@@ -40,3 +39,18 @@ yevm-core = { version = "0.1.0", path = "./yevm-core" }
 yevm-lens = { version = "0.1.0", path = "./yevm-lens" }
 yevm-misc = { version = "0.1.0", path = "./yevm-misc" }
 yevm-wasm = { version = "0.1.0", path = "./yevm-wasm" }
+
+# Mirrors the [patch] sections of reth's workspace Cargo.toml at the tag pinned
+# in yevm-reth/Cargo.toml (patches of a git dependency are not inherited by
+# consumers). Re-sync these revs whenever that tag is bumped.
+[patch."https://github.com/alloy-rs/evm2"]
+evm2 = { git = "https://github.com/DaniPopes/evm2", rev = "592bf18c4e22fff54ac9b4db606c4ee276e345cb" }
+evm2-inspectors = { git = "https://github.com/DaniPopes/evm2", rev = "592bf18c4e22fff54ac9b4db606c4ee276e345cb" }
+
+[patch.crates-io]
+reth-codecs = { git = "https://github.com/paradigmxyz/reth-core", rev = "275ce4cf5befeb9f1e8acd935ff2882d2d25fc61" }
+reth-codecs-derive = { git = "https://github.com/paradigmxyz/reth-core", rev = "275ce4cf5befeb9f1e8acd935ff2882d2d25fc61" }
+reth-primitives-traits = { git = "https://github.com/paradigmxyz/reth-core", rev = "275ce4cf5befeb9f1e8acd935ff2882d2d25fc61" }
+reth-rpc-traits = { git = "https://github.com/paradigmxyz/reth-core", rev = "275ce4cf5befeb9f1e8acd935ff2882d2d25fc61" }
+reth-zstd-compressors = { git = "https://github.com/paradigmxyz/reth-core", rev = "275ce4cf5befeb9f1e8acd935ff2882d2d25fc61" }
+#librocksdb-sys = { path = "/home/work/.local/share/rocksdb-patched-vendors/librocksdb-sys-0.17.3+10.4.2" }

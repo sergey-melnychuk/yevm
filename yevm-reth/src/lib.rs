@@ -1,17 +1,30 @@
 //! `Chain` implementation that reads state and blocks directly from a local
 //! reth MDBX datadir instead of JSON-RPC.
 //!
-//! Scope: latest state by default (`factory.latest()`, via `head`/`block`),
-//! plus any earlier block still within the node's retained account/storage
-//! history via [`RethDb::pin`] (`factory.history_by_block_number()` --
-//! see the `account_history`/`storage_history` prune distance in
-//! `reth.toml`). No reorg handling, and nothing older than that retained
-//! window -- `pin` fails naturally past it rather than guessing.
+//! Scope: state at the datadir's *state frontier* by default (see
+//! [`RethDb::state_frontier`]), plus any earlier block still within the
+//! node's retained account/storage history via [`RethDb::pin`] -- see the
+//! `account_history`/`storage_history` prune distance in `reth.toml`. No
+//! reorg handling, and nothing older than that retained window -- `pin`
+//! fails naturally past it rather than guessing.
+//!
+//! State is never read via `ProviderFactory::latest()`: since reth 2.10 a
+//! live node persists blocks with *state masking* (the newest
+//! `--engine.num-state-masking-blocks`, 30 by default, of the persisted
+//! blocks get their hashed-state/trie writes deferred, and keys they touch
+//! are left stale on disk). With `storage_v2` (hashed state only, no plain
+//! state tables) `latest()` therefore returns a mix of block heights for
+//! hot keys. The node itself only ever reads that range through its
+//! in-memory chain; from disk alone, state is exact only up to
+//! `FinishCheckpoint::partial_state_trie`, reached through reth's overlay
+//! (`BlockchainProvider::history_by_block_number`, which reverts changesets
+//! back from the persisted tip).
 //!
 //! API verified against reth's own `examples/db-access` and
 //! `examples/full-contract-state` at tag `v2.5.1`
-//! (<https://github.com/paradigmxyz/reth/tree/v2.5.1/examples>); compiles
-//! clean against that tag.
+//! (<https://github.com/paradigmxyz/reth/tree/v2.5.1/examples>); bumped to
+//! `v2.10.0` (evm2-based; needs reth's `[patch]` entries mirrored in the
+//! workspace `Cargo.toml`).
 //!
 //! Deliberately **not** using `tokio::task::spawn_blocking` around these
 //! MDBX reads: they're memory-mapped point lookups against a page cache
@@ -37,12 +50,14 @@ use reth_ethereum::{
     node::EthereumNode,
     provider::{
         AccountReader, BlockNumReader, BlockReader, ChainSpecProvider, HeaderProvider,
-        StateProvider, StateProviderBox, TransactionVariant,
-        providers::{DatabaseProviderRO, ProviderFactory, ReadOnlyConfig},
+        StageCheckpointReader, StateProvider, StateProviderBox, StateProviderFactory,
+        TransactionVariant,
+        providers::{BlockchainProvider, DatabaseProviderRO, ProviderFactory, ReadOnlyConfig},
     },
     tasks::{RayonConfig, Runtime, RuntimeBuilder, RuntimeConfig, TokioConfig},
 };
 use reth_node_types::NodeTypesWithDBAdapter;
+use reth_stages_types::StageId;
 
 use yevm_base::{Acc, Int};
 use yevm_core::{
@@ -91,24 +106,61 @@ fn minimal_runtime() -> eyre::Result<Runtime> {
     Ok(RuntimeBuilder::new(config).build()?)
 }
 
+/// See [`RethDb::state_frontier`].
+fn state_frontier(provider: &Provider) -> eyre::Result<u64> {
+    let finish = provider
+        .get_stage_checkpoint(StageId::Finish)?
+        .ok_or_else(|| eyre::eyre!("reth: datadir has no Finish stage checkpoint"))?;
+    Ok(finish
+        .finish_stage_checkpoint()
+        .and_then(|finish| finish.partial_state_trie())
+        .unwrap_or(finish.block_number))
+}
+
+/// Post-state of `block`, through reth's overlay rather than
+/// `ProviderFactory::latest()` (see module docs). `BlockchainProvider` is
+/// built fresh per call so its view of the tip matches the caller's just-
+/// refreshed `frontier`; it's a handful of point reads, not a real cost.
+fn state_at(factory: &Factory, block: u64, frontier: u64) -> eyre::Result<StateProviderBox> {
+    eyre::ensure!(
+        block <= frontier,
+        "reth: state after block {block} is not exactly readable from disk yet \
+         (state frontier is {frontier}; the node defers state writes for its newest \
+         persisted blocks, see `--engine.num-state-masking-blocks`)"
+    );
+    let state = BlockchainProvider::new(factory.clone())
+        .context("reth: BlockchainProvider::new")?
+        .history_by_block_number(block)
+        .with_context(|| format!("reth: history_by_block_number({block})"))?;
+    // The overlay is built lazily on first read -- force it now so an
+    // unreachable block (e.g. changesets already pruned) fails here, in
+    // `pin`, rather than mid-replay inside some `Chain` call.
+    state
+        .basic_account(&Address::ZERO)
+        .with_context(|| format!("reth: building state overlay at block {block}"))?;
+    Ok(state)
+}
+
 pub struct RethDb {
     factory: Factory,
-    /// Pinned MDBX read snapshot -- does *not* auto-advance as the node
-    /// keeps writing. Call [`RethDb::refresh`] between blocks.
+    /// Pinned state view (see [`RethDb::pin`]) -- does *not* auto-advance
+    /// as the node keeps writing.
     state: Mutex<StateProviderBox>,
     /// Opened once and reused for `best_block_number`/`head`/`block`.
     /// `factory.provider()` opens a fresh MDBX read transaction *and* calls
     /// reth's internal `sync_providers_if_needed()` (re-syncing against the
     /// live node's static-file/checkpoint state) on every call -- real,
     /// measurable cost if paid once per call instead of once per process.
-    /// Re-pinned in [`RethDb::refresh`] alongside `state`.
+    /// Re-opened by [`RethDb::refresh_provider`] (and so by `pin`).
     provider: Mutex<Provider>,
 }
 
 impl RethDb {
     /// Opens `datadir` read-only alongside the running node and pins state
-    /// at the current tip. Synchronous like `refresh()` -- see module docs
-    /// on why these don't go through `spawn_blocking`.
+    /// at the current [state frontier](Self::state_frontier) -- the newest
+    /// block whose post-state is exactly readable from disk, *not* the
+    /// persisted tip. Synchronous like `refresh()` -- see module docs on why
+    /// these don't go through `spawn_blocking`.
     pub fn latest(datadir: impl Into<PathBuf>) -> eyre::Result<Self> {
         let datadir = datadir.into();
 
@@ -123,8 +175,9 @@ impl RethDb {
             ReadOnlyConfig::from_datadir(datadir),
             runtime,
         )?;
-        let state = factory.latest().context("reth: factory.latest()")?;
         let provider = factory.provider().context("reth: provider")?;
+        let frontier = state_frontier(&provider)?;
+        let state = state_at(&factory, frontier, frontier)?;
 
         Ok(Self {
             factory,
@@ -148,36 +201,44 @@ impl RethDb {
     }
 
     /// Pins state to right before block `target` executes -- i.e. the
-    /// state resulting from block `target - 1`. Uses `factory.latest()`
-    /// when `target - 1` is the current persisted tip (the common case);
-    /// otherwise falls back to `factory.history_by_block_number()`, which
-    /// reconstructs state at any block still within the node's retained
-    /// account/storage history (`account_history`/`storage_history` prune
-    /// distance in `reth.toml` -- 10064 blocks / ~1.4 days by default on a
-    /// `--minimal` node). Errors if `target - 1` is older than that.
+    /// state resulting from block `target - 1` -- via reth's overlay
+    /// (changeset reverts back from the persisted tip). Works for any
+    /// `target - 1` from the [state frontier](Self::state_frontier) back to
+    /// the oldest block still within the node's retained account/storage
+    /// history (`account_history`/`storage_history` prune distance in
+    /// `reth.toml` -- 10064 blocks / ~1.4 days by default on a `--minimal`
+    /// node). Errors outside that window -- in particular for
+    /// `target > state_frontier() + 1`, even when that block is already
+    /// persisted (see module docs on state masking).
     ///
-    /// This does *not* mean any block within history is safe to replay --
-    /// `head`/`block` still read whatever's persisted regardless of this
-    /// pin, so the caller is responsible for only requesting a `target`
-    /// whose block data actually exists (`target <= best_block_number() +
-    /// 1`, after this call -- it refreshes the provider first, so the tip
-    /// it checks against is never stale from an earlier call).
+    /// Refreshes the provider first, so the frontier it checks against is
+    /// never stale from an earlier call.
     pub fn pin(&self, target: u64) -> eyre::Result<()> {
+        eyre::ensure!(target > 0, "reth: there is no state before genesis");
         self.refresh_provider()?;
-        let tip = self.best_block_number()?;
-        let state = if target == 0 || target - 1 == tip {
-            self.factory.latest().context("reth: factory.latest()")?
-        } else {
-            self.factory
-                .history_by_block_number(target - 1)
-                .context("reth: history_by_block_number")?
-        };
+        let frontier = self.state_frontier()?;
+        let state = state_at(&self.factory, target - 1, frontier)?;
         *self.state.lock().unwrap() = state;
         Ok(())
     }
 
+    /// The newest block whose *post*-state can be read exactly from this
+    /// datadir (as of the last `latest()`/`refresh_provider()` call), and so
+    /// the newest block `target - 1` that [`Self::pin`] accepts -- i.e. the
+    /// next block that can be replayed is `state_frontier() + 1`.
+    ///
+    /// This is `FinishCheckpoint::partial_state_trie` when the node is
+    /// state-masking (reth >= 2.10 default: up to 30 blocks behind
+    /// [`Self::best_block_number`]), and equal to it otherwise (e.g. a node
+    /// run with `--engine.num-state-masking-blocks 0`).
+    pub fn state_frontier(&self) -> eyre::Result<u64> {
+        state_frontier(&self.provider.lock().unwrap())
+    }
+
     /// The highest block number actually *persisted* to this datadir as of
-    /// the last `latest()`/`refresh_provider()` call -- can lag the number
+    /// the last `latest()`/`refresh_provider()` call. Block data (headers,
+    /// bodies, receipts) is readable up to here, but state only up to
+    /// [`Self::state_frontier`]. Can lag the number
     /// an RPC's `eth_blockNumber`/`"latest"` reports by a few blocks even
     /// when fresh (a live-following node holds recent blocks in an
     /// in-memory canonical chain before flushing them to MDBX/static

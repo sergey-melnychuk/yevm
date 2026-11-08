@@ -28,8 +28,12 @@ async fn main() -> eyre::Result<()> {
     let datadir = std::env::var("RETH_DATADIR")?;
     let rpc_url = std::env::var("YEVM_RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:8545/".into());
 
+    // `RethDb` pins state at its state frontier (not the persisted tip, see
+    // `RethDb::state_frontier`), so compare RPC at that same block.
     let db = RethDb::latest(datadir)?;
-    let rpc = Rpc::latest(rpc_url).await?;
+    let frontier = db.state_frontier()?;
+    let rpc = Rpc::number(rpc_url.clone(), frontier).await?;
+    let rpc_tip = Rpc::latest(rpc_url).await?.block_number;
 
     let via_db = db.get(&acc, &key).await?;
     let via_rpc = rpc.get(&acc, &key).await?;
@@ -59,9 +63,10 @@ async fn main() -> eyre::Result<()> {
 
     let db_tip = db.best_block_number()?;
     println!("---");
+    println!("db state frontier: {frontier} (state compared at this block)");
     println!("db persisted tip:  {db_tip}");
-    println!("rpc reported tip:  {}", rpc.block_number);
-    println!("lag: {}", rpc.block_number.saturating_sub(db_tip));
+    println!("rpc reported tip:  {rpc_tip}");
+    println!("lag: {}", rpc_tip.saturating_sub(db_tip));
 
     // A few blocks behind the DB's own persisted tip (not RPC's), so both
     // backends definitely see the exact same, already-finalized block.

@@ -23,6 +23,7 @@ alloy-eips = { version = "2.3", default-features = false }
 # Not published to crates.io in a consumable form -- reth's own examples
 # consume these via a pinned git tag. Match this tag to `reth --version`
 # on the node this points at (bump alongside it).
-reth-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v2.5.1", features = ["node"] }
-reth-node-types = { git = "https://github.com/paradigmxyz/reth", tag = "v2.5.1" }
-reth-db = { git = "https://github.com/paradigmxyz/reth", tag = "v2.5.1", default-features = false }
+reth-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v2.10.0", features = ["node"] }
+reth-node-types = { git = "https://github.com/paradigmxyz/reth", tag = "v2.10.0" }
+reth-db = { git = "https://github.com/paradigmxyz/reth", tag = "v2.10.0", default-features = false }
+reth-stages-types = { git = "https://github.com/paradigmxyz/reth", tag = "v2.10.0", default-features = false }
