@@ -1,7 +1,15 @@
 use std::fmt;
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Hex<const N: usize>([u8; N]);
+
+// The bytes alone: every value has the same length, so the length prefix that hashing a slice
+// adds carries no information and costs a hasher call per key.
+impl<const N: usize> std::hash::Hash for Hex<N> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write(&self.0);
+    }
+}
 
 impl<const N: usize> Hex<N> {
     pub const N: usize = N;
@@ -28,7 +36,13 @@ impl<const N: usize> Hex<N> {
     }
 
     pub fn is_zero(&self) -> bool {
-        self == &Self::ZERO
+        // A branch-free reduction, which compiles to a few vector instructions.
+        self.0.iter().fold(0, |acc, byte| acc | byte) == 0
+    }
+
+    /// Returns the bytes (big-endian for numbers).
+    pub const fn to_bytes(&self) -> [u8; N] {
+        self.0
     }
 
     pub fn as_usize(&self) -> usize {
@@ -44,6 +58,16 @@ impl<const N: usize> Hex<N> {
             return None;
         }
         Some(self.as_usize())
+    }
+
+    /// Returns the value as `u64`, or `u64::MAX` if it does not fit (unlike [`Self::as_u64`],
+    /// which keeps only the low 64 bits).
+    pub fn as_u64_saturating(&self) -> u64 {
+        const K: usize = size_of::<u64>();
+        if self.0[..N - K].iter().any(|&b| b != 0) {
+            return u64::MAX;
+        }
+        self.as_u64()
     }
 
     pub fn as_u128(&self) -> u128 {
@@ -282,6 +306,15 @@ pub const fn parse<const N: usize>(s: &str) -> [u8; N] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn as_u64_saturating_caps_large_values() {
+        let mut big = [0u8; 32];
+        big[15] = 2; // 2^129: the low 64 bits are zero
+        assert_eq!(Hex::<32>::new(big).as_u64(), 0);
+        assert_eq!(Hex::<32>::new(big).as_u64_saturating(), u64::MAX);
+        assert_eq!(Hex::<32>::from(42u64).as_u64_saturating(), 42);
+    }
 
     #[test]
     fn test_parse_empty() {

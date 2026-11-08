@@ -46,10 +46,10 @@ pub fn sload<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) ->
     evm.gas_charge(100)?;
     let [key] = evm.peek()?;
     let acc = ctx.this;
-    let Some((val, _)) = state.get(&acc, &key) else {
+    let Some((val, cold)) = state.get_warm(&acc, &key) else {
         return Err(EvmYield::Fetch(crate::evm::Fetch::StateCell(acc, key)));
     };
-    if state.warm_key(&acc, &key) {
+    if cold {
         evm.gas_charge(2000)?;
     }
     evm.push(val)?;
@@ -128,13 +128,11 @@ pub fn sstore<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -
     }
     let [key, val] = evm.peek()?;
     let acc = ctx.this;
-    let Some((cur, org)) = state.get(&acc, &key) else {
+    let Some((cur, org, is_cold)) = state.get_with_warmth(&acc, &key) else {
         return Err(EvmYield::Fetch(crate::evm::Fetch::StateCell(acc, key)));
     };
     let (mut gas, refund) = sstore_gas(val, cur, org);
-    let is_cold = state.is_cold_key(&acc, &key);
     if is_cold {
-        evm.warm_key(&acc, &key);
         gas += 2100;
     }
     evm.gas_charge(gas)?;
@@ -147,11 +145,10 @@ pub fn sstore<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -
         step.debug
             .push(format!("SSTORE: cold={is_cold} gas={gas} refund={refund}"));
     }
-    state.put(&acc, &key, val);
+    // Nothing after this point can fail, so the slot is warmed together with the write.
+    state.put_warm(&acc, &key, val);
     Ok(())
 }
-
-const JUMPDEST: u8 = 0x5B;
 
 pub fn jumpdest(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmResult<()> {
     evm.gas_charge(1)?;
@@ -161,15 +158,7 @@ pub fn jumpdest(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmR
 pub fn jump(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmResult<()> {
     evm.gas_charge(8)?;
     let [dst] = evm.peek()?;
-    let dst = dst.as_usize();
-    let ok = evm
-        .code
-        .get(dst)
-        .map(|op| op == &JUMPDEST)
-        .unwrap_or_default();
-    if !ok {
-        return Err(EvmYield::Halt(HaltReason::BadJump(dst)));
-    }
+    let dst = jump_destination(evm, dst)?;
     evm.pc = dst;
     Ok(())
 }
@@ -181,17 +170,19 @@ pub fn jumpi(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmResu
         evm.pc += 1;
         return Ok(());
     }
-    let dst = dst.as_usize();
-    let ok = evm
-        .code
-        .get(dst)
-        .map(|op| op == &JUMPDEST)
-        .unwrap_or_default();
-    if !ok {
-        return Err(EvmYield::Halt(HaltReason::BadJump(dst)));
-    }
+    let dst = jump_destination(evm, dst)?;
     evm.pc = dst;
     Ok(())
+}
+
+/// Returns `dst` if it is a `JUMPDEST` instruction, i.e. not a `0x5B` byte inside PUSH data.
+fn jump_destination(evm: &mut Evm, dst: Int) -> EvmResult<usize> {
+    match dst.as_usize_checked() {
+        Some(dst) if evm.is_jumpdest(dst) => Ok(dst),
+        dst => Err(EvmYield::Halt(HaltReason::BadJump(
+            dst.unwrap_or(usize::MAX),
+        ))),
+    }
 }
 
 pub fn pc(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmResult<()> {
@@ -242,4 +233,44 @@ pub fn mcopy(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmResu
     let data = evm.mem_get(offset, size)?.to_vec();
     evm.mem_put(dest_offset, size, &data)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::{call, ctx, state};
+    use super::*;
+    use crate::{call::Head, evm::Evm};
+
+    fn evm(code: Vec<u8>, stack: Vec<Int>) -> Evm {
+        let mut evm = Evm::new(Head::default(), code, 1000, Int::ONE, Int::ONE, vec![]);
+        evm.stack = stack.into_iter().map(crate::evm::word).collect();
+        evm
+    }
+
+    #[test]
+    fn jump_into_push_data_halts() {
+        // PUSH1 0x5B JUMPDEST: offset 1 is PUSH data, offset 2 is an instruction.
+        let code = vec![0x60, 0x5B, 0x5B];
+        let mut push_data = evm(code.clone(), vec![Int::from(1u32)]);
+        assert!(matches!(
+            jump(&mut push_data, &ctx(), &call(), &mut state()),
+            Err(EvmYield::Halt(HaltReason::BadJump(1)))
+        ));
+        let mut instruction = evm(code, vec![Int::from(2u32)]);
+        jump(&mut instruction, &ctx(), &call(), &mut state()).unwrap();
+        assert_eq!(instruction.pc, 2);
+    }
+
+    #[test]
+    fn jump_beyond_usize_halts() {
+        // 2^64 + 1 would truncate to the JUMPDEST at offset 1.
+        let mut dst = [0u8; 32];
+        dst[23] = 1;
+        dst[31] = 1;
+        let mut evm = evm(vec![0x00, 0x5B], vec![Int::new(dst)]);
+        assert!(matches!(
+            jump(&mut evm, &ctx(), &call(), &mut state()),
+            Err(EvmYield::Halt(HaltReason::BadJump(usize::MAX)))
+        ));
+    }
 }

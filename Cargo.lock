@@ -12379,7 +12379,6 @@ dependencies = [
 name = "yevm-core"
 version = "0.1.0"
 dependencies = [
- "ahash",
  "alloy-eip7702",
  "alloy-primitives",
  "ark-bls12-381 0.5.0",
@@ -12388,6 +12387,7 @@ dependencies = [
  "async-trait",
  "ethnum",
  "eyre",
+ "foldhash 0.2.0",
  "futures",
  "hex",
  "k256 0.13.4",

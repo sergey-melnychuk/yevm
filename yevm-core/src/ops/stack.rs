@@ -32,7 +32,7 @@ pub fn dup(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmResult
     evm.gas_charge(3)?;
     let op = evm.code[evm.pc];
     let n = idx(op) - 1;
-    let Some(int) = evm.stack.iter().rev().nth(n).copied() else {
+    let Some(int) = evm.stack.iter().rev().nth(n).copied().map(crate::evm::int) else {
         return Err(EvmYield::Halt(HaltReason::StackUnderflow));
     };
     evm.push(int)?;
@@ -68,7 +68,7 @@ mod tests {
     use crate::call::Head;
     use crate::{
         Int,
-        evm::{Evm, HaltReason},
+        evm::{Evm, HaltReason, int as to_int, word},
     };
 
     fn int(val: u64) -> Int {
@@ -91,7 +91,10 @@ mod tests {
         let mut evm = Evm::new(head, vec![0x5F], 1000, Int::ONE, Int::ONE, vec![]); // PUSH0
         push(&mut evm, &ctx(), &call(), &mut state()).unwrap();
         evm.apply(&mut state());
-        assert_eq!(evm.stack, vec![Int::ZERO]);
+        assert_eq!(
+            evm.stack.iter().map(|w| to_int(*w)).collect::<Vec<_>>(),
+            vec![Int::ZERO]
+        );
         assert_eq!(evm.pc, 0);
     }
 
@@ -101,7 +104,10 @@ mod tests {
         let mut evm = Evm::new(head, vec![0x60, 0x42], 1000, Int::ONE, Int::ONE, vec![]); // PUSH1 0x42
         push(&mut evm, &ctx(), &call(), &mut state()).unwrap();
         evm.apply(&mut state());
-        assert_eq!(evm.stack, vec![int(0x42)]);
+        assert_eq!(
+            evm.stack.iter().map(|w| to_int(*w)).collect::<Vec<_>>(),
+            vec![int(0x42)]
+        );
         assert_eq!(evm.pc, 1);
     }
 
@@ -118,7 +124,10 @@ mod tests {
         ); // PUSH2 0x0102
         push(&mut evm, &ctx(), &call(), &mut state()).unwrap();
         evm.apply(&mut state());
-        assert_eq!(evm.stack, vec![int(0x0102)]);
+        assert_eq!(
+            evm.stack.iter().map(|w| to_int(*w)).collect::<Vec<_>>(),
+            vec![int(0x0102)]
+        );
         assert_eq!(evm.pc, 2);
     }
 
@@ -133,7 +142,7 @@ mod tests {
         assert_eq!(evm.stack.len(), 1);
         assert_eq!(evm.pc, 32);
         let expected: Vec<u8> = (1u8..=32).collect();
-        assert_eq!(evm.stack[0], Int::from(expected.as_slice()));
+        assert_eq!(to_int(evm.stack[0]), Int::from(expected.as_slice()));
     }
 
     #[test]
@@ -144,7 +153,7 @@ mod tests {
         evm.apply(&mut state());
         assert_eq!(evm.stack.len(), 1);
         assert_eq!(evm.pc, 2);
-        assert_eq!(evm.stack[0], Int::from(0xFF00));
+        assert_eq!(to_int(evm.stack[0]), Int::from(0xFF00));
     }
 
     // --- DUP ---
@@ -154,10 +163,13 @@ mod tests {
         let a = int(1);
         let head = Head::default();
         let mut evm = Evm::new(head, vec![0x80], 1000, Int::ONE, Int::ONE, vec![]); // DUP1
-        evm.stack.push(a);
+        evm.stack.push(word(a));
         dup(&mut evm, &ctx(), &call(), &mut state()).unwrap();
         evm.apply(&mut state());
-        assert_eq!(evm.stack, vec![a, a]);
+        assert_eq!(
+            evm.stack.iter().map(|w| to_int(*w)).collect::<Vec<_>>(),
+            vec![a, a]
+        );
         assert_eq!(evm.pc, 0);
     }
 
@@ -166,10 +178,13 @@ mod tests {
         let (a, b) = (int(1), int(2));
         let head = Head::default();
         let mut evm = Evm::new(head, vec![0x81], 1000, Int::ONE, Int::ONE, vec![]); // DUP2
-        evm.stack.extend([a, b]);
+        evm.stack.extend([a, b].map(word));
         dup(&mut evm, &ctx(), &call(), &mut state()).unwrap();
         evm.apply(&mut state());
-        assert_eq!(evm.stack, vec![a, b, a]); // copies 2nd from top (a)
+        assert_eq!(
+            evm.stack.iter().map(|w| to_int(*w)).collect::<Vec<_>>(),
+            vec![a, b, a]
+        ); // copies 2nd from top (a)
         assert_eq!(evm.pc, 0);
     }
 
@@ -178,18 +193,18 @@ mod tests {
         let vals: Vec<Int> = (1..=16).map(int).collect();
         let head = Head::default();
         let mut evm = Evm::new(head, vec![0x8F], 1000, Int::ONE, Int::ONE, vec![]); // DUP16
-        evm.stack.extend(vals.iter().copied());
+        evm.stack.extend(vals.iter().copied().map(word));
         dup(&mut evm, &ctx(), &call(), &mut state()).unwrap();
         evm.apply(&mut state());
         assert_eq!(evm.stack.len(), 17);
-        assert_eq!(*evm.stack.last().unwrap(), int(1)); // copies bottom (16th from top)
+        assert_eq!(to_int(*evm.stack.last().unwrap()), int(1)); // copies bottom (16th from top)
     }
 
     #[test]
     fn test_dup_underflow() {
         let head = Head::default();
         let mut evm = Evm::new(head, vec![0x81], 1000, Int::ONE, Int::ONE, vec![]); // DUP2, but only 1 item on stack
-        evm.stack.push(int(1));
+        evm.stack.push(word(int(1)));
         let result = dup(&mut evm, &ctx(), &call(), &mut state());
         assert!(is_halt(result, HaltReason::StackUnderflow));
     }
@@ -209,10 +224,13 @@ mod tests {
         let (a, b) = (int(1), int(2));
         let head = Head::default();
         let mut evm = Evm::new(head, vec![0x90], 1000, Int::ONE, Int::ONE, vec![]); // SWAP1
-        evm.stack.extend([a, b]);
+        evm.stack.extend([a, b].map(word));
         swap(&mut evm, &ctx(), &call(), &mut state()).unwrap();
         evm.apply(&mut state());
-        assert_eq!(evm.stack, vec![b, a]); // top swapped with 2nd
+        assert_eq!(
+            evm.stack.iter().map(|w| to_int(*w)).collect::<Vec<_>>(),
+            vec![b, a]
+        ); // top swapped with 2nd
         assert_eq!(evm.pc, 0);
     }
 
@@ -221,10 +239,13 @@ mod tests {
         let (a, b, c) = (int(1), int(2), int(3));
         let head = Head::default();
         let mut evm = Evm::new(head, vec![0x91], 1000, Int::ONE, Int::ONE, vec![]); // SWAP2
-        evm.stack.extend([a, b, c]);
+        evm.stack.extend([a, b, c].map(word));
         swap(&mut evm, &ctx(), &call(), &mut state()).unwrap();
         evm.apply(&mut state());
-        assert_eq!(evm.stack, vec![c, b, a]); // top swapped with 3rd
+        assert_eq!(
+            evm.stack.iter().map(|w| to_int(*w)).collect::<Vec<_>>(),
+            vec![c, b, a]
+        ); // top swapped with 3rd
         assert_eq!(evm.pc, 0);
     }
 
@@ -233,11 +254,11 @@ mod tests {
         let vals: Vec<Int> = (1..=17).map(int).collect(); // need 17 items for SWAP16
         let head = Head::default();
         let mut evm = Evm::new(head, vec![0x9F], 1000, Int::ONE, Int::ONE, vec![]); // SWAP16
-        evm.stack.extend(vals.iter().copied());
+        evm.stack.extend(vals.iter().copied().map(word));
         swap(&mut evm, &ctx(), &call(), &mut state()).unwrap();
         evm.apply(&mut state());
-        assert_eq!(*evm.stack.last().unwrap(), int(1)); // bottom is now on top
-        assert_eq!(evm.stack[0], int(17)); // top is now on bottom
+        assert_eq!(to_int(*evm.stack.last().unwrap()), int(1)); // bottom is now on top
+        assert_eq!(to_int(evm.stack[0]), int(17)); // top is now on bottom
     }
 
     #[test]
@@ -252,7 +273,7 @@ mod tests {
     fn test_swap1_underflow_one() {
         let head = Head::default();
         let mut evm = Evm::new(head, vec![0x90], 1000, Int::ONE, Int::ONE, vec![]); // SWAP1 needs 2, has 1
-        evm.stack.push(int(1));
+        evm.stack.push(word(int(1)));
         let result = swap(&mut evm, &ctx(), &call(), &mut state());
         eprintln!("RESULT: {result:?}");
         assert!(is_halt(result, HaltReason::StackUnderflow));
@@ -262,7 +283,7 @@ mod tests {
     fn test_swap2_underflow() {
         let head = Head::default();
         let mut evm = Evm::new(head, vec![0x91], 1000, Int::ONE, Int::ONE, vec![]); // SWAP2 needs 3, has 2
-        evm.stack.extend([int(1), int(2)]);
+        evm.stack.extend([int(1), int(2)].map(word));
         let result = swap(&mut evm, &ctx(), &call(), &mut state());
         assert!(is_halt(result, HaltReason::StackUnderflow));
     }

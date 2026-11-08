@@ -56,9 +56,12 @@ pub fn callvalue(evm: &mut Evm, _: &Context, call: &Call, _: &mut dyn State) -> 
 
 pub fn calldataload(evm: &mut Evm, _: &Context, call: &Call, _: &mut dyn State) -> EvmResult<()> {
     evm.gas_charge(3)?;
-    let [offset] = evm.peek_usize()?;
+    let [offset] = evm.peek()?;
     let mut word = [0u8; 32];
-    if offset < call.data.0.len() {
+    // An offset beyond `usize` is beyond the calldata too.
+    if let Some(offset) = offset.as_usize_checked()
+        && offset < call.data.0.len()
+    {
         let copy = (call.data.0.len() - offset).min(32);
         word[..copy].copy_from_slice(&call.data.0[offset..offset + copy]);
     }
@@ -140,14 +143,14 @@ pub fn extcodesize<S: State>(evm: &mut Evm, _: &Context, _: &Call, state: &mut S
     evm.gas_charge(100)?;
     let [acc] = evm.peek()?;
     let acc: Acc = acc.to();
-    let Some((code, _)) = state.code(&acc) else {
+    let Some(size) = state.code_size(&acc) else {
         return Err(EvmYield::Fetch(Fetch::Code(acc)));
     };
     if state.is_cold_acc(&acc) {
         evm.warm_acc(&acc);
         evm.gas_charge(2_500)?;
     }
-    evm.push(code.0.len().into())?;
+    evm.push(size.into())?;
     Ok(())
 }
 
@@ -158,7 +161,7 @@ pub fn extcodecopy<S: State>(evm: &mut Evm, _: &Context, _: &Call, state: &mut S
     mem_check_int(dest_offset, size)?;
     let (dest_offset, size) = (dest_offset.as_usize(), size.as_usize());
 
-    let Some((code, _)) = state.code(&acc) else {
+    let Some((code, _)) = state.frame_code(&acc) else {
         return Err(EvmYield::Fetch(Fetch::Code(acc)));
     };
     if state.is_cold_acc(&acc) {
@@ -168,7 +171,7 @@ pub fn extcodecopy<S: State>(evm: &mut Evm, _: &Context, _: &Call, state: &mut S
     evm.mem_expand(dest_offset, size)?;
     evm.gas_charge(3 * size.div_ceil(32) as i64)?;
 
-    let code_len = code.0.len();
+    let code_len = code.len();
     let (lo, hi) = if offset >= Int::from(code_len) {
         (code_len, code_len)
     } else {
@@ -178,7 +181,7 @@ pub fn extcodecopy<S: State>(evm: &mut Evm, _: &Context, _: &Call, state: &mut S
     };
     let len = (lo..hi).len();
     if len > 0 {
-        let data = &code.0[lo..hi];
+        let data = &code[lo..hi];
         evm.mem_put(dest_offset, len, data)?;
     }
     if len < size {
@@ -274,7 +277,8 @@ pub fn extcodehash<S: State>(evm: &mut Evm, _: &Context, _: &Call, state: &mut S
 pub fn blockhash<S: State>(evm: &mut Evm, _: &Context, _: &Call, state: &mut S) -> EvmResult<()> {
     evm.gas_charge(20)?;
     let [number] = evm.peek()?;
-    let number = number.as_u64();
+    // A number beyond `u64` is in the future, which the check below rejects.
+    let number = number.as_u64_saturating();
     let current = evm.head.number.as_u64();
     // EVM spec: return 0 for current/future blocks and blocks older than 256
     if number >= current || current - number > 256 {
@@ -365,9 +369,7 @@ pub fn blobbasefee(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> E
     // almost certainly used Prague's fraction (5_007_716) against a block
     // already on BPO1/BPO2 -- hardcoded here to BPO2's value (11_684_671),
     // matching the same hardcode used for the fee deduction in `exe.rs`.
-    let fee = evm.head.excess_blob_gas.map_or(Int::ONE, |excess| {
-        Int::from(crate::call::blob_base_fee(excess.as_u64()))
-    });
+    let fee = evm.head.blob_fee().unwrap_or(Int::ONE);
     evm.push(fee)?;
     Ok(())
 }

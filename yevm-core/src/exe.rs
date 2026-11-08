@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use yevm_base::math::U256;
 use yevm_base::math::lift;
 use yevm_misc::keccak256;
@@ -7,7 +9,7 @@ use yevm_misc::buf::Buf;
 use crate::Fetch;
 use crate::Tx;
 use crate::call::Withdrawal;
-use crate::evm::{CallMode, Context, Evm, Gas, StepResult};
+use crate::evm::{CallMode, Context, Evm, Gas, HaltReason, StepResult};
 use crate::misc::{create_address, is_precompile};
 use crate::{Acc, Call, Error, Int, Result};
 use crate::{
@@ -96,7 +98,7 @@ pub async fn apply_withdrawals(
     let gwei_to_wei = lift(|[amount]| amount * U256::from(1_000_000_000u64));
     let add = lift(|[a, b]| a + b);
     for w in withdrawals {
-        if state.acc(&w.address).is_none() {
+        if !state.has_acc(&w.address) {
             fetch(Fetch::Account(w.address), state, chain).await?;
         }
         let amount_wei = gwei_to_wei([w.amount]);
@@ -149,7 +151,7 @@ async fn process_request_queue(
     // local mutation an earlier tx in this same block already made (this
     // predeploy may well have been touched by a tx before this runs, since
     // post_block executes after the whole tx loop, unlike pre_block).
-    if state.acc(&addr).is_none() {
+    if !state.has_acc(&addr) {
         fetch(Fetch::Account(addr), state, chain).await?;
     }
     if state
@@ -255,6 +257,24 @@ pub struct Executor {
     pub callstack: Vec<CallFrame>,
     /// Effective gas price for GASPRICE opcode (min(max_fee, base_fee + priority) for EIP-1559).
     effective_gas_price: Int,
+    /// Interpreter step budget for the whole transaction; `None` leaves gas as the only bound.
+    max_steps: Option<u64>,
+    /// Whether this is a system call (see [`Executor::system`]).
+    system: bool,
+    /// How the last finished frame ended; after [`Executor::run`], the transaction's outcome.
+    outcome: Option<Outcome>,
+}
+
+/// How the outermost frame of a transaction ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// `STOP`, `RETURN`, `SELFDESTRUCT`, or running off the end of the code.
+    Return,
+    /// `REVERT`.
+    Revert,
+    /// An exceptional halt, which consumes all gas of the frame (except
+    /// [`HaltReason::OutOfFunds`], which consumes only the intrinsic gas).
+    Halt(HaltReason),
 }
 
 pub struct CallFrame {
@@ -279,8 +299,8 @@ pub fn intrinsic(
     let mut floor = 21_000i64;
     let has_code = call
         .to
-        .and_then(|to| state.code(&to))
-        .is_some_and(|(c, _)| !c.0.is_empty());
+        .and_then(|to| state.code_size(&to))
+        .is_some_and(|size| size > 0);
     let is_create = call.is_create() && !has_code;
     if is_create {
         total += 32_000;
@@ -302,10 +322,7 @@ pub fn intrinsic(
         state.warm_acc(&to);
     }
     state.warm_acc(&head.coinbase);
-    for i in 1u64..=0x11 {
-        state.warm_acc(&Acc::from(i));
-    }
-    state.warm_acc(&Acc::from(0x100u64)); // p256verify precompile
+    // Precompiles are warm without being inserted: `State::is_cold_acc` reports them warm.
 
     // EIP-2930: access list gas (2400/address + 1900/storage key)
     for (acc, keys) in tx
@@ -376,10 +393,9 @@ pub fn intrinsic(
 
     // EIP-4844: blob gas cost = num_blobs × GAS_PER_BLOB × actual_blob_base_fee (never refunded).
     const GAS_PER_BLOB: u64 = 0x20000;
-    let blob_gas_cost = if let Some(excess) = head.excess_blob_gas {
-        let fee = crate::call::blob_base_fee(excess.as_u64());
+    let blob_gas_cost = if let Some(fee) = head.blob_fee() {
         let blob_gas = tx.blob_versioned_hashes.len() as u64 * GAS_PER_BLOB;
-        Int::from(blob_gas as u128 * fee)
+        mul([Int::from(blob_gas), fee])
     } else {
         Int::ZERO
     };
@@ -476,7 +492,36 @@ impl Executor {
             call,
             callstack: vec![],
             effective_gas_price: Int::ZERO,
+            max_steps: Some(MAX_STEPS),
+            system: false,
+            outcome: None,
         }
+    }
+
+    /// Returns how the transaction's outermost frame ended, once [`Executor::run`] returned a
+    /// result.
+    pub fn outcome(&self) -> Option<Outcome> {
+        self.outcome
+    }
+
+    /// Creates an executor for a system call, as used by EIP-4788, EIP-2935, EIP-7002 and
+    /// EIP-7251: `call.by` (the system address) calls `call.to` with `call.gas`, without
+    /// transaction validation, nonce increment, intrinsic gas, fee deduction or refunds, and
+    /// without loading the sender or the coinbase.
+    pub fn system(call: Call) -> Self {
+        Self {
+            system: true,
+            ..Self::new(call)
+        }
+    }
+
+    /// Sets the interpreter step budget; `None` leaves gas as the only bound on execution.
+    ///
+    /// The default budget is a safety net for simulation and can reject transactions that are
+    /// valid on chain (a 2^24 gas transaction can execute more than 10M `JUMPDEST`s).
+    pub fn with_max_steps(mut self, max_steps: Option<u64>) -> Self {
+        self.max_steps = max_steps;
+        self
     }
 
     pub async fn run(
@@ -495,14 +540,19 @@ impl Executor {
         // to which particular tx the event belongs.
         state.emit(Event::Tag(head.number.as_u64(), tx.index.as_u64(), tx.hash));
 
-        for acc in [&self.call.by, &head.coinbase] {
-            if state.acc(acc).is_none() {
+        let preloaded: &[&Acc] = if self.system {
+            &[]
+        } else {
+            &[&self.call.by, &head.coinbase]
+        };
+        for &acc in preloaded {
+            if !state.has_acc(acc) {
                 fetch(Fetch::Account(*acc), state, chain).await?;
                 state.warm_acc(acc);
             }
         }
         if let Some(acc) = self.call.to.as_ref()
-            && state.acc(acc).is_none()
+            && !state.has_acc(acc)
         {
             fetch(Fetch::Account(*acc), state, chain).await?;
             state.warm_acc(acc);
@@ -517,37 +567,35 @@ impl Executor {
             return Err(Error::UndefinedChainId);
         }
 
-        // Pre-transaction validation checks
+        // Pre-transaction validation checks (system calls are not transactions)
 
         // EIP-1559: max_fee_per_gas must cover base_fee
-        if !tx.max_fee_per_gas.is_zero() && tx.max_fee_per_gas < head.base_fee {
+        if !self.system && !tx.max_fee_per_gas.is_zero() && tx.max_fee_per_gas < head.base_fee {
             return Err(Error::MaxFeeLessThanBaseFee);
         }
 
         // EIP-1559: max_priority_fee must not exceed max_fee
-        if !tx.max_fee_per_gas.is_zero() && tx.max_priority_fee_per_gas > tx.max_fee_per_gas {
+        if !self.system
+            && !tx.max_fee_per_gas.is_zero()
+            && tx.max_priority_fee_per_gas > tx.max_fee_per_gas
+        {
             return Err(Error::PriorityGreaterThanMaxFee);
         }
 
         // Gas limit must not exceed block gas limit
         let gt = lift(|[a, b]| if a > b { U256::ONE } else { U256::ZERO });
-        if !gt([Int::from(self.call.gas), head.gas_limit]).is_zero() {
+        if !self.system && !gt([Int::from(self.call.gas), head.gas_limit]).is_zero() {
             return Err(Error::GasAllowanceExceeded);
         }
 
-        // EIP-3607: sender must be an EOA (no code)
-        if let Some(acc) = state.acc(&self.call.by)
-            && !(state.auth(&self.call.by).is_some() || acc.code.0.0.is_empty())
-        {
-            // TODO: FIXME: false positives
-            // return Err(Error::SenderNotEOA);
-        }
+        // EIP-3607 (senders without code) is not checked: the check had false positives, and
+        // embedders that need it validate transactions before executing them.
 
         let has_code = self
             .call
             .to
-            .and_then(|to| state.code(&to))
-            .is_some_and(|(c, _)| !c.0.is_empty())
+            .and_then(|to| state.code_size(&to))
+            .is_some_and(|size| size > 0)
             && self.call.to.and_then(|to| state.auth(&to)).is_none();
 
         // CREATE address uses sender nonce *before* the tx-level increment (YP / EIP-161).
@@ -559,15 +607,20 @@ impl Executor {
             CallMode::Call(0, 0)
         };
 
-        // Tx consumes one sender nonce before execution; EIP-7702 auth checks need this first
-        // when authority == sender (post-increment on-chain nonce vs signed tuple nonce).
-        state.inc_nonce(&self.call.by, Int::ONE);
+        let (eip7702_refund, (intrinsic, floor, effective_gas_price)) = if self.system {
+            (0, (0, 0, Int::ZERO))
+        } else {
+            // Tx consumes one sender nonce before execution; EIP-7702 auth checks need this
+            // first when authority == sender (post-increment on-chain nonce vs signed tuple
+            // nonce).
+            state.inc_nonce(&self.call.by, Int::ONE);
 
-        let eip7702_refund =
-            crate::eip7702::apply_authorization_list(tx, tx.chain_id.as_u64(), state, chain)
-                .await?;
+            let eip7702_refund =
+                crate::eip7702::apply_authorization_list(tx, tx.chain_id.as_u64(), state, chain)
+                    .await?;
 
-        let (intrinsic, floor, effective_gas_price) = intrinsic(&self.call, tx, head, state)?;
+            (eip7702_refund, intrinsic(&self.call, tx, head, state)?)
+        };
         self.effective_gas_price = effective_gas_price;
         if (self.call.gas as i64) < intrinsic {
             return Err(Error::GasTooLow {
@@ -576,10 +629,40 @@ impl Executor {
             });
         }
 
+        // A call to an account without code executes nothing, so it settles without a frame.
+        // Traced runs keep the frame for its call and return events, and an unpaid value goes
+        // through the frame's failure handling below.
+        if !self.system
+            && !state.records_trace()
+            && let Some(to) = self.call.to
+            && !is_precompile(&to)
+            && state.code_size(&to) == Some(0)
+            && (self.call.eth.is_zero()
+                || state.balance(&self.call.by).unwrap_or_default() >= self.call.eth)
+        {
+            transfer(&self.call, &mode, state);
+            let mut gas = Gas::new(self.call.gas);
+            gas.spent = intrinsic;
+            let mut result = CallResult::Done {
+                status: Int::ONE,
+                ret: Buf::default(),
+                gas,
+            };
+            self.outcome = Some(Outcome::Return);
+            result.gas_mut().refund += eip7702_refund;
+            let gas_final = self.settle(tx, head, effective_gas_price, &result, state, floor);
+            result.gas_mut().finalized = gas_final;
+            state.apply();
+            return Ok(result);
+        }
+
+        // One copy of the header for all frames of the transaction.
+        let frame_head = Arc::new(head.clone());
+
         // prepare() takes a checkpoint to be able to revert,
         // so all state mutations must come AFTER that to be included.
         let mut frame = prepare(
-            head.clone(),
+            frame_head.clone(),
             self.call.clone(),
             mode,
             None,
@@ -593,13 +676,14 @@ impl Executor {
         // For top-level CREATE: collision check + initialize with nonce=1 (EIP-161).
         // Done AFTER the checkpoint so it's reverted on init-code failure.
         if let CallMode::Create(created) = mode {
-            if state.acc(&created).is_none() {
+            if !state.has_acc(&created) {
                 fetch(Fetch::Account(created), state, chain).await?;
             }
             let existing_nonce = state.nonce(&created).unwrap_or(Int::ZERO);
-            let has_code = state.code(&created).is_some_and(|(c, _)| !c.0.is_empty());
+            let has_code = state.code_size(&created).is_some_and(|size| size > 0);
             if !existing_nonce.is_zero() || has_code {
                 // Collision: drain gas, revert, return failure
+                self.outcome = Some(Outcome::Halt(HaltReason::CreateCollision));
                 frame.evm.gas.drain();
                 let gas = frame.evm.gas;
                 state.revert_to(frame.checkpoint);
@@ -610,15 +694,7 @@ impl Executor {
                 };
                 let mut result = result;
                 result.gas_mut().refund += eip7702_refund;
-                let gas_final = finalized(
-                    &self.call,
-                    tx,
-                    head,
-                    effective_gas_price,
-                    &result,
-                    state,
-                    floor,
-                );
+                let gas_final = self.settle(tx, head, effective_gas_price, &result, state, floor);
                 result.gas_mut().finalized = gas_final;
                 state.apply();
                 return Ok(result);
@@ -635,6 +711,28 @@ impl Executor {
             );
             // EIP-2929: add newly created address to accessed_addresses
             state.warm_acc(&created);
+        }
+        // Validation guarantees the sender can pay the value unless the host skipped it (as
+        // `eth_call` does). Then, like a call, the transaction fails without executing, keeping
+        // its nonce increment and spending only its intrinsic gas.
+        if !self.call.eth.is_zero()
+            && state.balance(&self.call.by).unwrap_or_default() < self.call.eth
+        {
+            state.revert_to(frame.checkpoint);
+            let _ = frame.evm.gas_charge(intrinsic);
+            frame.evm.apply(state);
+            state.emit(Event::Halt(HaltReason::OutOfFunds, intrinsic.max(0) as u64));
+            self.outcome = Some(Outcome::Halt(HaltReason::OutOfFunds));
+            let mut result = CallResult::Done {
+                status: Int::ZERO,
+                ret: vec![].into(),
+                gas: frame.evm.gas,
+            };
+            result.gas_mut().refund += eip7702_refund;
+            let gas_final = self.settle(tx, head, effective_gas_price, &result, state, floor);
+            result.gas_mut().finalized = gas_final;
+            state.apply();
+            return Ok(result);
         }
         transfer(&self.call, &mode, state);
         let _ = frame.evm.gas_charge(intrinsic);
@@ -654,8 +752,12 @@ impl Executor {
 
             let status = if ok { Int::ONE } else { Int::ZERO };
             if ok {
-                state.emit(Event::Return(out.clone().into(), gas_used.max(0) as u64));
+                self.outcome = Some(Outcome::Return);
+                if state.records_trace() {
+                    state.emit(Event::Return(out.clone().into(), gas_used.max(0) as u64));
+                }
             } else {
+                self.outcome = Some(Outcome::Halt(HaltReason::PrecompileFailure));
                 state.revert_to(frame.checkpoint);
                 state.emit(Event::Revert(vec![].into(), gas_used.max(0) as u64));
             }
@@ -666,21 +768,15 @@ impl Executor {
                 gas: frame.evm.gas,
             };
             result.gas_mut().refund += eip7702_refund;
-            let gas_final = finalized(
-                &self.call,
-                tx,
-                head,
-                effective_gas_price,
-                &result,
-                state,
-                floor,
-            );
+            let gas_final = self.settle(tx, head, effective_gas_price, &result, state, floor);
             result.gas_mut().finalized = gas_final;
             state.apply();
             return Ok(result);
         }
 
-        state.emit(Event::Call(self.call.clone(), mode));
+        if state.records_trace() {
+            state.emit(Event::Call(self.call.clone(), mode));
+        }
         self.callstack.push(frame);
 
         let mut result: Option<CallResult> = None;
@@ -689,8 +785,8 @@ impl Executor {
 
         while let Some(this) = self.callstack.last_mut() {
             state.set_depth(this.ctx.depth + 1);
-            steps += 1;
-            if steps > MAX_STEPS {
+            if self.max_steps.is_some_and(|max_steps| steps > max_steps) {
+                self.outcome = Some(Outcome::Halt(HaltReason::OutOfGas));
                 this.evm.gas.drain();
                 let gas = this.evm.gas;
                 let checkpoint = this.checkpoint;
@@ -715,12 +811,12 @@ impl Executor {
                             last_popped_checkpoint = None; // success, discard stale checkpoint
                         }
                         let _ = this.evm.push(status);
-                        this.evm.ret = ret.clone().into_vec();
                         // EIP-211: return data (success or revert) is written to memory at ret_offset
                         let (offset, size) = this.target;
                         if size > 0 {
                             let _ = this.evm.mem_put(offset, size, ret.as_slice());
                         }
+                        this.evm.ret = ret.into_vec();
                         // Return all unused child gas to the parent, regardless of
                         // success or failure.  The 2300 stipend is a free subsidy —
                         // any portion the child did not consume flows back to the
@@ -759,12 +855,20 @@ impl Executor {
                 }
             }
 
-            match this.evm.step(&this.ctx, &this.call, state)? {
+            // Run the frame until it needs the executor; past the step budget, the check above
+            // ends the transaction.
+            let limit = self.max_steps.map_or(u64::MAX, |max_steps| {
+                max_steps.saturating_sub(steps).saturating_add(1)
+            });
+            let (step_result, executed) = this.evm.run(&this.ctx, &this.call, state, limit)?;
+            steps += executed;
+            match step_result {
                 StepResult::Ok => {
                     continue;
                 }
                 StepResult::End => {
                     this.evm.apply(state);
+                    self.outcome = Some(Outcome::Return);
 
                     // Do not emit synthetic STOP
 
@@ -787,7 +891,9 @@ impl Executor {
                     self.callstack.pop();
                 }
                 StepResult::Call(call, mode) => {
-                    state.emit(Event::Call(call.clone(), mode));
+                    if state.records_trace() {
+                        state.emit(Event::Call(call.clone(), mode));
+                    }
                     this.evm.apply(state);
                     let call_to_is_precompile =
                         call.to.map(|to| is_precompile(&to)).unwrap_or_default();
@@ -795,13 +901,29 @@ impl Executor {
                         // Load precompile account from chain so its on-chain balance
                         // is reflected in state (mirrors what prepare() does for regular calls).
                         if let Some(to) = call.to
-                            && state.acc(&to).is_none()
+                            && !state.has_acc(&to)
                         {
                             fetch(Fetch::Account(to), state, chain).await?;
                         }
 
                         // EIP-211: clear return data before new call
                         this.evm.ret.clear();
+
+                        // Like any call, a precompile call fails before execution when it is too
+                        // deep or the caller cannot pay the value; the child gas, including the
+                        // value stipend, goes back to the caller.
+                        let transfers_value = !call.eth.is_zero()
+                            && matches!(mode, CallMode::Call(..) | CallMode::CallCode(..));
+                        let underfunded = transfers_value
+                            && state.balance(&call.by).unwrap_or_default() < call.eth;
+                        if this.ctx.depth + 1 > MAX_CALL_DEPTH || underfunded {
+                            this.evm.pending_gas_charge -= call.gas as i64;
+                            this.evm.apply(state);
+                            let _ = this.evm.push(Int::ZERO);
+                            this.evm.apply(state);
+                            this.evm.pc += 1;
+                            continue;
+                        }
 
                         // Precompile runs inline. Replace child-gas reservation with actual used
                         // (avoids OOG when child_gas > remaining); keep access cost.
@@ -833,7 +955,12 @@ impl Executor {
                         if ok {
                             let d = state.get_depth();
                             state.set_depth(d + 1);
-                            state.emit(Event::Return(out.clone().into(), gas_used.max(0) as u64));
+                            if state.records_trace() {
+                                state.emit(Event::Return(
+                                    out.clone().into(),
+                                    gas_used.max(0) as u64,
+                                ));
+                            }
                             state.set_depth(d);
                         } else {
                             let d = state.get_depth();
@@ -859,7 +986,7 @@ impl Executor {
                     // Per EVM spec, nonce is incremented before the snapshot so it survives
                     // collision reverts, but NOT depth or insufficient-balance failures.
                     if let Some(created) = mode.created() {
-                        if state.acc(&created).is_none() {
+                        if !state.has_acc(&created) {
                             fetch(Fetch::Account(created), state, chain).await?;
                         }
                         let creator = call.by;
@@ -922,7 +1049,7 @@ impl Executor {
 
                         // Collision check: existing nonce or code at derived address
                         let existing_nonce = state.nonce(&created).unwrap_or(Int::ZERO);
-                        let has_code = state.code(&created).is_some_and(|(c, _)| !c.0.is_empty());
+                        let has_code = state.code_size(&created).is_some_and(|size| size > 0);
                         if !existing_nonce.is_zero() || has_code {
                             state.revert_to(checkpoint);
                             this.evm.apply(state);
@@ -960,8 +1087,8 @@ impl Executor {
                     this.evm.ret.clear();
 
                     let mut frame = prepare(
-                        head.clone(),
-                        call.clone(),
+                        frame_head.clone(),
+                        call,
                         mode,
                         Some(&this.ctx),
                         tx.chain_id.to(),
@@ -971,13 +1098,16 @@ impl Executor {
                         chain,
                     )
                     .await?;
+                    // The frame owns the call now.
+                    let (child_gas, child_value, child_by, child_to) =
+                        (frame.call.gas, frame.call.eth, frame.call.by, frame.call.to);
                     // Use the outer checkpoint (set before state.create / value transfer)
                     // so that reverting the child frame undoes create + value transfer.
                     frame.checkpoint = checkpoint;
                     if frame.ctx.depth > MAX_CALL_DEPTH {
                         state.revert_to(checkpoint);
                         // Return child gas (not consumed on depth failure)
-                        this.evm.gas.spent -= call.gas as i64;
+                        this.evm.gas.spent -= child_gas as i64;
                         this.evm.apply(state);
                         let _ = this.evm.push(Int::ZERO);
                         this.evm.apply(state);
@@ -989,17 +1119,17 @@ impl Executor {
 
                     // ETH value transfer for CALL and CALLCODE
                     if !is_create
-                        && !call.eth.is_zero()
+                        && !child_value.is_zero()
                         && matches!(mode, CallMode::Call(..) | CallMode::CallCode(..))
                     {
-                        let by = call.by;
+                        let by = child_by;
                         let by0 = state.balance(&by).unwrap_or_default();
 
                         let gte = lift(|[a, b]| if a >= b { U256::ONE } else { U256::ZERO });
-                        if gte([by0, call.eth]).is_zero() {
+                        if gte([by0, child_value]).is_zero() {
                             state.revert_to(checkpoint);
                             // Return child gas (not consumed on balance failure)
-                            this.evm.gas.spent -= call.gas as i64;
+                            this.evm.gas.spent -= child_gas as i64;
                             this.evm.apply(state);
                             let _ = this.evm.push(Int::ZERO);
                             this.evm.apply(state);
@@ -1012,24 +1142,27 @@ impl Executor {
                         // CALLCODE: value stays with self (by == this), no actual transfer
                         // CALL: value goes from caller to callee
                         if matches!(mode, CallMode::Call(..))
-                            && let Some(to) = call.to
+                            && let Some(to) = child_to
                         {
                             let add = lift(|[a, b]| a + b);
                             let sub = lift(|[a, b]| a - b);
                             let to0 = state.balance(&to).unwrap_or_default();
                             if to != by {
-                                state.set_value(&by, sub([by0, call.eth]));
-                                state.set_value(&to, add([to0, call.eth]));
+                                state.set_value(&by, sub([by0, child_value]));
+                                state.set_value(&to, add([to0, child_value]));
                             }
                         }
                     }
                     self.callstack.push(frame);
                 }
                 StepResult::Return(ret) => {
-                    state.emit(Event::Return(
-                        ret.clone().into(),
-                        this.evm.gas.spent.max(0) as u64,
-                    ));
+                    if state.records_trace() {
+                        state.emit(Event::Return(
+                            ret.clone().into(),
+                            this.evm.gas.spent.max(0) as u64,
+                        ));
+                    }
+                    self.outcome = Some(Outcome::Return);
                     let is_create = this.is_create;
                     result = Some(if is_create {
                         let deploy_cost = CODE_DEPOSIT_GAS * ret.len() as i64;
@@ -1039,6 +1172,13 @@ impl Executor {
                             || starts_with_ef
                             || this.evm.gas_remaining() < deploy_cost
                         {
+                            self.outcome = Some(Outcome::Halt(if ret.len() > MAX_CODE_SIZE {
+                                HaltReason::CodeSizeLimit
+                            } else if starts_with_ef {
+                                HaltReason::InvalidCodePrefix
+                            } else {
+                                HaltReason::OutOfGas
+                            }));
                             this.evm.gas.drain();
                             state.revert_to(this.checkpoint);
                             CallResult::Done {
@@ -1064,10 +1204,13 @@ impl Executor {
                     self.callstack.pop();
                 }
                 StepResult::Revert(ret) => {
-                    state.emit(Event::Revert(
-                        ret.clone().into(),
-                        this.evm.gas.spent.max(0) as u64,
-                    ));
+                    if state.records_trace() {
+                        state.emit(Event::Revert(
+                            ret.clone().into(),
+                            this.evm.gas.spent.max(0) as u64,
+                        ));
+                    }
+                    self.outcome = Some(Outcome::Revert);
                     state.revert_to(this.checkpoint);
                     let mut gas = this.evm.gas;
                     gas.refund = 0;
@@ -1080,6 +1223,7 @@ impl Executor {
                 }
                 StepResult::Halt(reason) => {
                     state.emit(Event::Halt(reason, this.evm.gas.limit.max(0) as u64));
+                    self.outcome = Some(Outcome::Halt(reason));
                     this.evm.apply(state);
                     this.evm.gas.drain();
                     state.revert_to(this.checkpoint);
@@ -1124,15 +1268,7 @@ impl Executor {
         state.set_depth(0);
 
         result.gas_mut().refund += eip7702_refund;
-        let gas_final = finalized(
-            &self.call,
-            tx,
-            head,
-            effective_gas_price,
-            &result,
-            state,
-            floor,
-        );
+        let gas_final = self.settle(tx, head, effective_gas_price, &result, state, floor);
         result.gas_mut().finalized = gas_final;
 
         state.apply();
@@ -1140,9 +1276,36 @@ impl Executor {
     }
 }
 
+impl Executor {
+    /// Settles fees and refunds of a finished transaction; returns the gas it used. System
+    /// calls pay no fees, so they only report the gas spent.
+    fn settle(
+        &self,
+        tx: &Tx,
+        head: &Head,
+        effective_gas_price: Int,
+        result: &CallResult,
+        state: &mut impl State,
+        floor: i64,
+    ) -> i64 {
+        if self.system {
+            return result.gas().spent;
+        }
+        finalized(
+            &self.call,
+            tx,
+            head,
+            effective_gas_price,
+            result,
+            state,
+            floor,
+        )
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn prepare(
-    head: Head,
+    head: Arc<Head>,
     mut call: Call,
     mode: CallMode,
     ctx: Option<&Context>,
@@ -1153,18 +1316,18 @@ async fn prepare(
     chain: &impl Chain,
 ) -> Result<CallFrame> {
     let is_create = matches!(mode, CallMode::Create(_) | CallMode::Create2(_));
-    let code = if is_create {
-        std::mem::take(&mut call.data)
+    // The code hash, when the code is deployed code, keys its cached jump table.
+    let (code, code_hash): (Arc<[u8]>, Option<Int>) = if is_create {
+        (std::mem::take(&mut call.data).into_vec().into(), None)
     } else {
         let call_to = call.to.expect("checked non-create call");
-        if let Some((code, _)) = state.code(&call_to) {
-            code
+        if let Some((code, hash)) = state.frame_code(&call_to) {
+            (code, Some(hash))
         } else {
             fetch(Fetch::Account(call_to), state, chain).await?;
-            if let Some(account) = state.acc(&call_to) {
-                account.code.0.clone()
-            } else {
-                Buf::default()
+            match state.frame_code(&call_to) {
+                Some((code, hash)) => (code, Some(hash)),
+                None => (Arc::from([]), None),
             }
         }
     };
@@ -1172,31 +1335,31 @@ async fn prepare(
     // Revm's `load_account_delegated` marks both the delegated account and the implementation
     // address warm when resolving code for a frame; mirror that so *CALL does not charge cold
     // access for an address already loaded for execution (see revm-context JournalInner).
-    let code = if let Some(delegate) = call.to.and_then(|to| state.auth(&to)) {
-        if let Some((code, _)) = state.code(&delegate) {
+    let (code, code_hash) = if let Some(delegate) = call.to.and_then(|to| state.auth(&to)) {
+        if let Some((code, hash)) = state.frame_code(&delegate) {
             state.warm_acc(&delegate);
-            code
+            (code, Some(hash))
         } else {
             fetch(Fetch::Account(delegate), state, chain).await?;
-            if let Some(account) = state.acc(&delegate) {
-                state.warm_acc(&delegate);
-                account.code.0.clone()
-            } else {
-                Buf::default()
+            match state.frame_code(&delegate) {
+                Some((code, hash)) => {
+                    state.warm_acc(&delegate);
+                    (code, Some(hash))
+                }
+                None => (Arc::from([]), None),
             }
         }
     } else {
-        code
+        (code, code_hash)
     };
     // GASPRICE opcode returns effective gas price (EIP-1559: min(max_fee, base_fee + priority))
-    let evm = Evm::new(
-        head,
-        code.into_vec(),
-        call.gas,
-        chain_id,
-        gas_price,
-        blob_hashes,
-    );
+    let mut evm = Evm::new(head, code, call.gas, chain_id, gas_price, blob_hashes);
+    // A zero hash marks code whose hash is not known, which must not share a cached table.
+    if let Some(hash) = code_hash.filter(|hash| !hash.is_zero())
+        && !evm.code.is_empty()
+    {
+        evm.set_jump_table(state.jump_table(&hash, &evm.code));
+    }
     let is_static = matches!(mode, CallMode::Static(_, _));
     let this = match mode {
         CallMode::Create(acc) => acc,
@@ -1231,4 +1394,253 @@ async fn prepare(
         target: (0, 0),
         is_create,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{cache::Cache, call::Block};
+    use yevm_base::acc::acc;
+
+    const SYSTEM: Acc = acc("0xfffffffffffffffffffffffffffffffffffffffe");
+    const CONTRACT: Acc = acc("0x00000000000000000000000000000000000000c1");
+
+    /// Code that stores 42 in slot 0.
+    const STORE_42: [u8; 6] = [0x60, 0x2a, 0x60, 0x00, 0x55, 0x00];
+
+    /// Serves one contract with the given code at `CONTRACT`; every other account is empty.
+    struct OneContract(&'static [u8]);
+
+    #[async_trait::async_trait]
+    impl Chain for OneContract {
+        async fn get(&self, _: &Acc, _: &Int) -> eyre::Result<Int> {
+            Ok(Int::ZERO)
+        }
+        async fn acc(&self, acc: &Acc) -> eyre::Result<Account> {
+            if *acc != CONTRACT {
+                return Ok(Account::default());
+            }
+            let code = Buf::from(self.0.to_vec());
+            let hash = keccak256(code.as_slice());
+            Ok(Account {
+                value: Int::ZERO,
+                nonce: Int::ONE,
+                code: (code, hash),
+            })
+        }
+        async fn code(&self, acc: &Acc) -> eyre::Result<(Buf, Int)> {
+            self.acc(acc).await.map(|account| account.code)
+        }
+        async fn nonce(&self, acc: &Acc) -> eyre::Result<u64> {
+            self.acc(acc).await.map(|account| account.nonce.as_u64())
+        }
+        async fn balance(&self, acc: &Acc) -> eyre::Result<Int> {
+            self.acc(acc).await.map(|account| account.value)
+        }
+        async fn head(&self, number: u64) -> eyre::Result<Head> {
+            eyre::bail!("no block hash {number}")
+        }
+        async fn block(&self, number: u64) -> eyre::Result<Block> {
+            eyre::bail!("no block {number}")
+        }
+        async fn chain_id(&self) -> eyre::Result<u64> {
+            Ok(1)
+        }
+    }
+
+    /// The executor charges the intrinsic gas through the frame's pending effects, which the fast
+    /// path must not miss when the first instruction reads the gas.
+    #[tokio::test]
+    async fn gas_reads_include_intrinsic_gas_in_journal_only_mode() {
+        // GAS PUSH1 0 SSTORE STOP
+        const STORE_GAS: [u8; 5] = [0x5a, 0x60, 0x00, 0x55, 0x00];
+        let call = Call {
+            by: acc("0x00000000000000000000000000000000000000a5"),
+            to: Some(CONTRACT),
+            gas: 100_000,
+            eth: Int::ZERO,
+            data: Buf::default(),
+        };
+        let tx = Tx {
+            chain_id: 1u64.into(),
+            nonce: Int::ZERO,
+            gas_price: Int::ZERO,
+            max_fee_per_gas: Int::ZERO,
+            max_priority_fee_per_gas: Int::ZERO,
+            access_list: vec![],
+            authorization_list: vec![],
+            blob_versioned_hashes: vec![],
+            max_fee_per_blob_gas: None,
+            hash: Int::ZERO,
+            index: Int::ZERO,
+        };
+        let head = Head {
+            number: 1u64.into(),
+            gas_limit: Int::from(1_000_000u64),
+            ..Head::default()
+        };
+        let mut cache = Cache::new();
+        cache.set_journal_only(true);
+
+        Executor::new(call)
+            .with_max_steps(None)
+            .run(&tx, &head, &mut cache, &OneContract(&STORE_GAS))
+            .await
+            .unwrap();
+
+        // 100_000 minus the intrinsic 21_000 and GAS's own 2.
+        assert_eq!(
+            cache.storage(&CONTRACT, &Int::ZERO),
+            Some(Int::from(78_998u64))
+        );
+    }
+
+    /// A PUSH that runs past the end of the code pushes zero-padded bytes and stops execution,
+    /// for both the short pushes that build a 64-bit word and the long ones.
+    #[tokio::test]
+    async fn truncated_push_at_the_end_of_the_code_stops() {
+        const PUSHES: [&[u8]; 2] = [&[0x61, 0xab], &[0x7f, 0xab, 0xcd]];
+        for code in PUSHES {
+            let call = Call {
+                by: acc("0x00000000000000000000000000000000000000a5"),
+                to: Some(CONTRACT),
+                gas: 100_000,
+                eth: Int::ZERO,
+                data: Buf::default(),
+            };
+            let tx = Tx {
+                chain_id: 1u64.into(),
+                nonce: Int::ZERO,
+                gas_price: Int::ZERO,
+                max_fee_per_gas: Int::ZERO,
+                max_priority_fee_per_gas: Int::ZERO,
+                access_list: vec![],
+                authorization_list: vec![],
+                blob_versioned_hashes: vec![],
+                max_fee_per_blob_gas: None,
+                hash: Int::ZERO,
+                index: Int::ZERO,
+            };
+            let head = Head {
+                number: 1u64.into(),
+                gas_limit: Int::from(1_000_000u64),
+                ..Head::default()
+            };
+            let mut cache = Cache::new();
+            cache.set_journal_only(true);
+            let result = Executor::new(call)
+                .with_max_steps(None)
+                .run(&tx, &head, &mut cache, &OneContract(code))
+                .await
+                .unwrap();
+
+            // The intrinsic 21_000 and the PUSH's 3.
+            assert!(
+                matches!(&result, CallResult::Done { status, .. } if *status == Int::ONE),
+                "{code:02x?}"
+            );
+            assert_eq!(result.gas().spent, 21_003, "{code:02x?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn underfunded_value_transfer_fails_without_executing() {
+        let sender = acc("0x00000000000000000000000000000000000000a5");
+        let call = Call {
+            by: sender,
+            to: Some(CONTRACT),
+            gas: 100_000,
+            eth: Int::ONE,
+            data: Buf::default(),
+        };
+        let tx = Tx {
+            chain_id: 1u64.into(),
+            nonce: Int::ZERO,
+            gas_price: Int::ZERO,
+            max_fee_per_gas: Int::ZERO,
+            max_priority_fee_per_gas: Int::ZERO,
+            access_list: vec![],
+            authorization_list: vec![],
+            blob_versioned_hashes: vec![],
+            max_fee_per_blob_gas: None,
+            hash: Int::ZERO,
+            index: Int::ZERO,
+        };
+        let head = Head {
+            number: 1u64.into(),
+            gas_limit: Int::from(1_000_000u64),
+            ..Head::default()
+        };
+        let mut cache = Cache::new();
+
+        let result = Executor::new(call)
+            .run(&tx, &head, &mut cache, &OneContract(&STORE_42))
+            .await
+            .unwrap();
+
+        assert!(matches!(result, CallResult::Done { status, .. } if status.is_zero()));
+        assert_eq!(result.gas().finalized, 21_000);
+        assert_eq!(cache.nonce(&sender), Some(Int::ONE));
+        assert_eq!(
+            cache.storage(&CONTRACT, &Int::ZERO),
+            None,
+            "the call must not run"
+        );
+        assert!(
+            cache
+                .events
+                .iter()
+                .any(|trace| matches!(trace.event, Event::Halt(HaltReason::OutOfFunds, _)))
+        );
+    }
+
+    #[tokio::test]
+    async fn system_call_skips_nonce_fees_and_intrinsic_gas() {
+        let call = Call {
+            by: SYSTEM,
+            to: Some(CONTRACT),
+            // Above the block gas limit, which system calls ignore.
+            gas: 30_000_000,
+            eth: Int::ZERO,
+            data: Buf::default(),
+        };
+        let tx = Tx {
+            chain_id: 1u64.into(),
+            nonce: Int::ZERO,
+            gas_price: Int::ZERO,
+            max_fee_per_gas: Int::ZERO,
+            max_priority_fee_per_gas: Int::ZERO,
+            access_list: vec![],
+            authorization_list: vec![],
+            blob_versioned_hashes: vec![],
+            max_fee_per_blob_gas: None,
+            hash: Int::ZERO,
+            index: Int::ZERO,
+        };
+        let head = Head {
+            number: 1u64.into(),
+            gas_limit: Int::from(1_000_000u64),
+            base_fee: Int::from(7u64),
+            ..Head::default()
+        };
+        let mut cache = Cache::new();
+
+        let result = Executor::system(call)
+            .with_max_steps(None)
+            .run(&tx, &head, &mut cache, &OneContract(&STORE_42))
+            .await
+            .unwrap();
+
+        // SSTORE to a fresh slot (22_100 incl. cold access) plus three pushes.
+        assert_eq!(result.gas().spent, 22_106);
+        assert_eq!(cache.storage(&CONTRACT, &Int::ZERO), Some(Int::from(42u32)));
+        assert!(
+            cache.account(&SYSTEM).is_none(),
+            "the system address must not be loaded"
+        );
+        assert!(
+            cache.account(&head.coinbase).is_none(),
+            "the coinbase must not be loaded"
+        );
+    }
 }

@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use yevm_misc::buf::Buf;
 
-use crate::{Acc, Head, Int, chain::Fetched, trace::Event};
+use std::sync::Arc;
+
+use crate::{Acc, Head, Int, chain::Fetched, evm::JumpTable, trace::Event};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Account {
@@ -40,7 +42,8 @@ pub trait State {
     fn destroy(&mut self, acc: &Acc);
 
     fn hash(&mut self, number: u64, hash: Int);
-    fn log(&mut self, data: Buf, topics: Vec<Int>);
+    /// Records a log emitted by `acc` (the executing contract, `ADDRESS` of the frame).
+    fn log(&mut self, acc: &Acc, data: Buf, topics: Vec<Int>);
 
     fn head(&self, number: u64) -> Option<Head>;
     fn auth(&self, acc: &Acc) -> Option<Acc>;
@@ -82,5 +85,58 @@ pub trait State {
 
     fn is_tracing(&self) -> bool {
         true
+    }
+
+    /// Whether trace-only events (reads, calls, returns, fees) are recorded; executors skip
+    /// building them, and the copies they need, when this is `false`.
+    fn records_trace(&self) -> bool {
+        true
+    }
+
+    /// Returns a loaded slot's current and original values and whether it is cold, like
+    /// [`Self::get`] followed by [`Self::is_cold_key`].
+    fn get_with_warmth(&mut self, acc: &Acc, key: &Int) -> Option<(Int, Int, bool)> {
+        let (current, original) = self.get(acc, key)?;
+        Some((current, original, self.is_cold_key(acc, key)))
+    }
+
+    /// Returns a loaded slot's current value and warms it, returning whether it was cold, like
+    /// [`Self::get`] followed by [`Self::warm_key`].
+    fn get_warm(&mut self, acc: &Acc, key: &Int) -> Option<(Int, bool)> {
+        let (current, _) = self.get(acc, key)?;
+        Some((current, self.warm_key(acc, key)))
+    }
+
+    /// Writes a slot and warms it, like [`Self::warm_key`] followed by [`Self::put`].
+    fn put_warm(&mut self, acc: &Acc, key: &Int, val: Int) -> Option<Int> {
+        self.warm_key(acc, key);
+        self.put(acc, key, val)
+    }
+
+    /// Whether `acc` is loaded. Unlike [`Self::acc`], copies nothing.
+    fn has_acc(&mut self, acc: &Acc) -> bool {
+        self.acc(acc).is_some()
+    }
+
+    /// The size of `acc`'s code, if loaded. Unlike [`Self::code`], copies nothing.
+    fn code_size(&mut self, acc: &Acc) -> Option<usize> {
+        self.code(acc).map(|(code, _)| code.len())
+    }
+
+    /// The hash of `acc`'s code, if loaded. Unlike [`Self::code`], copies nothing.
+    fn code_hash(&mut self, acc: &Acc) -> Option<Int> {
+        self.code(acc).map(|(_, hash)| hash)
+    }
+
+    /// `acc`'s code as bytes shared with every frame that runs it, with its hash. States may
+    /// cache it by hash.
+    fn frame_code(&mut self, acc: &Acc) -> Option<(Arc<[u8]>, Int)> {
+        self.code(acc)
+            .map(|(code, hash)| (code.into_vec().into(), hash))
+    }
+
+    /// Returns the jump table of `code`, whose hash is `hash`. States may cache it by hash.
+    fn jump_table(&mut self, _hash: &Int, code: &[u8]) -> Arc<JumpTable> {
+        Arc::new(JumpTable::new(code))
     }
 }

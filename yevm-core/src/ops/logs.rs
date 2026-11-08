@@ -32,9 +32,16 @@ pub fn log<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> E
 
     let data = evm.mem_get(offset, size)?.to_vec();
 
-    let topics = evm.stack.iter().rev().skip(2).take(n).cloned().collect();
+    let topics = evm
+        .stack
+        .iter()
+        .rev()
+        .skip(2)
+        .take(n)
+        .map(|word| evm::int(*word))
+        .collect();
 
     evm.pending_stack_pops = total;
-    state.log(data.into(), topics);
+    state.log(&ctx.this, data.into(), topics);
     Ok(())
 }

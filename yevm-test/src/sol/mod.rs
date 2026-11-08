@@ -110,6 +110,7 @@ pub fn head() -> Head {
         base_fee: 1.into(),
         excess_blob_gas: Some(Int::ZERO),
         blobhash: Some(Int::ONE),
+        blob_base_fee: None,
         prevrandao: Int::ONE,
         parent_hash: int("0x1"),
         parent_beacon_block_root: None,

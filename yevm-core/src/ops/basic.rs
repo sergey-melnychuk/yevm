@@ -275,9 +275,9 @@ pub fn not(evm: &mut Evm) -> EvmResult<()> {
 pub fn byte(evm: &mut Evm) -> EvmResult<()> {
     evm.gas_charge(3)?;
     let [idx, int] = evm.peek()?;
-    let byte = int
-        .as_ref()
-        .get(idx.as_usize())
+    let byte = idx
+        .as_usize_checked()
+        .and_then(|idx| int.as_ref().get(idx))
         .copied()
         .unwrap_or_default();
     evm.push(Int::from(byte))?;
@@ -333,4 +333,24 @@ pub fn hash(evm: &mut Evm, state: &mut dyn State) -> EvmResult<()> {
     state.emit(Event::Hash(data.into(), hash_int));
     evm.push(hash_int)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::call::Head;
+
+    #[test]
+    fn byte_index_beyond_usize_is_zero() {
+        // Index 2^64 would truncate to 0, the most significant byte (0xFF here).
+        let mut idx = [0u8; 32];
+        idx[23] = 1;
+        let mut evm = Evm::new(Head::default(), vec![], 1000, Int::ONE, Int::ONE, vec![]);
+        evm.stack = [Int::MAX, Int::new(idx)].map(crate::evm::word).to_vec();
+        byte(&mut evm).unwrap();
+        assert_eq!(
+            evm.pending_stack_push[..evm.pending_stack_push_len],
+            [crate::evm::word(Int::ZERO)]
+        );
+    }
 }

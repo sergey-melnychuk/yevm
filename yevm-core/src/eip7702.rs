@@ -57,7 +57,7 @@ pub async fn apply_authorization_list(
             continue;
         }
 
-        if state.acc(&authority).is_none() {
+        if !state.has_acc(&authority) {
             fetch(crate::Fetch::Account(authority), state, chain).await?;
         }
         let acc = state.acc(&authority).unwrap_or_default();
@@ -82,7 +82,7 @@ pub async fn apply_authorization_list(
             state.set_code(&authority, Buf::default(), hash);
         } else {
             state.set_auth(&authority, &item.address);
-            if state.acc(&item.address).is_none() {
+            if !state.has_acc(&item.address) {
                 fetch(crate::Fetch::Account(item.address), state, chain).await?;
             }
         }

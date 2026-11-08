@@ -19,18 +19,20 @@ pub mod math {
     pub const ZERO: U256 = U256::ZERO;
 
     impl From<Int> for Val {
+        #[inline]
         fn from(int: Int) -> Self {
-            Val(U256::from_be_slice(int.as_ref()))
+            Val(U256::from_be_bytes(int.to_bytes()))
         }
     }
 
     impl From<Val> for Int {
+        #[inline]
         fn from(val: Val) -> Self {
-            let buffer: [u8; 32] = val.0.to_be_bytes();
-            Int::from(&buffer[..])
+            Int::new(val.0.to_be_bytes())
         }
     }
 
+    #[inline]
     pub fn lift<const N: usize>(f: impl Fn([U256; N]) -> U256) -> impl Fn([Int; N]) -> Int {
         move |xs: [Int; N]| {
             let mut ys = [U256::ZERO; N];

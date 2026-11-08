@@ -1,7 +1,10 @@
 use num_bigint::BigUint;
 use num_traits::{One, Zero};
 
-/// MODEXP (precompile 0x05) - EIP-198 / EIP-2565 / EIP-7883 (Pectra)
+/// EIP-7823 (Osaka): upper bound of each of Bsize, Esize and Msize.
+const MAX_LENGTH: u64 = 1024;
+
+/// MODEXP (precompile 0x05) - EIP-198 / EIP-2565 / EIP-7883 / EIP-7823 (Osaka)
 /// Input: Bsize (32) || Esize (32) || Msize (32) || B (Bsize) || E (Esize) || M (Msize)
 /// Output: result zero-padded to Msize bytes
 pub fn modexp(input: &[u8], gas_limit: i64) -> (bool, Vec<u8>, i64) {
@@ -14,6 +17,11 @@ pub fn modexp(input: &[u8], gas_limit: i64) -> (bool, Vec<u8>, i64) {
     let b_size_u64 = read_u64(&buf[0..32]);
     let e_size_u64 = read_u64(&buf[32..64]);
     let m_size_u64 = read_u64(&buf[64..96]);
+
+    // EIP-7823: an oversized input fails the call, which consumes all of its gas.
+    if b_size_u64 > MAX_LENGTH || e_size_u64 > MAX_LENGTH || m_size_u64 > MAX_LENGTH {
+        return (false, vec![], gas_limit);
+    }
 
     // Gas calculation per EIP-7883 (Pectra update to EIP-2565)
     let gas = modexp_gas(b_size_u64, e_size_u64, m_size_u64, &buf);
@@ -134,5 +142,36 @@ fn calc_iteration_count(e_size: u64, b_size: u64, input: &[u8]) -> u64 {
         };
         // EIP-7883: multiplier is 16 (was 8 in EIP-2565)
         head_bits.saturating_add(16u64.saturating_mul(e_size - 32))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn input(b_size: u64, e_size: u64, m_size: u64) -> Vec<u8> {
+        let mut input = vec![0u8; 96];
+        input[24..32].copy_from_slice(&b_size.to_be_bytes());
+        input[56..64].copy_from_slice(&e_size.to_be_bytes());
+        input[88..96].copy_from_slice(&m_size.to_be_bytes());
+        input.resize(96 + (b_size + e_size + m_size) as usize, 1);
+        input
+    }
+
+    #[test]
+    fn lengths_above_1024_bytes_fail_with_all_gas() {
+        for (b, e, m) in [(1025, 1, 1), (1, 1025, 1), (1, 1, 1025)] {
+            assert_eq!(
+                modexp(&input(b, e, m), 1_000_000),
+                (false, vec![], 1_000_000)
+            );
+        }
+    }
+
+    #[test]
+    fn lengths_of_1024_bytes_are_accepted() {
+        let (ok, out, _) = modexp(&input(1024, 1, 1024), 10_000_000);
+        assert!(ok);
+        assert_eq!(out.len(), 1024);
     }
 }

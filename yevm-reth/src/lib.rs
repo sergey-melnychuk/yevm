@@ -284,6 +284,7 @@ impl RethDb {
             base_fee: Int::from(header.base_fee_per_gas().unwrap_or_default()),
             excess_blob_gas: header.excess_blob_gas().map(Int::from),
             blobhash: None,
+            blob_base_fee: None,
             prevrandao: Self::hash(header.mix_hash().unwrap_or_default()),
             parent_hash: Self::hash(header.parent_hash()),
             parent_beacon_block_root: header.parent_beacon_block_root().map(Self::hash),

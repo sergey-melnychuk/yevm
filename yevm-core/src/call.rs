@@ -116,6 +116,14 @@ pub struct Head {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blobhash: Option<Int>,
+    /// Blob base fee of the block, when the host knows it.
+    ///
+    /// The fee depends on the fork's blob update fraction, which yevm does not track; when this
+    /// is `None` it is derived from `excess_blob_gas` with the hardcoded fraction of
+    /// [`blob_base_fee`].
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blob_base_fee: Option<Int>,
     #[serde(alias = "mixHash")]
     #[serde(alias = "prevRandao")]
     pub prevrandao: Int,
@@ -281,6 +289,17 @@ pub struct Logged {
 /// BPO2's value -- correct for blocks mined under BPO2, wrong again once
 /// the next BPO fork lands. Verified against a real mainnet block's
 /// reported `blobGasPrice` (see mpt-lab's PTRIE.md / block.rs experiment).
+impl Head {
+    /// Returns the block's blob base fee: [`Self::blob_base_fee`] if set, else the fee derived
+    /// from [`Self::excess_blob_gas`], or `None` for blocks without blob gas.
+    pub fn blob_fee(&self) -> Option<Int> {
+        self.blob_base_fee.or_else(|| {
+            self.excess_blob_gas
+                .map(|excess| Int::from(blob_base_fee(excess.as_u64())))
+        })
+    }
+}
+
 pub fn blob_base_fee(excess_blob_gas: u64) -> u128 {
     let d = 11_684_671u128;
     let mut i = 1u64;

@@ -9,6 +9,9 @@ use crate::{
     state::State,
 };
 
+/// EIP-3860: largest initcode CREATE and CREATE2 accept.
+const MAX_INITCODE_SIZE: usize = 2 * 24_576;
+
 /// Allocate gas for a child frame per EIP-150 (63/64 rule).
 fn sub_call_gas(evm: &Evm) -> u64 {
     let remaining = evm.gas_remaining().max(0) as u64;
@@ -23,6 +26,10 @@ pub fn create<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -
     let [value, offset, size] = evm.peek()?;
     evm::mem_check_int(offset, size)?;
     let (offset, size) = (offset.as_usize(), size.as_usize());
+    // EIP-3860: oversized initcode aborts like running out of gas.
+    if size > MAX_INITCODE_SIZE {
+        return Err(EvmYield::Halt(HaltReason::OutOfGas));
+    }
     let initcode_cost = 2 * ((size as i64 + 31) / 32);
     evm.gas_charge(initcode_cost)?;
 
@@ -63,14 +70,14 @@ pub fn call<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> 
     let (ret_offset, ret_size) = (ret_offset.as_usize(), ret_size.as_usize());
     let address: Acc = address.to();
 
-    if state.acc(&ctx.this).is_none() {
+    if !state.has_acc(&ctx.this) {
         return Err(EvmYield::Fetch(Fetch::Account(ctx.this)));
     }
-    if state.acc(&address).is_none() {
+    if !state.has_acc(&address) {
         return Err(EvmYield::Fetch(Fetch::Account(address)));
     }
     if let Some(delegate) = state.auth(&address)
-        && state.acc(&delegate).is_none()
+        && !state.has_acc(&delegate)
     {
         return Err(EvmYield::Fetch(Fetch::Account(delegate)));
     }
@@ -85,7 +92,7 @@ pub fn call<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> 
     evm.gas_charge(access_cost)?;
 
     if let Some(delegate) = state.auth(&address) {
-        let access_cost: i64 = if state.is_cold_acc(&delegate) {
+        let access_cost: i64 = if evm.is_cold_acc(&*state, &delegate) {
             2600
         } else {
             100
@@ -107,7 +114,7 @@ pub fn call<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> 
     // Applies to ALL addresses including precompiles — if the precompile address
     // is empty in the state, the 25000 cost is charged just like any other address.
     if has_value {
-        if state.acc(&address).is_none() {
+        if !state.has_acc(&address) {
             return Err(EvmYield::Fetch(Fetch::Account(address)));
         }
         let is_empty = state
@@ -125,7 +132,7 @@ pub fn call<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> 
     // 63/64 rule: cap the gas arg at available_gas * 63/64
     let available = evm.gas_remaining().max(0) as u64;
     let max_child = available - available / 64;
-    let mut gas = gas_arg.as_u64().min(max_child);
+    let mut gas = gas_arg.as_u64_saturating().min(max_child);
     evm.gas_charge(gas as i64)?;
 
     // Gas stipend: add 2300 to child when sending value
@@ -140,7 +147,7 @@ pub fn call<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> 
         to: Some(address),
         gas,
         eth: value,
-        data: data.to_vec().into(),
+        data: data.into(),
     };
 
     Err(EvmYield::Call(call, CallMode::Call(ret_offset, ret_size)))
@@ -165,11 +172,11 @@ pub fn callcode<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S)
     let is_precompile = is_precompile(&address);
     // Address 0 has no account but can be called (empty code returns success)
     let needs_account = address != Acc::ZERO && !is_precompile;
-    if needs_account && state.acc(&address).is_none() {
+    if needs_account && !state.has_acc(&address) {
         return Err(EvmYield::Fetch(Fetch::Account(address)));
     };
     if let Some(delegate) = state.auth(&address)
-        && state.acc(&delegate).is_none()
+        && !state.has_acc(&delegate)
     {
         return Err(EvmYield::Fetch(Fetch::Account(delegate)));
     }
@@ -183,7 +190,7 @@ pub fn callcode<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S)
     evm.gas_charge(access_cost)?;
 
     if let Some(delegate) = state.auth(&address) {
-        let access_cost: i64 = if state.is_cold_acc(&delegate) {
+        let access_cost: i64 = if evm.is_cold_acc(&*state, &delegate) {
             2600
         } else {
             100
@@ -201,7 +208,7 @@ pub fn callcode<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S)
 
     let available = evm.gas_remaining().max(0) as u64;
     let max_child = available - available / 64;
-    let mut gas = gas_arg.as_u64().min(max_child);
+    let mut gas = gas_arg.as_u64_saturating().min(max_child);
     evm.gas_charge(gas as i64)?;
 
     if has_value {
@@ -215,7 +222,7 @@ pub fn callcode<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S)
         to: Some(address),
         gas,
         eth: value,
-        data: data.to_vec().into(),
+        data: data.into(),
     };
 
     Err(EvmYield::Call(
@@ -255,11 +262,11 @@ pub fn delegatecall<S: State>(
     let is_precompile = is_precompile(&address);
     // Address 0 has no account but can be called (empty code returns success)
     let needs_account = address != Acc::ZERO && !is_precompile;
-    if needs_account && state.acc(&address).is_none() {
+    if needs_account && !state.has_acc(&address) {
         return Err(EvmYield::Fetch(Fetch::Account(address)));
     };
     if let Some(delegate) = state.auth(&address)
-        && state.acc(&delegate).is_none()
+        && !state.has_acc(&delegate)
     {
         return Err(EvmYield::Fetch(Fetch::Account(delegate)));
     }
@@ -273,7 +280,7 @@ pub fn delegatecall<S: State>(
     evm.gas_charge(access_cost)?;
 
     if let Some(delegate) = state.auth(&address) {
-        let access_cost: i64 = if state.is_cold_acc(&delegate) {
+        let access_cost: i64 = if evm.is_cold_acc(&*state, &delegate) {
             2600
         } else {
             100
@@ -286,7 +293,7 @@ pub fn delegatecall<S: State>(
 
     let available = evm.gas_remaining().max(0) as u64;
     let max_child = available - available / 64;
-    let gas = gas_arg.as_u64().min(max_child);
+    let gas = gas_arg.as_u64_saturating().min(max_child);
     evm.gas_charge(gas as i64)?;
 
     let data = evm.mem_get(args_offset, args_size)?;
@@ -297,7 +304,7 @@ pub fn delegatecall<S: State>(
         to: Some(address),
         gas,
         eth: call.eth,
-        data: data.to_vec().into(),
+        data: data.into(),
     };
 
     Err(EvmYield::Call(
@@ -314,6 +321,10 @@ pub fn create2(evm: &mut Evm, ctx: &Context, _: &Call, _: &mut dyn State) -> Evm
     let [value, offset, size, salt] = evm.peek()?;
     evm::mem_check_int(offset, size)?;
     let (offset, size) = (offset.as_usize(), size.as_usize());
+    // EIP-3860: oversized initcode aborts like running out of gas.
+    if size > MAX_INITCODE_SIZE {
+        return Err(EvmYield::Halt(HaltReason::OutOfGas));
+    }
     // EIP-3860 initcode word cost (2) + CREATE2 hash word cost (6) = 8 per word
     let word_cost = 8 * ((size as i64 + 31) / 32);
     evm.gas_charge(word_cost)?;
@@ -359,11 +370,11 @@ pub fn staticcall<S: State>(
     let is_precompile = is_precompile(&address);
 
     let needs_account = address != Acc::ZERO && !is_precompile;
-    if needs_account && state.acc(&address).is_none() {
+    if needs_account && !state.has_acc(&address) {
         return Err(EvmYield::Fetch(Fetch::Account(address)));
     };
     if let Some(delegate) = state.auth(&address)
-        && state.acc(&delegate).is_none()
+        && !state.has_acc(&delegate)
     {
         return Err(EvmYield::Fetch(Fetch::Account(delegate)));
     }
@@ -378,7 +389,7 @@ pub fn staticcall<S: State>(
     evm.gas_charge(access_cost)?;
 
     if let Some(delegate) = state.auth(&address) {
-        let access_cost: i64 = if state.is_cold_acc(&delegate) {
+        let access_cost: i64 = if evm.is_cold_acc(&*state, &delegate) {
             2600
         } else {
             100
@@ -388,7 +399,7 @@ pub fn staticcall<S: State>(
     };
 
     // Fetch before mem_expand_max so expansion/charge survive reset
-    if !is_precompile && state.acc(&address).is_none() {
+    if !is_precompile && !state.has_acc(&address) {
         return Err(EvmYield::Fetch(Fetch::Account(address)));
     };
 
@@ -396,7 +407,7 @@ pub fn staticcall<S: State>(
 
     let available = evm.gas_remaining().max(0) as u64;
     let max_child = available - available / 64;
-    let gas = gas_arg.as_u64().min(max_child);
+    let gas = gas_arg.as_u64_saturating().min(max_child);
     evm.gas_charge(gas as i64)?;
 
     let data = evm.mem_get(args_offset, args_size)?;
@@ -406,7 +417,7 @@ pub fn staticcall<S: State>(
         to: Some(address),
         gas,
         eth: Int::ZERO,
-        data: data.to_vec().into(),
+        data: data.into(),
     };
 
     Err(EvmYield::Call(call, CallMode::Static(ret_offset, ret_size)))
@@ -435,7 +446,7 @@ pub fn selfdestruct<S: State>(
     let beneficiary: Acc = beneficiary.to();
 
     // Fetch beneficiary before gas accounting so is_empty check is accurate.
-    if state.acc(&beneficiary).is_none() {
+    if !state.has_acc(&beneficiary) {
         return Err(EvmYield::Fetch(crate::evm::Fetch::Account(beneficiary)));
     }
 
@@ -465,7 +476,72 @@ pub fn selfdestruct<S: State>(
 
     // EIP-6780 (Cancun): only destroy if contract was created in same transaction
     if state.created().contains(&ctx.this) {
+        // Its balance is zero from now on, so a contract that names itself as the beneficiary
+        // burns the Ether, and later calls in this transaction see no balance.
+        if !balance.is_zero() && beneficiary == ctx.this {
+            state.set_value(&ctx.this, Int::ZERO);
+        }
         state.destroy(&ctx.this);
     }
     Err(EvmYield::Return(vec![]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::{call, ctx, state};
+    use super::*;
+    use crate::call::Head;
+
+    #[test]
+    fn selfdestruct_to_self_burns_balance_of_new_contract() {
+        let this = Acc::from(0xc0u64);
+        let mut cache = crate::cache::Cache::new();
+        let funded = crate::state::Account {
+            value: Int::from(5u32),
+            nonce: Int::ONE,
+            code: Default::default(),
+        };
+        cache.create(this, funded);
+        cache.warm_acc(&this);
+        let ctx = Context {
+            origin: this,
+            is_static: false,
+            depth: 0,
+            this,
+        };
+        let mut evm = Evm::new(Head::default(), vec![], 100_000, Int::ONE, Int::ONE, vec![]);
+        evm.stack = vec![crate::evm::word(this.to())];
+
+        assert!(matches!(
+            selfdestruct(&mut evm, &ctx, &call(), &mut cache),
+            Err(EvmYield::Return(_))
+        ));
+        assert_eq!(cache.balance(&this), Some(Int::ZERO));
+        assert_eq!(cache.destroyed(), vec![this]);
+    }
+
+    #[test]
+    fn oversized_initcode_halts_create_and_create2() {
+        let size = Int::from(MAX_INITCODE_SIZE + 1);
+        let mut evm = Evm::new(
+            Head::default(),
+            vec![],
+            10_000_000,
+            Int::ONE,
+            Int::ONE,
+            vec![],
+        );
+        evm.stack = [Int::ZERO, size, Int::ZERO, Int::ZERO]
+            .map(crate::evm::word)
+            .to_vec();
+        assert!(matches!(
+            create2(&mut evm, &ctx(), &call(), &mut state()),
+            Err(EvmYield::Halt(HaltReason::OutOfGas))
+        ));
+        evm.stack = [size, Int::ZERO, Int::ZERO].map(crate::evm::word).to_vec();
+        assert!(matches!(
+            create(&mut evm, &ctx(), &call(), &mut state()),
+            Err(EvmYield::Halt(HaltReason::OutOfGas))
+        ));
+    }
 }

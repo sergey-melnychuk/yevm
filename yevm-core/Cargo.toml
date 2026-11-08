@@ -32,7 +32,7 @@ ark-bls12-381 = { version = "0.5", default-features = false, features = ["curve"
 ark-ec = { version = "0.5", default-features = false, features = ["std"] }
 ark-ff = { version = "0.5", default-features = false, features = ["std"] }
 futures.workspace = true
-ahash.workspace = true
+foldhash.workspace = true
 yevm-base.workspace = true
 yevm-misc.workspace = true
 alloy-eip7702 = { version = "0.6.3", features = ["k256"] }

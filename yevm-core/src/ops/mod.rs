@@ -510,7 +510,7 @@ pub mod tests {
         fn auth(&self, _: &Acc) -> Option<Acc> {
             None
         }
-        fn log(&mut self, _: Buf, _: Vec<Int>) {}
+        fn log(&mut self, _: &Acc, _: Buf, _: Vec<Int>) {}
         fn emit(&mut self, _: Event) -> usize {
             0
         }

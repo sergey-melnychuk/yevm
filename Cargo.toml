@@ -33,7 +33,7 @@ tiny-keccak = { version = "2", features = ["keccak"] }
 reqwest = { version = "0.13", features = ["json", "gzip"] }
 k256 = { version = "0.13", features = ["ecdsa"] }
 futures = "0.3"
-ahash = "0.8"
+foldhash = "0.2"
 yevm-base = { version = "0.1.0", path = "./yevm-base" }
 yevm-core = { version = "0.1.0", path = "./yevm-core" }
 yevm-lens = { version = "0.1.0", path = "./yevm-lens" }
