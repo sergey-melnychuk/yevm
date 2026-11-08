@@ -38,11 +38,15 @@ const YEVM_RPC_URL: &str = "YEVM_RPC_URL";
 //   `reth.toml`'s prune distance, ~10064 blocks/1.4 days on a --minimal node by
 //   default), not just the latest -- see yevm-reth's `RethDb::pin`. Requesting
 //   something older just fails with reth's own error, not a pre-emptive guess.
+//   "Latest"/`watch` here means min(state frontier + 1, RPC tip): the block's
+//   pre-state must be readable from the datadir (`RethDb::state_frontier`,
+//   ~35-81 blocks behind the tip on reth >= 2.10 defaults) and the block
+//   itself must exist on RPC, where its body is fetched from.
 
 /// Dispatches `Chain` calls to whichever backend is active, so `pre_block`/`Executor::run`
 /// don't need to know or care which one is in use. Borrows both variants (rather than
 /// owning `RethDb`) so `watch` mode can rebuild a fresh `AnyChain` each block while still
-/// calling `RethDb::refresh()`/`best_block_number()` on the same long-lived instance
+/// calling `RethDb::refresh_provider()`/`state_frontier()` on the same long-lived instance
 /// between iterations.
 enum AnyChain<'a> {
     Rpc(&'a Rpc),
@@ -169,17 +173,23 @@ async fn run() -> eyre::Result<()> {
         .as_deref()
         .map(yevm_reth::RethDb::latest)
         .transpose()?;
+    // Next replayable block needs both its pre-state readable from the
+    // datadir (`<= state_frontier() + 1` -- reth >= 2.10 persists blocks
+    // before their state is exactly readable, see `RethDb::state_frontier`)
+    // *and* the block itself, which is still fetched over RPC
+    // (`<= rpc tip`). With `--engine.persistence-threshold 0` the frontier
+    // can catch up with the tip, so `frontier + 1` may not exist yet.
     #[cfg(feature = "reth")]
     let reth_latest: Option<u64> = reth_db
         .as_ref()
-        .map(|db| db.best_block_number())
+        .map(|db| db.state_frontier())
         .transpose()?
-        .map(|tip| tip + 1);
+        .map(|frontier| (frontier + 1).min(rpc.block_number));
     #[cfg(not(feature = "reth"))]
     let reth_latest: Option<u64> = None;
 
-    // `--with-reth` always targets `tip + 1`, a different block on every
-    // run -- the on-disk `fetch/<block>.json` cache wouldn't apply run to
+    // `--with-reth` always targets the newest replayable block, a different
+    // block on every run -- the on-disk `fetch/<block>.json` cache wouldn't apply run to
     // run, and there is no receipt/revm-comparison path wired up for it
     // (see AnyChain above), so both are forced on rather than left to
     // silently do the wrong thing if the user forgets the flags.
@@ -232,7 +242,7 @@ async fn run() -> eyre::Result<()> {
 
     // No pre-check against what `--with-reth` can or can't replay here --
     // `RethDb::pin` (called per block below) actually tries, via
-    // `factory.latest()`/`history_by_block_number()`, and its own error
+    // reth's state overlay, and its own error
     // (via `?`) is what reports an unreachable block, rather than a guess
     // made in advance about what "should" work.
 
@@ -241,6 +251,8 @@ async fn run() -> eyre::Result<()> {
     // nothing processed yet, in which case the first block is whatever's
     // currently latest -- watch doesn't backfill all the way from genesis.
     let mut last_processed: Option<u64> = None;
+    #[cfg(feature = "reth")]
+    let mut rpc_tip: u64 = rpc.block_number;
 
     loop {
         if watch {
@@ -260,7 +272,14 @@ async fn run() -> eyre::Result<()> {
                 #[cfg(feature = "reth")]
                 let head = if let Some(db) = &reth_db {
                     db.refresh_provider()?;
-                    db.best_block_number()? + 1
+                    let state_ready = db.state_frontier()? + 1;
+                    // The block body comes from RPC (see `reth_latest`), so it
+                    // must exist there too -- only ask RPC when the frontier
+                    // has moved past the last tip it reported.
+                    if state_ready > rpc_tip {
+                        rpc_tip = Rpc::latest(url.clone()).await?.block_number;
+                    }
+                    state_ready.min(rpc_tip)
                 } else {
                     rpc = Rpc::latest(url.clone()).await?;
                     rpc.block_number
@@ -291,10 +310,9 @@ async fn run() -> eyre::Result<()> {
             index = None;
         }
 
-        // Pins state to right before `number` -- `RethDb::pin` uses
-        // `factory.latest()` when it's the current tip + 1, or
-        // `history_by_block_number()` to reach a bit further back, as long
-        // as it's within the node's retained history
+        // Pins state to right before `number` -- `RethDb::pin` reaches any
+        // block from the state frontier back, as long as it's within the
+        // node's retained history
         // (`account_history`/`storage_history` prune distance in
         // `reth.toml`). No pre-check here: this either succeeds or its own
         // error (via `?`) reports why `number` isn't reachable.
@@ -1191,7 +1209,7 @@ mod live {
                         limit: 0,
                         spent: 0,
                         refund: 0,
-                        finalized: gas.used() as i64,
+                        finalized: gas.tx_gas_used() as i64,
                     },
                 },
                 ExecutionResult::Success {
@@ -1206,7 +1224,7 @@ mod live {
                         limit: 0,
                         spent: 0,
                         refund: 0,
-                        finalized: gas.used() as i64,
+                        finalized: gas.tx_gas_used() as i64,
                     },
                 },
                 ExecutionResult::Success {
@@ -1221,7 +1239,7 @@ mod live {
                         limit: 0,
                         spent: 0,
                         refund: 0,
-                        finalized: gas.used() as i64,
+                        finalized: gas.tx_gas_used() as i64,
                     },
                 },
                 ExecutionResult::Revert {
@@ -1235,7 +1253,7 @@ mod live {
                         limit: 0,
                         spent: 0,
                         refund: 0,
-                        finalized: gas.used() as i64,
+                        finalized: gas.tx_gas_used() as i64,
                     },
                 },
                 ExecutionResult::Halt {
@@ -1249,7 +1267,7 @@ mod live {
                         limit: 0,
                         spent: 0,
                         refund: 0,
-                        finalized: gas.used() as i64,
+                        finalized: gas.tx_gas_used() as i64,
                     },
                 },
             },

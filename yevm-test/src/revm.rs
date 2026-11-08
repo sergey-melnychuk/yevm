@@ -301,7 +301,7 @@ pub async fn run(
             Output::Create(code, Some(addr)) => Ok((
                 Acc::from(addr.as_slice()).to::<32>(),
                 Buf(code.to_vec()),
-                gas.used() as i64,
+                gas.tx_gas_used() as i64,
                 steps,
                 snapshot,
             )),
@@ -309,7 +309,7 @@ pub async fn run(
             Output::Call(bytes) => Ok((
                 Int::from(1u64),
                 Buf(bytes.to_vec()),
-                gas.used() as i64,
+                gas.tx_gas_used() as i64,
                 steps,
                 snapshot,
             )),
@@ -317,14 +317,14 @@ pub async fn run(
         ExecutionResult::Revert { gas, output, .. } => Ok((
             Int::from(0u64),
             Buf(output.to_vec()),
-            gas.used() as i64,
+            gas.tx_gas_used() as i64,
             steps,
             snapshot,
         )),
         ExecutionResult::Halt { gas, .. } => Ok((
             Int::from(0u64),
             Buf::default(),
-            gas.used() as i64,
+            gas.tx_gas_used() as i64,
             steps,
             snapshot,
         )),
