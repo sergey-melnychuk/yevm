@@ -12,6 +12,17 @@ members = [
     "yevm-test",
     "yevm-wasm",
 ]
+default-members = [
+    "yevm",
+    "yevm-base",
+    "yevm-core",
+    "yevm-demo",
+    "yevm-gate",
+    "yevm-lens",
+    "yevm-misc",
+    "yevm-test",
+    "yevm-wasm",
+]
 
 [profile.release]
 #codegen-units = 1
@@ -40,12 +51,12 @@ yevm-lens = { version = "0.1.0", path = "./yevm-lens" }
 yevm-misc = { version = "0.1.0", path = "./yevm-misc" }
 yevm-wasm = { version = "0.1.0", path = "./yevm-wasm" }
 
-# Mirrors the [patch] sections of reth's workspace Cargo.toml at the tag pinned
+# Mirrors the [patch] sections of reth's workspace Cargo.toml at the rev pinned
 # in yevm-reth/Cargo.toml (patches of a git dependency are not inherited by
-# consumers). Re-sync these revs whenever that tag is bumped.
+# consumers). Re-sync these revs whenever that rev is bumped.
 [patch."https://github.com/alloy-rs/evm2"]
-evm2 = { git = "https://github.com/DaniPopes/evm2", rev = "592bf18c4e22fff54ac9b4db606c4ee276e345cb" }
-evm2-inspectors = { git = "https://github.com/DaniPopes/evm2", rev = "592bf18c4e22fff54ac9b4db606c4ee276e345cb" }
+evm2 = { git = "https://github.com/DaniPopes/evm2", rev = "37fb326b91a76dd07308c703b3f3c85152a6230b" }
+evm2-inspectors = { git = "https://github.com/DaniPopes/evm2", rev = "37fb326b91a76dd07308c703b3f3c85152a6230b" }
 
 [patch.crates-io]
 reth-codecs = { git = "https://github.com/paradigmxyz/reth-core", rev = "275ce4cf5befeb9f1e8acd935ff2882d2d25fc61" }

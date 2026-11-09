@@ -2,7 +2,7 @@
 name = "yevm-reth"
 version = "0.1.0"
 edition = "2024"
-description = "Chain impl reading Ethereum state directly from a local reth MDBX datadir, bypassing JSON-RPC for latest-block state (balance/nonce/code/storage)."
+description = "Chain impl reading Ethereum state directly from a local reth MDBX datadir, bypassing JSON-RPC for latest-block state (balance/nonce/code/storage), and a reth node that executes blocks with yevm."
 license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
 repository = "https://github.com/sergey-melnychuk/yevm"
 publish = false
@@ -21,9 +21,36 @@ alloy-consensus = { version = "2.3", default-features = false }
 alloy-eips = { version = "2.3", default-features = false }
 
 # Not published to crates.io in a consumable form -- reth's own examples
-# consume these via a pinned git tag. Match this tag to `reth --version`
-# on the node this points at (bump alongside it).
-reth-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v2.10.0", features = ["node"] }
-reth-node-types = { git = "https://github.com/paradigmxyz/reth", tag = "v2.10.0" }
-reth-db = { git = "https://github.com/paradigmxyz/reth", tag = "v2.10.0", default-features = false }
-reth-stages-types = { git = "https://github.com/paradigmxyz/reth", tag = "v2.10.0", default-features = false }
+# consume these via a pinned git ref. Pinned to a reth main rev (after
+# v2.10.1) whose EVM API the `exec` module needs, until a release has it.
+reth-ethereum = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b", features = ["node", "cli"] }
+reth-node-types = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b" }
+reth-db = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b", default-features = false }
+reth-stages-types = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b", default-features = false }
+
+# exec: yevm as reth's EVM (`exec` module, `node` bin).
+reth-chainspec = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b", features = ["std"] }
+reth-ethereum-forks = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b", features = ["std"] }
+reth-ethereum-primitives = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b", features = ["std"] }
+reth-evm = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b", features = ["std"] }
+reth-evm-ethereum = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b", features = ["std"] }
+reth-execution-types = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b", features = ["std"] }
+reth-storage-errors = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b", features = ["std"] }
+# From crates.io in reth too; the workspace `[patch.crates-io]` redirects it to reth-core.
+reth-primitives-traits = { version = "0.8.2", features = ["std"] }
+# The evm2 rev that reth rev pins; the workspace `[patch]` keeps it one crate with reth's.
+evm2 = { git = "https://github.com/alloy-rs/evm2", rev = "37fb326b91a76dd07308c703b3f3c85152a6230b", features = ["block", "std"] }
+alloy-eip7928 = { version = "0.4.10", features = ["std"] }
+alloy-rpc-types-engine = { version = "2.5.0", default-features = false, features = ["std"] }
+thiserror.workspace = true
+tracing = "0.1"
+
+[dev-dependencies]
+criterion = { package = "codspeed-criterion-compat", version = "4.3" }
+reth-evm = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b", features = ["test-utils"] }
+reth-testing-utils = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b" }
+secp256k1 = { version = "0.33", default-features = false, features = ["global-context", "recovery"] }
+
+[[bench]]
+name = "execute"
+harness = false

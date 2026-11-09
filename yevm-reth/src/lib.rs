@@ -23,8 +23,8 @@
 //! API verified against reth's own `examples/db-access` and
 //! `examples/full-contract-state` at tag `v2.5.1`
 //! (<https://github.com/paradigmxyz/reth/tree/v2.5.1/examples>); bumped to
-//! `v2.10.0` (evm2-based; needs reth's `[patch]` entries mirrored in the
-//! workspace `Cargo.toml`).
+//! reth main rev `46731e9`, past `v2.10.1` (evm2-based; needs reth's
+//! `[patch]` entries mirrored in the workspace `Cargo.toml`).
 //!
 //! Deliberately **not** using `tokio::task::spawn_blocking` around these
 //! MDBX reads: they're memory-mapped point lookups against a page cache
@@ -66,6 +66,8 @@ use yevm_core::{
     state::Account,
 };
 use yevm_misc::buf::Buf;
+
+pub mod exec;
 
 pub type Factory = ProviderFactory<NodeTypesWithDBAdapter<EthereumNode, DatabaseEnv>>;
 pub type Provider =

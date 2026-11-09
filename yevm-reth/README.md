@@ -7,6 +7,20 @@ to the live node.
 
 This guide covers how the node must be configured and operated for this to work well.
 
+`yevm-reth` also builds `node`: the standard reth Ethereum node with yevm as its EVM (the `exec`
+module), so block validation, payload building and `eth_call`-style RPCs run on yevm. It takes
+reth's usual CLI and can replace the reth binary on an existing datadir:
+
+```
+cargo build --release -p yevm-reth --bin node
+target/release/node node --chain mainnet --datadir <dir> ...
+```
+
+yevm implements only the Osaka rules, so a fresh node must start with `--snap.v2` so that
+only blocks after the snap target are executed. Only the `node` command uses yevm. The CLI
+commands that execute blocks on their own (`re-execute`, `stage run`, `import`) still run
+evm2. See the `exec` module docs for the other limitations.
+
 ## 1. What yevm can read, and how far behind the head it is
 
 reth ≥ 2.10 persists blocks in batches, and by default it delays the state writes for the
