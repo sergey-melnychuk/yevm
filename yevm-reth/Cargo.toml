@@ -3,7 +3,7 @@ name = "yevm-reth"
 version = "0.1.0"
 edition = "2024"
 description = "Chain impl reading Ethereum state directly from a local reth MDBX datadir, bypassing JSON-RPC for latest-block state (balance/nonce/code/storage), and a reth node that executes blocks with yevm."
-license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/sergey-melnychuk/yevm"
 publish = false
 

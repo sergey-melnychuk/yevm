@@ -43,13 +43,14 @@ Intended for:
 
 3. [EVM.codes](https://www.evm.codes/)
 
-## Licensing
+## License
 
-YEVM is licensed under the PolyForm Noncommercial License 1.0.0. 
-It is free for educational use, research, and non-commercial tooling.
+Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+Earlier versions, released under the PolyForm Noncommercial License 1.0.0, are also available
+under these terms.
 
-### Commercial Use
-If you wish to use YEVM for commercial purposes, embed it into revenue-generating 
-infrastructure, or operate it for commercial advantage, the PolyForm license does 
-not apply. Please contact me directly to discuss commercial licensing 
-and revenue-sharing terms.
+Unless you explicitly state otherwise, any contribution you intentionally submit for inclusion
+in YEVM, as defined in the Apache-2.0 license, is dual licensed as above, without any
+additional terms or conditions.
+
+Paid support, priority fixes and custom work: contact me.
