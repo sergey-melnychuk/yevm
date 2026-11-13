@@ -50,6 +50,12 @@ criterion = { package = "codspeed-criterion-compat", version = "4.3" }
 reth-evm = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b", features = ["test-utils"] }
 reth-testing-utils = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b" }
 secp256k1 = { version = "0.33", default-features = false, features = ["global-context", "recovery"] }
+# EEST blockchain tests (`tests/eest.rs`): fixture parsing, block decoding, and an independent
+# state root computation for the in-memory world state the cases run on.
+alloy-rlp = "0.3"
+alloy-trie = { version = "0.9", features = ["ethereum"] }
+serde.workspace = true
+serde_json.workspace = true
 
 [[bench]]
 name = "execute"

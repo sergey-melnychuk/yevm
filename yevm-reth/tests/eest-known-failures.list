@@ -1,0 +1,29 @@
+# EEST cases that yevm fails and that evm2, reth's own EVM, fails too. tests/eest.rs
+# does not count them as failures; it fails if one of them starts passing, so the list stays
+# exact. One `<fixture file>::<case name>` per line, as in tmp/eest/report-<evm>.txt.
+#
+# All 14 are EIP-7610 creation collisions: a CREATE, CREATE2 or creation transaction targets
+# an address that has storage but no code and nonce 0. The spec makes the creation fail and
+# consume all its gas. The database interface both EVMs read state through (evm2's `Database`,
+# as reth uses it) cannot tell whether an account has storage, so evm2 and yevm detect a
+# collision from code and nonce only and deploy the contract. reth's and revm's own EF test
+# runners skip these files for that reason. On mainnet, reaching such an address takes a hash
+# collision.
+# Checked on 2026-11-13 with EEST v5.4.0 develop: `EEST_EVM=evm2` fails exactly these cases, with
+# the same errors (tmp/eest/report-yevm.txt and report-evm2.txt are identical). In particular,
+# both give the new contract empty storage, so where the init code clears a slot the colliding
+# address already holds, neither reads the stale value.
+paris/eip7610_create_collision/test_init_collision_create_opcode.json::tests/paris/eip7610_create_collision/test_initcollision.py::test_init_collision_create_opcode[fork_Osaka-blockchain_test_from_state_test-opcode_CREATE-non-empty-balance-correct-initcode]
+paris/eip7610_create_collision/test_init_collision_create_opcode.json::tests/paris/eip7610_create_collision/test_initcollision.py::test_init_collision_create_opcode[fork_Osaka-blockchain_test_from_state_test-opcode_CREATE-non-empty-balance-revert-initcode]
+paris/eip7610_create_collision/test_init_collision_create_opcode.json::tests/paris/eip7610_create_collision/test_initcollision.py::test_init_collision_create_opcode[fork_Osaka-blockchain_test_from_state_test-opcode_CREATE2-non-empty-balance-correct-initcode]
+paris/eip7610_create_collision/test_init_collision_create_opcode.json::tests/paris/eip7610_create_collision/test_initcollision.py::test_init_collision_create_opcode[fork_Osaka-blockchain_test_from_state_test-opcode_CREATE2-non-empty-balance-revert-initcode]
+paris/eip7610_create_collision/test_init_collision_create_tx.json::tests/paris/eip7610_create_collision/test_initcollision.py::test_init_collision_create_tx[fork_Osaka-tx_type_0-blockchain_test_from_state_test-non-empty-balance-correct-initcode]
+paris/eip7610_create_collision/test_init_collision_create_tx.json::tests/paris/eip7610_create_collision/test_initcollision.py::test_init_collision_create_tx[fork_Osaka-tx_type_0-blockchain_test_from_state_test-non-empty-balance-revert-initcode]
+paris/eip7610_create_collision/test_init_collision_create_tx.json::tests/paris/eip7610_create_collision/test_initcollision.py::test_init_collision_create_tx[fork_Osaka-tx_type_1-blockchain_test_from_state_test-non-empty-balance-correct-initcode]
+paris/eip7610_create_collision/test_init_collision_create_tx.json::tests/paris/eip7610_create_collision/test_initcollision.py::test_init_collision_create_tx[fork_Osaka-tx_type_1-blockchain_test_from_state_test-non-empty-balance-revert-initcode]
+paris/eip7610_create_collision/test_init_collision_create_tx.json::tests/paris/eip7610_create_collision/test_initcollision.py::test_init_collision_create_tx[fork_Osaka-tx_type_2-blockchain_test_from_state_test-non-empty-balance-correct-initcode]
+paris/eip7610_create_collision/test_init_collision_create_tx.json::tests/paris/eip7610_create_collision/test_initcollision.py::test_init_collision_create_tx[fork_Osaka-tx_type_2-blockchain_test_from_state_test-non-empty-balance-revert-initcode]
+static/state_tests/stCreate2/create2collisionStorageParis.json::tests/static/state_tests/stCreate2/create2collisionStorageParisFiller.json::create2collisionStorageParis[fork_Osaka-blockchain_test_from_state_test-d0]
+static/state_tests/stCreate2/create2collisionStorageParis.json::tests/static/state_tests/stCreate2/create2collisionStorageParisFiller.json::create2collisionStorageParis[fork_Osaka-blockchain_test_from_state_test-d1]
+static/state_tests/stCreate2/create2collisionStorageParis.json::tests/static/state_tests/stCreate2/create2collisionStorageParisFiller.json::create2collisionStorageParis[fork_Osaka-blockchain_test_from_state_test-d2]
+static/state_tests/stExtCodeHash/dynamicAccountOverwriteEmpty_Paris.json::tests/static/state_tests/stExtCodeHash/dynamicAccountOverwriteEmpty_ParisFiller.yml::dynamicAccountOverwriteEmpty_Paris[fork_Osaka-blockchain_test_from_state_test-]

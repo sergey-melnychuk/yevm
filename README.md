@@ -12,7 +12,7 @@ Pronounced *ye-vi-em* — "ye" as in "yes", not "why-vi-em".
 - **WebAssembly-native** — runs in-browser or in edge environments without modification
 - **Observability** — full tracing, clean error types, inspectable state at every step
 - **Performance** — execution performance comparable to production-grade EVM implementations
-- **Correctness** — 99+% on GeneralStateTests at Cancun (mainnet is now Osaka/Fusaka)
+- **Correctness** — passes the Ethereum execution-spec-tests for Osaka as reth's EVM: 21,567 of 21,581 blockchain tests; the 14 failures are EIP-7610 collision cases that reth's own EVM fails too (see [etc/TEST.md](etc/TEST.md))
 - **Mainnet-oriented** — focus on supporting only latest Ethereum mainnet hard-fork
 - **Infra-agnostic** — needs only RPC URL, can use service provider or own hosted node
 

@@ -30,6 +30,14 @@ opt-level = 3
 panic = "abort"
 lto = "fat"
 
+# Optimized like release but without LTO, so the reth-sized EEST test binary links in
+# reasonable time and memory: `cargo test -p yevm-reth --profile eest --test eest -- --ignored`
+[profile.eest]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = false
+
 [workspace.dependencies]
 eyre = "0.6"
 thiserror = "2.0"
