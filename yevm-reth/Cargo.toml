@@ -42,6 +42,9 @@ reth-primitives-traits = { version = "0.8.2", features = ["std"] }
 evm2 = { git = "https://github.com/alloy-rs/evm2", rev = "37fb326b91a76dd07308c703b3f3c85152a6230b", features = ["block", "std"] }
 alloy-eip7928 = { version = "0.4.10", features = ["std"] }
 alloy-rpc-types-engine = { version = "2.5.0", default-features = false, features = ["std"] }
+# silt (state-diff feed, binary lookups + proofs, silt_multiproof) installed into the `node`
+# bin. It must build against this same reth rev: silt aafb09f (D10) pins reth 46731e9 too.
+silt-node = { git = "https://github.com/sergey-melnychuk/silt.git", rev = "aafb09f6c6a7a8283c87866412aa01a2269c58ae" }
 thiserror.workspace = true
 tracing = "0.1"
 

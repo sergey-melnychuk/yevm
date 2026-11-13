@@ -5,6 +5,12 @@
 //! [`yevm_reth::exec`] for the limitations, most importantly that only Osaka blocks can be executed:
 //! on an existing chain, sync with `--snap.v2` so that only blocks after the snap target are
 //! executed.
+//!
+//! silt is installed alongside (two builder calls): the "silt" ExEx publishes a state diff per
+//! committed block on the feed (`silt.toml` `bind`, default 127.0.0.1:8585) and serves binary
+//! state lookups and trie proofs (`lookup_bind`, default 127.0.0.1:8586); `silt_multiproof` is
+//! merged into the RPC transports `--http`/`--ws`/`--ipc` enable. Config: `./silt.toml`,
+//! defaults if absent.
 
 use reth_ethereum::{
     EthPrimitives,
@@ -41,10 +47,17 @@ fn main() {
     if let Err(err) = Cli::parse_args().run(async move |builder, _| {
         info!(target: "reth::cli", "Launching node with the yevm executor");
         let backfill = EthereumBackfill::new(builder.config());
+        let silt = silt_node::SiltConfig::load()?;
         let handle = builder
             .with_types::<EthereumNode>()
             .with_components(EthereumNode::components().executor(YevmExecutorBuilder))
             .with_add_ons(EthereumAddOns::default())
+            .install_exex("silt", async move |ctx| Ok(silt_node::run_exex(ctx, silt)))
+            .extend_rpc_modules(|ctx| {
+                ctx.modules
+                    .merge_configured(silt_node::rpc_module(ctx.provider().clone()))?;
+                Ok(())
+            })
             .launch_with_debug_capabilities_and_backfill(backfill)
             .await?;
 
