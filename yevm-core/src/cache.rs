@@ -28,6 +28,11 @@ pub struct Slot {
 struct AccountEntry {
     account: Account,
     storage: HashMap<Int, Slot>,
+    /// Whether the account's storage started empty here, because the account was created (or
+    /// destroyed) in this cache: a slot missing from `storage` is then zero and is never loaded.
+    /// The chain may still hold storage at a created address (the collisions of EIP-7610), but a
+    /// creation discards it, as it does in the spec's `process_create_message`.
+    fresh: bool,
 }
 
 impl Default for AccountEntry {
@@ -39,6 +44,7 @@ impl Default for AccountEntry {
                 code: (vec![].into(), Int::ZERO),
             },
             storage: HashMap::new(),
+            fresh: false,
         }
     }
 }
@@ -460,6 +466,7 @@ fn entry<'a>(
     accounts.entry(acc).or_insert_with(|| AccountEntry {
         account: load(),
         storage: spare.pop().unwrap_or_default(),
+        fresh: false,
     })
 }
 
@@ -473,6 +480,8 @@ fn recycle(spare: &mut Vec<HashMap<Int, Slot>>, storage: &mut HashMap<Int, Slot>
 
 /// Returns the slot of `key` in `acc`'s storage. A missing slot is loaded with the value `load`
 /// returns, or `None` is returned without `load`; `None` is also returned if `acc` is not loaded.
+/// A missing slot of a fresh account (see [`AccountEntry::fresh`]) is zero, with or without
+/// `load`.
 fn slot<'a>(
     accounts: &'a mut HashMap<Acc, AccountEntry>,
     warm_keys: &HashSet<(Acc, Int)>,
@@ -480,12 +489,16 @@ fn slot<'a>(
     key: &Int,
     load: Option<impl FnOnce() -> Int>,
 ) -> Option<&'a mut Slot> {
-    let storage = &mut accounts.get_mut(acc)?.storage;
-    let Some(load) = load else {
+    let AccountEntry { storage, fresh, .. } = accounts.get_mut(acc)?;
+    let fresh = *fresh;
+    if load.is_none() && !fresh {
         return storage.get_mut(key);
-    };
+    }
     Some(storage.entry(*key).or_insert_with(|| {
-        let value = load();
+        let value = match load {
+            Some(load) if !fresh => load(),
+            _ => Int::ZERO,
+        };
         Slot {
             original: value,
             current: value,
@@ -503,7 +516,11 @@ impl State for Cache {
     // Storage: returns (current, original)
     fn get(&mut self, acc: &Acc, key: &Int) -> Option<(Int, Int)> {
         let entry = self.accounts.get(acc)?;
-        let (cur, org) = entry.storage.get(key).map(|s| (s.current, s.original))?;
+        let (cur, org) = match entry.storage.get(key) {
+            Some(slot) => (slot.current, slot.original),
+            None if entry.fresh => (Int::ZERO, Int::ZERO),
+            None => return None,
+        };
         self.trace(|| {
             Event::Get(Target::Store {
                 acc: *acc,
@@ -703,6 +720,7 @@ impl State for Cache {
             AccountEntry {
                 account: info,
                 storage,
+                fresh: true,
             },
         ) {
             recycle(&mut self.spare_storage, &mut old.storage);
@@ -881,6 +899,7 @@ impl State for Cache {
             let empty = AccountEntry {
                 account: AccountEntry::default().account,
                 storage,
+                fresh: true,
             };
             if let Some(mut old) = self.accounts.insert(acc, empty) {
                 recycle(&mut self.spare_storage, &mut old.storage);
@@ -1046,8 +1065,8 @@ mod tests {
         assert!(account.code.0.is_empty(), "code must be cleared");
         assert_eq!(
             cache.get(&target, &Int::from(1u32)),
-            None,
-            "storage must be cleared"
+            Some((Int::ZERO, Int::ZERO)),
+            "storage must be cleared, not refetched"
         );
         assert!(
             cache.created().is_empty() && cache.destroyed().is_empty(),
@@ -1255,6 +1274,42 @@ mod tests {
         assert_eq!(
             cache.get_with_warmth_or_load(&target, &listed, || Int::ZERO),
             Some((Int::ZERO, Int::ZERO, false))
+        );
+    }
+
+    /// A created account's storage starts empty even where the chain still has storage at its
+    /// address (an EIP-7610 collision): its slots read as zero, both original and current,
+    /// without being loaded, until the creation is reverted.
+    #[test]
+    fn created_accounts_start_with_empty_storage() {
+        let target = acc("0x00000000000000000000000000000000000000c1");
+        let (key, other) = (Int::from(1u32), Int::from(2u32));
+        let stale = Int::from(7u32);
+        let mut cache = Cache::new();
+        cache.merge(&target, Account::default());
+
+        let checkpoint = cache.checkpoint();
+        cache.create(
+            target,
+            Account {
+                value: Int::ZERO,
+                nonce: Int::ONE,
+                code: (Buf::default(), Int::ZERO),
+            },
+        );
+        assert_eq!(cache.get(&target, &key), Some((Int::ZERO, Int::ZERO)));
+        assert_eq!(
+            cache.get_with_warmth_or_load(&target, &key, || stale),
+            Some((Int::ZERO, Int::ZERO, true))
+        );
+        // No yield to fetch the slot either.
+        assert_eq!(cache.get_warm(&target, &other), Some((Int::ZERO, true)));
+
+        cache.revert_to(checkpoint);
+        cache.merge(&target, Account::default());
+        assert_eq!(
+            cache.get_with_warmth_or_load(&target, &key, || stale),
+            Some((stale, stale, true))
         );
     }
 
