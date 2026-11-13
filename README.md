@@ -49,8 +49,7 @@ Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at 
 Earlier versions, released under the PolyForm Noncommercial License 1.0.0, are also available
 under these terms.
 
-Unless you explicitly state otherwise, any contribution you intentionally submit for inclusion
-in YEVM, as defined in the Apache-2.0 license, is dual licensed as above, without any
-additional terms or conditions.
+YEVM does not accept outside code contributions. Bug reports and feature requests are welcome
+as issues.
 
 Paid support, priority fixes and custom work: contact me.
