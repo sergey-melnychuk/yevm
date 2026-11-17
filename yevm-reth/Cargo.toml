@@ -21,37 +21,37 @@ alloy-consensus = { version = "2.3", default-features = false }
 alloy-eips = { version = "2.3", default-features = false }
 
 # Not published to crates.io in a consumable form -- reth's own examples
-# consume these via a pinned git ref. Pinned to a reth main rev (after
-# v2.10.1) whose EVM API the `exec` module needs, until a release has it.
-reth-ethereum = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b", features = ["node", "cli"] }
-reth-node-types = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b" }
-reth-db = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b", default-features = false }
-reth-stages-types = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b", default-features = false }
+# consume these via a pinned git ref: the v2.11.0 tag (`b9abbcc`), the
+# first release with the EVM API the `exec` module needs.
+reth-ethereum = { git = "https://github.com/paradigmxyz/reth", rev = "b9abbcc1b982755baa9021e6874e2e58936ca65f", features = ["node", "cli"] }
+reth-node-types = { git = "https://github.com/paradigmxyz/reth", rev = "b9abbcc1b982755baa9021e6874e2e58936ca65f" }
+reth-db = { git = "https://github.com/paradigmxyz/reth", rev = "b9abbcc1b982755baa9021e6874e2e58936ca65f", default-features = false }
+reth-stages-types = { git = "https://github.com/paradigmxyz/reth", rev = "b9abbcc1b982755baa9021e6874e2e58936ca65f", default-features = false }
 
 # exec: yevm as reth's EVM (`exec` module, `node` bin).
-reth-chainspec = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b", features = ["std"] }
-reth-ethereum-forks = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b", features = ["std"] }
-reth-ethereum-primitives = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b", features = ["std"] }
-reth-evm = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b", features = ["std"] }
-reth-evm-ethereum = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b", features = ["std"] }
-reth-execution-types = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b", features = ["std"] }
-reth-storage-errors = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b", features = ["std"] }
+reth-chainspec = { git = "https://github.com/paradigmxyz/reth", rev = "b9abbcc1b982755baa9021e6874e2e58936ca65f", features = ["std"] }
+reth-ethereum-forks = { git = "https://github.com/paradigmxyz/reth", rev = "b9abbcc1b982755baa9021e6874e2e58936ca65f", features = ["std"] }
+reth-ethereum-primitives = { git = "https://github.com/paradigmxyz/reth", rev = "b9abbcc1b982755baa9021e6874e2e58936ca65f", features = ["std"] }
+reth-evm = { git = "https://github.com/paradigmxyz/reth", rev = "b9abbcc1b982755baa9021e6874e2e58936ca65f", features = ["std"] }
+reth-evm-ethereum = { git = "https://github.com/paradigmxyz/reth", rev = "b9abbcc1b982755baa9021e6874e2e58936ca65f", features = ["std"] }
+reth-execution-types = { git = "https://github.com/paradigmxyz/reth", rev = "b9abbcc1b982755baa9021e6874e2e58936ca65f", features = ["std"] }
+reth-storage-errors = { git = "https://github.com/paradigmxyz/reth", rev = "b9abbcc1b982755baa9021e6874e2e58936ca65f", features = ["std"] }
 # From crates.io in reth too; the workspace `[patch.crates-io]` redirects it to reth-core.
 reth-primitives-traits = { version = "0.8.2", features = ["std"] }
 # The evm2 rev that reth rev pins; the workspace `[patch]` keeps it one crate with reth's.
-evm2 = { git = "https://github.com/alloy-rs/evm2", rev = "37fb326b91a76dd07308c703b3f3c85152a6230b", features = ["block", "std"] }
+evm2 = { git = "https://github.com/alloy-rs/evm2", rev = "66687c18b34d3bdbb899f5eb7605070615c03475", features = ["block", "std"] }
 alloy-eip7928 = { version = "0.4.10", features = ["std"] }
 alloy-rpc-types-engine = { version = "2.5.0", default-features = false, features = ["std"] }
 # silt (state-diff feed, binary lookups + proofs, silt_multiproof) installed into the `node`
-# bin. It must build against this same reth rev: silt 342df0a (D11, D6 span cap) pins reth 46731e9 too.
-silt-node = { git = "https://github.com/sergey-melnychuk/silt.git", rev = "342df0a21711c54f643e14f086d2d90214176c75" }
+# bin. It must build against this same reth rev: silt f701f02 (D12, reth v2.11.0) pins reth v2.11.0 too.
+silt-node = { git = "https://github.com/sergey-melnychuk/silt.git", rev = "f701f02ea3e25f8e0a7a7da5ac8e91335859a600" }
 thiserror.workspace = true
 tracing = "0.1"
 
 [dev-dependencies]
 criterion = { package = "codspeed-criterion-compat", version = "4.3" }
-reth-evm = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b", features = ["test-utils"] }
-reth-testing-utils = { git = "https://github.com/paradigmxyz/reth", rev = "46731e939ea81a31fe468378f5344657640da36b" }
+reth-evm = { git = "https://github.com/paradigmxyz/reth", rev = "b9abbcc1b982755baa9021e6874e2e58936ca65f", features = ["test-utils"] }
+reth-testing-utils = { git = "https://github.com/paradigmxyz/reth", rev = "b9abbcc1b982755baa9021e6874e2e58936ca65f" }
 secp256k1 = { version = "0.33", default-features = false, features = ["global-context", "recovery"] }
 # EEST blockchain tests (`tests/eest.rs`): fixture parsing, block decoding, and an independent
 # state root computation for the in-memory world state the cases run on.
