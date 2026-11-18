@@ -19,20 +19,24 @@ cargo test -p yevm-reth --profile eest --test eest -- --ignored --nocapture
 `EEST_TRACE` are described in `yevm-reth/tests/eest.rs`. The first build compiles all of
 reth, about 15 minutes with `-j 12`. Don't run it next to a live node on a small machine.
 
-2026-11-13, reth 46731e9, 6 threads:
+2026-11-18, reth v2.11.0 (b9abbcc), evm2 66687c1, `EEST_THREADS=2`:
 
 ```
 === EEST blockchain tests, yevm on Osaka,OsakaToBPO1AtTime15k,BPO1ToBPO2AtTime15k,BPO2ToBPO3AtTime15k,BPO3ToBPO4AtTime15k ===
 passed: 21567
 failed: 14 (0 panics, 14 known: tests/eest-known-failures.list)
  TOTAL: 21581
-  time: 84s
+  time: 152s
 ```
+
+The result is unchanged from 2026-11-13 on reth 46731e9 (6 threads, 84 s), and the failure report
+is byte-identical. With 2 threads the run peaks at 640 MB RSS.
 
 - **The 14 known failures** are EIP-7610 creation collisions: a creation targets an address that
   has storage but no code and nonce 0, which the spec says must fail. evm2 fails the same 14
-  (`EEST_EVM=evm2`: same pass count, 130 s). Neither EVM can see the storage through the
-  database interface reth gives it. Reaching such an address on mainnet takes a hash collision.
+  (`EEST_EVM=evm2` on reth 46731e9: same pass count, 130 s). Neither EVM can see the storage
+  through the database interface reth gives it. Reaching such an address on mainnet takes a hash
+  collision.
   - yevm and evm2 fail them with the same errors: `tmp/eest/report-yevm.txt` and
     `report-evm2.txt` are identical, including the gas used in the five cases whose init code
     clears a slot the colliding address already holds. Both give a new contract empty storage, as
