@@ -73,3 +73,8 @@ reth-primitives-traits = { git = "https://github.com/paradigmxyz/reth-core", rev
 reth-rpc-traits = { git = "https://github.com/paradigmxyz/reth-core", rev = "275ce4cf5befeb9f1e8acd935ff2882d2d25fc61" }
 reth-zstd-compressors = { git = "https://github.com/paradigmxyz/reth-core", rev = "275ce4cf5befeb9f1e8acd935ff2882d2d25fc61" }
 #librocksdb-sys = { path = "/home/work/.local/share/rocksdb-patched-vendors/librocksdb-sys-0.17.3+10.4.2" }
+
+# silt PLAN M6: silt-cache's yevm adapter (a git dependency on this repo) and
+# yevm-reth must see one `yevm` crate, so one `Chain` trait.
+[patch."https://github.com/sergey-melnychuk/yevm.git"]
+yevm = { path = "yevm" }

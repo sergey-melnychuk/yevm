@@ -146,8 +146,8 @@ fn state_at(factory: &Factory, block: u64, frontier: u64) -> eyre::Result<StateP
 pub struct RethDb {
     factory: Factory,
     /// Pinned state view (see [`RethDb::pin`]) -- does *not* auto-advance
-    /// as the node keeps writing.
-    state: Mutex<StateProviderBox>,
+    /// as the node keeps writing. `None` after [`RethDb::unpin`].
+    state: Mutex<Option<StateProviderBox>>,
     /// Opened once and reused for `best_block_number`/`head`/`block`.
     /// `factory.provider()` opens a fresh MDBX read transaction *and* calls
     /// reth's internal `sync_providers_if_needed()` (re-syncing against the
@@ -183,7 +183,7 @@ impl RethDb {
 
         Ok(Self {
             factory,
-            state: Mutex::new(state),
+            state: Mutex::new(Some(state)),
             provider: Mutex::new(provider),
         })
     }
@@ -220,8 +220,28 @@ impl RethDb {
         self.refresh_provider()?;
         let frontier = self.state_frontier()?;
         let state = state_at(&self.factory, target - 1, frontier)?;
-        *self.state.lock().unwrap() = state;
+        *self.state.lock().unwrap() = Some(state);
         Ok(())
+    }
+
+    /// Drops the pinned state view and with it its MDBX read transaction,
+    /// until the next [`Self::pin`]. A long-lived reader holds pages the
+    /// node can't reuse during its commits (and trips MDBX's long-read
+    /// warning), so a tool that pins, works, then waits should unpin
+    /// while it waits. State reads fail until the next `pin`.
+    pub fn unpin(&self) {
+        *self.state.lock().unwrap() = None;
+    }
+
+    fn with_state<T>(
+        &self,
+        f: impl FnOnce(&dyn StateProvider) -> eyre::Result<T>,
+    ) -> eyre::Result<T> {
+        let state = self.state.lock().unwrap();
+        let state = state
+            .as_deref()
+            .ok_or_else(|| eyre::eyre!("reth: no state pinned (unpinned; call `pin` first)"))?;
+        f(state)
     }
 
     /// The newest block whose *post*-state can be read exactly from this
@@ -392,54 +412,98 @@ impl RethDb {
     }
 }
 
+/// yevm's view of a recovered reth block: header, transactions with their
+/// senders, withdrawals.
+pub fn yevm_block(
+    recovered: &reth_primitives_traits::RecoveredBlock<reth_ethereum_primitives::Block>,
+) -> Block {
+    let head = RethDb::head_of(recovered.header(), recovered.hash());
+    let txs = recovered
+        .transactions_with_sender()
+        .enumerate()
+        .map(|(index, (sender, tx))| RethDb::tx_full(tx, *sender, index as u64))
+        .collect();
+    let withdrawals = recovered
+        .body()
+        .withdrawals
+        .iter()
+        .flat_map(|list| list.iter())
+        .map(RethDb::withdrawal)
+        .collect();
+    Block {
+        head,
+        txs,
+        withdrawals,
+    }
+}
+
+/// Storage slot `key` of `acc` in `state` (shared by [`RethDb`] and
+/// [`StateChain`], so both read state the same way).
+fn read_storage(state: &dyn StateProvider, acc: &Acc, key: &Int) -> eyre::Result<Int> {
+    let val = state
+        .storage(RethDb::addr(acc), RethDb::key(key))
+        .context("reth: storage")?;
+    Ok(RethDb::int(val.unwrap_or_default()))
+}
+
+/// The whole account `acc` in `state`, code included.
+fn read_account(state: &dyn StateProvider, acc: &Acc) -> eyre::Result<Account> {
+    let addr = RethDb::addr(acc);
+    // One point lookup gets nonce + balance + the code hash together.
+    // `StateProvider::account_code()`'s default impl would look this
+    // account up *again* internally before fetching the bytecode, and
+    // re-hash the full bytecode with keccak256 even though the trie
+    // already handed us the correct hash -- go straight to
+    // `bytecode_by_hash` with the hash we already have instead.
+    let account = state.basic_account(&addr).context("reth: basic_account")?;
+    let code_hash = account.as_ref().and_then(|a| a.bytecode_hash);
+    let (code, hash) = match code_hash.filter(|h| *h != alloy_consensus::constants::KECCAK_EMPTY) {
+        Some(code_hash) => {
+            let code = state
+                .bytecode_by_hash(&code_hash)
+                .context("reth: bytecode_by_hash")?;
+            let bytes = code
+                .map(|c| c.original_byte_slice().to_vec())
+                .unwrap_or_default();
+            (Buf(bytes), RethDb::hash(code_hash))
+        }
+        None => (Buf::default(), Int::ZERO),
+    };
+    Ok(Account {
+        value: account
+            .as_ref()
+            .map(|a| RethDb::int(a.balance))
+            .unwrap_or_default(),
+        nonce: account
+            .as_ref()
+            .map(|a| Int::from(a.nonce))
+            .unwrap_or_default(),
+        code: (code, hash),
+    })
+}
+
+fn read_nonce(state: &dyn StateProvider, acc: &Acc) -> eyre::Result<u64> {
+    let account = state
+        .basic_account(&RethDb::addr(acc))
+        .context("reth: basic_account")?;
+    Ok(account.map(|a| a.nonce).unwrap_or_default())
+}
+
+fn read_balance(state: &dyn StateProvider, acc: &Acc) -> eyre::Result<Int> {
+    let account = state
+        .basic_account(&RethDb::addr(acc))
+        .context("reth: basic_account")?;
+    Ok(account.map(|a| RethDb::int(a.balance)).unwrap_or_default())
+}
+
 #[async_trait::async_trait]
 impl Chain for RethDb {
     async fn get(&self, acc: &Acc, key: &Int) -> eyre::Result<Int> {
-        let (addr, slot) = (Self::addr(acc), Self::key(key));
-        let val = self
-            .state
-            .lock()
-            .unwrap()
-            .storage(addr, slot)
-            .context("reth: storage")?;
-        Ok(Self::int(val.unwrap_or_default()))
+        self.with_state(|state| read_storage(state, acc, key))
     }
 
     async fn acc(&self, acc: &Acc) -> eyre::Result<Account> {
-        let addr = Self::addr(acc);
-        let state = self.state.lock().unwrap();
-        // One point lookup gets nonce + balance + the code hash together.
-        // `StateProvider::account_code()`'s default impl would look this
-        // account up *again* internally before fetching the bytecode, and
-        // re-hash the full bytecode with keccak256 even though the trie
-        // already handed us the correct hash -- go straight to
-        // `bytecode_by_hash` with the hash we already have instead.
-        let account = state.basic_account(&addr).context("reth: basic_account")?;
-        let code_hash = account.as_ref().and_then(|a| a.bytecode_hash);
-        let (code, hash) =
-            match code_hash.filter(|h| *h != alloy_consensus::constants::KECCAK_EMPTY) {
-                Some(code_hash) => {
-                    let code = state
-                        .bytecode_by_hash(&code_hash)
-                        .context("reth: bytecode_by_hash")?;
-                    let bytes = code
-                        .map(|c| c.original_byte_slice().to_vec())
-                        .unwrap_or_default();
-                    (Buf(bytes), Self::hash(code_hash))
-                }
-                None => (Buf::default(), Int::ZERO),
-            };
-        Ok(Account {
-            value: account
-                .as_ref()
-                .map(|a| Self::int(a.balance))
-                .unwrap_or_default(),
-            nonce: account
-                .as_ref()
-                .map(|a| Int::from(a.nonce))
-                .unwrap_or_default(),
-            code: (code, hash),
-        })
+        self.with_state(|state| read_account(state, acc))
     }
 
     async fn code(&self, acc: &Acc) -> eyre::Result<(Buf, Int)> {
@@ -447,25 +511,11 @@ impl Chain for RethDb {
     }
 
     async fn nonce(&self, acc: &Acc) -> eyre::Result<u64> {
-        let addr = Self::addr(acc);
-        let account = self
-            .state
-            .lock()
-            .unwrap()
-            .basic_account(&addr)
-            .context("reth: basic_account")?;
-        Ok(account.map(|a| a.nonce).unwrap_or_default())
+        self.with_state(|state| read_nonce(state, acc))
     }
 
     async fn balance(&self, acc: &Acc) -> eyre::Result<Int> {
-        let addr = Self::addr(acc);
-        let account = self
-            .state
-            .lock()
-            .unwrap()
-            .basic_account(&addr)
-            .context("reth: basic_account")?;
-        Ok(account.map(|a| Self::int(a.balance)).unwrap_or_default())
+        self.with_state(|state| read_balance(state, acc))
     }
 
     async fn head(&self, number: u64) -> eyre::Result<Head> {
@@ -484,28 +534,81 @@ impl Chain for RethDb {
             .context("reth: sealed_block_with_senders")?
             .ok_or_else(|| eyre::eyre!("reth: block {number} not found"))?;
 
-        let head = Self::head_of(recovered.header(), recovered.hash());
-        let txs = recovered
-            .transactions_with_sender()
-            .enumerate()
-            .map(|(index, (sender, tx))| Self::tx_full(tx, *sender, index as u64))
-            .collect();
-        let withdrawals = recovered
-            .body()
-            .withdrawals
-            .iter()
-            .flat_map(|list| list.iter())
-            .map(Self::withdrawal)
-            .collect();
-
-        Ok(Block {
-            head,
-            txs,
-            withdrawals,
-        })
+        Ok(yevm_block(&recovered))
     }
 
     async fn chain_id(&self) -> eyre::Result<u64> {
         Ok(self.factory.chain_spec().chain().id())
     }
 }
+
+/// A `Chain` over one state view from a live provider: inside the node,
+/// `state_by_block_hash(parent)` from its `BlockchainProvider`, which
+/// layers the in-memory blocks over the database (silt PLAN M6, T6.4).
+/// State reads are the same code as [`RethDb`]'s; headers (`BLOCKHASH`)
+/// come from the same provider. `block` is not supported: simulations
+/// don't ask for whole blocks.
+pub struct StateChain<P> {
+    state: Mutex<StateProviderBox>,
+    headers: P,
+    chain_id: u64,
+}
+
+impl<P> StateChain<P> {
+    pub fn new(state: StateProviderBox, headers: P, chain_id: u64) -> Self {
+        Self {
+            state: Mutex::new(state),
+            headers,
+            chain_id,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl<P> Chain for StateChain<P>
+where
+    P: HeaderProvider + Send + Sync,
+{
+    async fn get(&self, acc: &Acc, key: &Int) -> eyre::Result<Int> {
+        read_storage(&**self.state.lock().unwrap(), acc, key)
+    }
+
+    async fn acc(&self, acc: &Acc) -> eyre::Result<Account> {
+        read_account(&**self.state.lock().unwrap(), acc)
+    }
+
+    async fn code(&self, acc: &Acc) -> eyre::Result<(Buf, Int)> {
+        Ok(self.acc(acc).await?.code)
+    }
+
+    async fn nonce(&self, acc: &Acc) -> eyre::Result<u64> {
+        read_nonce(&**self.state.lock().unwrap(), acc)
+    }
+
+    async fn balance(&self, acc: &Acc) -> eyre::Result<Int> {
+        read_balance(&**self.state.lock().unwrap(), acc)
+    }
+
+    async fn head(&self, number: u64) -> eyre::Result<Head> {
+        let sealed = self
+            .headers
+            .sealed_header(number)
+            .context("reth: sealed_header")?
+            .ok_or_else(|| eyre::eyre!("reth: header {number} not found"))?;
+        Ok(RethDb::head_of(sealed.header(), sealed.hash()))
+    }
+
+    async fn block(&self, number: u64) -> eyre::Result<Block> {
+        eyre::bail!("StateChain: block {number}: whole blocks are not supported")
+    }
+
+    async fn chain_id(&self) -> eyre::Result<u64> {
+        Ok(self.chain_id)
+    }
+}
+
+/// A local database has nothing to fetch ahead (silt PLAN M6): reads are
+/// cheap page lookups, taken on demand.
+impl silt_cache::sim::Prefetch for RethDb {}
+
+impl<P: Send + Sync> silt_cache::sim::Prefetch for StateChain<P> {}

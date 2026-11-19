@@ -354,6 +354,20 @@ impl<'a> YevmEvm<'a> {
         Ok(pending_state)
     }
 
+    /// Every account and slot the overlay holds: all the state this EVM loaded or wrote since
+    /// it was created, i.e. one block's for a block executor (silt PLAN D13 read touches).
+    pub fn loaded_keys(&self) -> silt_node::reads::ReadKeys {
+        let cache = &self.db.cache;
+        silt_node::reads::ReadKeys {
+            accounts: cache.accounts.keys().map(|a| a.0.0).collect(),
+            slots: cache
+                .storage
+                .iter()
+                .flat_map(|(a, s)| s.slots.keys().map(move |k| (a.0.0, k.to_be_bytes::<32>())))
+                .collect(),
+        }
+    }
+
     /// Commits the state changes of the last execution from yevm's journal to the overlay,
     /// passing each changed account to `commit` first.
     ///

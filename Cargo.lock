@@ -11172,9 +11172,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "silt-cache"
+version = "0.1.0"
+source = "git+https://github.com/sergey-melnychuk/silt.git?rev=9df61c213c065c6dce94a30245f83ea8c5861157#9df61c213c065c6dce94a30245f83ea8c5861157"
+dependencies = [
+ "async-trait",
+ "dashmap",
+ "eyre",
+ "futures",
+ "reqwest",
+ "serde_json",
+ "silt-wire",
+ "tiny-keccak",
+ "tokio",
+ "tracing",
+ "yevm",
+]
+
+[[package]]
 name = "silt-node"
 version = "0.1.0"
-source = "git+https://github.com/sergey-melnychuk/silt.git?rev=f701f02ea3e25f8e0a7a7da5ac8e91335859a600#f701f02ea3e25f8e0a7a7da5ac8e91335859a600"
+source = "git+https://github.com/sergey-melnychuk/silt.git?rev=9df61c213c065c6dce94a30245f83ea8c5861157#9df61c213c065c6dce94a30245f83ea8c5861157"
 dependencies = [
  "alloy-primitives",
  "async-trait",
@@ -11192,7 +11210,7 @@ dependencies = [
 [[package]]
 name = "silt-wire"
 version = "0.1.0"
-source = "git+https://github.com/sergey-melnychuk/silt.git?rev=f701f02ea3e25f8e0a7a7da5ac8e91335859a600#f701f02ea3e25f8e0a7a7da5ac8e91335859a600"
+source = "git+https://github.com/sergey-melnychuk/silt.git?rev=9df61c213c065c6dce94a30245f83ea8c5861157#9df61c213c065c6dce94a30245f83ea8c5861157"
 dependencies = [
  "eyre",
  "postcard",
@@ -13548,6 +13566,8 @@ dependencies = [
  "codspeed-criterion-compat",
  "evm2",
  "eyre",
+ "futures",
+ "libc",
  "reth-chainspec",
  "reth-db",
  "reth-ethereum",
@@ -13564,7 +13584,9 @@ dependencies = [
  "secp256k1 0.33.1",
  "serde",
  "serde_json",
+ "silt-cache",
  "silt-node",
+ "silt-wire",
  "thiserror 2.0.21",
  "tokio",
  "tracing",

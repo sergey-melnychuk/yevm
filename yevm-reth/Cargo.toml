@@ -23,7 +23,7 @@ alloy-eips = { version = "2.3", default-features = false }
 # Not published to crates.io in a consumable form -- reth's own examples
 # consume these via a pinned git ref: the v2.11.0 tag (`b9abbcc`), the
 # first release with the EVM API the `exec` module needs.
-reth-ethereum = { git = "https://github.com/paradigmxyz/reth", rev = "b9abbcc1b982755baa9021e6874e2e58936ca65f", features = ["node", "cli"] }
+reth-ethereum = { git = "https://github.com/paradigmxyz/reth", rev = "b9abbcc1b982755baa9021e6874e2e58936ca65f", features = ["node", "cli", "exex"] }
 reth-node-types = { git = "https://github.com/paradigmxyz/reth", rev = "b9abbcc1b982755baa9021e6874e2e58936ca65f" }
 reth-db = { git = "https://github.com/paradigmxyz/reth", rev = "b9abbcc1b982755baa9021e6874e2e58936ca65f", default-features = false }
 reth-stages-types = { git = "https://github.com/paradigmxyz/reth", rev = "b9abbcc1b982755baa9021e6874e2e58936ca65f", default-features = false }
@@ -43,8 +43,15 @@ evm2 = { git = "https://github.com/alloy-rs/evm2", rev = "66687c18b34d3bdbb899f5
 alloy-eip7928 = { version = "0.4.10", features = ["std"] }
 alloy-rpc-types-engine = { version = "2.5.0", default-features = false, features = ["std"] }
 # silt (state-diff feed, binary lookups + proofs, silt_multiproof) installed into the `node`
-# bin. It must build against this same reth rev: silt f701f02 (D12, reth v2.11.0) pins reth v2.11.0 too.
-silt-node = { git = "https://github.com/sergey-melnychuk/silt.git", rev = "f701f02ea3e25f8e0a7a7da5ac8e91335859a600" }
+# bin. It must build against this same reth rev: silt 9df61c2 (D12, D13, reth v2.11.0) pins reth v2.11.0 too.
+silt-node = { git = "https://github.com/sergey-melnychuk/silt.git", rev = "9df61c213c065c6dce94a30245f83ea8c5861157" }
+# silt PLAN M6 (the `sim-bench` example and the node's opt-in sim task): the silt-cache consumer with its
+# yevm adapter and `sim` timing module, from the same silt rev as silt-node.
+silt-cache = { git = "https://github.com/sergey-melnychuk/silt.git", rev = "9df61c213c065c6dce94a30245f83ea8c5861157", features = ["yevm"] }
+silt-wire = { git = "https://github.com/sergey-melnychuk/silt.git", rev = "9df61c213c065c6dce94a30245f83ea8c5861157" }
+serde_json.workspace = true
+futures.workspace = true
+libc = "0.2"
 thiserror.workspace = true
 tracing = "0.1"
 

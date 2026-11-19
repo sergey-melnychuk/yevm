@@ -57,12 +57,15 @@ pub use executor::YevmBlockExecutor;
 #[derive(Debug)]
 pub struct YevmBlockExecutorFactory<C = ChainSpec> {
     chain_spec: Arc<C>,
+    /// Where executors report each block's loaded keys (silt PLAN D13).
+    reads: Option<Arc<silt_node::reads::ReadTouchSink>>,
 }
 
 impl<C> Clone for YevmBlockExecutorFactory<C> {
     fn clone(&self) -> Self {
         Self {
             chain_spec: self.chain_spec.clone(),
+            reads: self.reads.clone(),
         }
     }
 }
@@ -70,7 +73,10 @@ impl<C> Clone for YevmBlockExecutorFactory<C> {
 impl<C> YevmBlockExecutorFactory<C> {
     /// Creates a factory for the given chain.
     pub const fn new(chain_spec: Arc<C>) -> Self {
-        Self { chain_spec }
+        Self {
+            chain_spec,
+            reads: None,
+        }
     }
 }
 
@@ -102,7 +108,7 @@ where
     where
         Self: 'a,
     {
-        YevmBlockExecutor::new(evm, ctx, &self.chain_spec)
+        YevmBlockExecutor::new(evm, ctx, self.chain_spec.as_ref()).with_reads(self.reads.as_deref())
     }
 
     fn evm_factory(&self) -> &Self::EvmFactory {
@@ -136,6 +142,15 @@ impl<C> YevmEvmConfig<C> {
             executor_factory: YevmBlockExecutorFactory::new(chain_spec.clone()),
             eth: EthEvmConfig::new(chain_spec),
         }
+    }
+
+    /// Reports, after every block it executes, the accounts and slots the
+    /// block loaded to `sink`, keyed by (number, parent hash), for silt's
+    /// read touches (silt PLAN D13). Keys only: silt reads the values from
+    /// the committed state itself.
+    pub fn with_read_touches(mut self, sink: Arc<silt_node::reads::ReadTouchSink>) -> Self {
+        self.executor_factory.reads = Some(sink);
+        self
     }
 }
 
@@ -200,6 +215,21 @@ where
         &self,
         payload: &'a ExecutionData,
     ) -> Result<ExecutionCtxFor<'a, Self>, Self::Error> {
+        // silt D13: only the engine's own executions report read keys, so
+        // the node's RPC (eth_simulateV1 on the same parent) can't add any.
+        if let Some(sink) = &self.executor_factory.reads {
+            let hashes: Vec<[u8; 32]> = payload
+                .payload
+                .transactions()
+                .iter()
+                .map(|raw| alloy_primitives::keccak256(raw).0)
+                .collect();
+            sink.expect(
+                payload.payload.block_number(),
+                payload.payload.parent_hash().0,
+                silt_node::reads::tx_digest(&hashes),
+            );
+        }
         self.eth.context_for_payload(payload)
     }
 
