@@ -11,7 +11,10 @@
 //! state lookups and trie proofs (`lookup_bind`, default 127.0.0.1:8586); `silt_multiproof` is
 //! merged into the RPC transports `--http`/`--ws`/`--ipc` enable. Config: `./silt.toml`,
 //! defaults if absent. With `read_touches` (the default) the executors report each block's
-//! loaded keys, and the feed's diffs carry them, valued at the block (silt PLAN D13).
+//! loaded keys, and the feed's diffs carry them, valued at the block (silt PLAN D13). With
+//! `pending_reads` too (the default), the "yevm-pending" ExEx feeds each new head to a worker
+//! that runs the pool's best transactions on it and hands what they read to the same sink, so
+//! the next diff carries those as well (silt PLAN D14, [`yevm_reth::pending`]).
 //!
 //! Opt-in simulation baseline (silt PLAN M6, T6.4): with `YEVM_SIM_OUT=<file>` set, a third
 //! builder call installs the "yevm-sim" ExEx. It hands each newly committed block N+1 to one
@@ -39,17 +42,22 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use alloy_consensus::BlockHeader as _;
+use alloy_eips::eip1559::BaseFeeParams;
 use futures::TryStreamExt;
+use reth_ethereum::pool::{PoolTransaction, TransactionPool};
 use reth_ethereum::{
     chainspec::EthChainSpec,
     exex::{ExExContext, ExExEvent},
     node::api::FullNodeComponents,
     provider::{HeaderProvider, StateProviderFactory},
 };
+use reth_ethereum_primitives::TransactionSigned;
 use silt_cache::sim::{Counted, Outcome, Reads, sim_bundle, sim_tx};
 use tracing::{info, warn};
+use yevm_base::Int;
 use yevm_core::call::Block;
-use yevm_reth::{StateChain, exec::YevmEvmConfig, yevm_block};
+use yevm_reth::pending::NewHead;
+use yevm_reth::{StateChain, exec::YevmEvmConfig, yevm_block, yevm_head};
 
 /// Builds the yevm EVM configuration for an Ethereum node; with a sink, its executors report
 /// each block's loaded keys for silt's read touches (silt PLAN D13).
@@ -215,6 +223,51 @@ where
     Ok(())
 }
 
+/// The "yevm-pending" ExEx (silt D14): hands each new head, with the next block's environment,
+/// to the pool worker ([`yevm_reth::pending::run_worker`]) and acks at once.
+async fn run_pending_exex<Node>(
+    mut ctx: ExExContext<Node>,
+    sink: Arc<silt_node::reads::ReadTouchSink>,
+) -> eyre::Result<()>
+where
+    Node: FullNodeComponents<Types: NodeTypes<Primitives = EthPrimitives, ChainSpec = ChainSpec>>,
+    Node::Pool: TransactionPool<Transaction: PoolTransaction<Consensus = TransactionSigned>>,
+{
+    let chain_id = ctx.config.chain.chain().id();
+    let (heads, rx) = std::sync::mpsc::channel::<NewHead>();
+    let provider = ctx.provider().clone();
+    let pool = ctx.pool().clone();
+    std::thread::Builder::new()
+        .name("yevm-pending".into())
+        .spawn(move || yevm_reth::pending::run_worker(rx, provider, pool, sink, chain_id))?;
+    info!(target: "yevm::pending", "yevm-pending: running pool transactions on each new head");
+    while let Some(notification) = ctx.notifications.try_next().await? {
+        if let Some(chain) = notification.committed_chain() {
+            let tip = chain.tip();
+            let header = tip.header();
+            let mut next = yevm_head(header, tip.hash());
+            next.number = (header.number() + 1).into();
+            next.timestamp = Int::from(header.timestamp() + 12);
+            next.base_fee = Int::from(
+                header
+                    .next_block_base_fee(BaseFeeParams::ethereum())
+                    .unwrap_or_default(),
+            );
+            next.parent_hash = next.hash;
+            next.hash = Int::ZERO;
+            // The worker may be gone (no runtime): nothing to do then.
+            let _ = heads.send(NewHead {
+                number: header.number(),
+                hash: tip.hash(),
+                next,
+            });
+            ctx.events
+                .send(ExExEvent::FinishedHeight(chain.tip().num_hash()))?;
+        }
+    }
+    Ok(())
+}
+
 fn main() {
     if let Err(err) = Cli::parse_args().run(async move |builder, _| {
         info!(target: "reth::cli", "Launching node with the yevm executor");
@@ -228,6 +281,8 @@ fn main() {
         let silt_reads = reads
             .clone()
             .map(|sink| sink as Arc<dyn silt_node::reads::ReadTouches>);
+        // D14: the pool worker feeds the same sink.
+        let pending_sink = reads.clone().filter(|_| silt.pending_reads);
         let sim_out = std::env::var_os("YEVM_SIM_OUT").map(PathBuf::from);
         let handle = builder
             .with_types::<EthereumNode>()
@@ -235,6 +290,12 @@ fn main() {
             .with_add_ons(EthereumAddOns::default())
             .install_exex("silt", async move |ctx| {
                 Ok(silt_node::run_exex_with_reads(ctx, silt, silt_reads))
+            })
+            .install_exex_if(pending_sink.is_some(), "yevm-pending", async move |ctx| {
+                Ok(run_pending_exex(
+                    ctx,
+                    pending_sink.expect("checked by install_exex_if"),
+                ))
             })
             .install_exex_if(sim_out.is_some(), "yevm-sim", async move |ctx| {
                 Ok(run_sim_exex(

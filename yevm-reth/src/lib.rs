@@ -68,6 +68,7 @@ use yevm_core::{
 use yevm_misc::buf::Buf;
 
 pub mod exec;
+pub mod pending;
 
 pub type Factory = ProviderFactory<NodeTypesWithDBAdapter<EthereumNode, DatabaseEnv>>;
 pub type Provider =
@@ -410,6 +411,17 @@ impl RethDb {
     pub fn factory(&self) -> &Factory {
         &self.factory
     }
+}
+
+/// yevm's view of a header (`hash` is the header's own hash).
+pub fn yevm_head(header: &impl alloy_consensus::BlockHeader, hash: B256) -> Head {
+    RethDb::head_of(header, hash)
+}
+
+/// yevm's view of one signed transaction from `sender`, at `index` in its
+/// block (e.g. a pool transaction, at 0).
+pub fn yevm_tx(tx: &TransactionSigned, sender: Address, index: u64) -> TxFull {
+    RethDb::tx_full(tx, sender, index)
 }
 
 /// yevm's view of a recovered reth block: header, transactions with their

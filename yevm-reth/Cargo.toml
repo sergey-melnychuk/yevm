@@ -43,12 +43,12 @@ evm2 = { git = "https://github.com/alloy-rs/evm2", rev = "66687c18b34d3bdbb899f5
 alloy-eip7928 = { version = "0.4.10", features = ["std"] }
 alloy-rpc-types-engine = { version = "2.5.0", default-features = false, features = ["std"] }
 # silt (state-diff feed, binary lookups + proofs, silt_multiproof) installed into the `node`
-# bin. It must build against this same reth rev: silt 9df61c2 (D12, D13, reth v2.11.0) pins reth v2.11.0 too.
-silt-node = { git = "https://github.com/sergey-melnychuk/silt.git", rev = "9df61c213c065c6dce94a30245f83ea8c5861157" }
+# bin. It must build against this same reth rev: silt 673bfbe (D12-D14, reth v2.11.0) pins reth v2.11.0 too.
+silt-node = { git = "https://github.com/sergey-melnychuk/silt.git", rev = "673bfbe0f2f79bd3e40bee19dad58eeaa6aba97a" }
 # silt PLAN M6 (the `sim-bench` example and the node's opt-in sim task): the silt-cache consumer with its
 # yevm adapter and `sim` timing module, from the same silt rev as silt-node.
-silt-cache = { git = "https://github.com/sergey-melnychuk/silt.git", rev = "9df61c213c065c6dce94a30245f83ea8c5861157", features = ["yevm"] }
-silt-wire = { git = "https://github.com/sergey-melnychuk/silt.git", rev = "9df61c213c065c6dce94a30245f83ea8c5861157" }
+silt-cache = { git = "https://github.com/sergey-melnychuk/silt.git", rev = "673bfbe0f2f79bd3e40bee19dad58eeaa6aba97a", features = ["yevm"] }
+silt-wire = { git = "https://github.com/sergey-melnychuk/silt.git", rev = "673bfbe0f2f79bd3e40bee19dad58eeaa6aba97a" }
 serde_json.workspace = true
 futures.workspace = true
 libc = "0.2"
