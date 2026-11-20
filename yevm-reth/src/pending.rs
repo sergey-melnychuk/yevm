@@ -8,7 +8,9 @@
 //!
 //! The thread runs at nice 10 with the idle I/O class (its reads are mostly first touches, page
 //! faults on the node's disk, which must not queue ahead of block import), and a pass stops after
-//! [`MAX_TXS_PER_PASS`] transactions or [`PASS_BUDGET`], whichever comes first.
+//! [`MAX_TXS_PER_PASS`] transactions or [`PASS_BUDGET`], whichever comes first. The budget is
+//! enforced inside the reads too: once it's spent, the transaction running is abandoned at its next
+//! read (an idle-class read can wait seconds behind import I/O; one did, for 21 s).
 
 use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
@@ -47,9 +49,11 @@ pub struct NewHead {
     pub next: Head,
 }
 
-/// A `Chain` that records every account and slot read through it, with the value it returned.
+/// A `Chain` that records every account and slot read through it, with the value it returned,
+/// and refuses reads after `deadline` (the pass budget).
 struct Recording<C> {
     inner: C,
+    deadline: Instant,
     accounts: Mutex<HashMap<Addr, AccountChange>>,
     slots: Mutex<HashMap<(Addr, Word), Word>>,
 }
@@ -67,12 +71,18 @@ fn word(int: &Int) -> Word {
 }
 
 impl<C> Recording<C> {
-    fn new(inner: C) -> Self {
+    fn new(inner: C, deadline: Instant) -> Self {
         Self {
             inner,
+            deadline,
             accounts: Mutex::default(),
             slots: Mutex::default(),
         }
+    }
+
+    fn check(&self) -> eyre::Result<()> {
+        eyre::ensure!(Instant::now() < self.deadline, "pending pass budget spent");
+        Ok(())
     }
 
     fn into_values(self) -> ReadValues {
@@ -97,6 +107,7 @@ impl<C> Recording<C> {
 #[async_trait::async_trait]
 impl<C: Chain + Send + Sync> Chain for Recording<C> {
     async fn get(&self, acc: &Acc, key: &Int) -> eyre::Result<Int> {
+        self.check()?;
         let value = self.inner.get(acc, key).await?;
         self.slots
             .lock()
@@ -106,6 +117,7 @@ impl<C: Chain + Send + Sync> Chain for Recording<C> {
     }
 
     async fn acc(&self, acc: &Acc) -> eyre::Result<Account> {
+        self.check()?;
         let account = self.inner.acc(acc).await?;
         let code_hash = word(&account.code.1);
         self.accounts.lock().expect("accounts lock").insert(
@@ -199,7 +211,10 @@ pub fn run_worker<P, Pool>(
                 continue;
             }
         };
-        let chain = Recording::new(StateChain::new(state, provider.clone(), chain_id));
+        let chain = Recording::new(
+            StateChain::new(state, provider.clone(), chain_id),
+            started + PASS_BUDGET,
+        );
         let mut txs = 0u64;
         for pooled in pool.best_transactions().take(MAX_TXS_PER_PASS) {
             if started.elapsed() >= PASS_BUDGET {
