@@ -57,7 +57,7 @@ pub use executor::YevmBlockExecutor;
 #[derive(Debug)]
 pub struct YevmBlockExecutorFactory<C = ChainSpec> {
     chain_spec: Arc<C>,
-    /// Where executors report each block's loaded keys (silt PLAN D13).
+    /// Where executors report each block's read touches with their values (silt PLAN D13/D15).
     reads: Option<Arc<silt_node::reads::ReadTouchSink>>,
 }
 
@@ -108,7 +108,12 @@ where
     where
         Self: 'a,
     {
-        YevmBlockExecutor::new(evm, ctx, self.chain_spec.as_ref()).with_reads(self.reads.as_deref())
+        // silt D15: claim the ticket `context_for_payload` left on this thread (reth creates the
+        // engine's executor right after, here), so only the engine's own execution can report
+        // read values. Every executor claims, so a ticket never outlives the one it was left for.
+        let ticket = silt_node::reads::ReadTouchSink::claim_ticket();
+        YevmBlockExecutor::new(evm, ctx, self.chain_spec.as_ref())
+            .with_reads(self.reads.as_deref(), ticket)
     }
 
     fn evm_factory(&self) -> &Self::EvmFactory {
@@ -144,10 +149,10 @@ impl<C> YevmEvmConfig<C> {
         }
     }
 
-    /// Reports, after every block it executes, the accounts and slots the
-    /// block loaded to `sink`, keyed by (number, parent hash), for silt's
-    /// read touches (silt PLAN D13). Keys only: silt reads the values from
-    /// the committed state itself.
+    /// Reports, after every block the engine executes, the accounts and slots the block loaded,
+    /// with their values at its end, to `sink` for silt's read touches (silt PLAN D13/D15). Only
+    /// the engine's own executions report: `context_for_payload` leaves a ticket the executor
+    /// claims, and RPC executions never hold one.
     pub fn with_read_touches(mut self, sink: Arc<silt_node::reads::ReadTouchSink>) -> Self {
         self.executor_factory.reads = Some(sink);
         self
@@ -215,8 +220,9 @@ where
         &self,
         payload: &'a ExecutionData,
     ) -> Result<ExecutionCtxFor<'a, Self>, Self::Error> {
-        // silt D13: only the engine's own executions report read keys, so
-        // the node's RPC (eth_simulateV1 on the same parent) can't add any.
+        // silt D13/D15: only the engine's own executions report read touches, so the node's RPC
+        // (eth_simulateV1 on the same parent, with overrides) can't add any. `expect` also
+        // leaves this thread's ticket for the executor reth creates next, right here.
         if let Some(sink) = &self.executor_factory.reads {
             let hashes: Vec<[u8; 32]> = payload
                 .payload

@@ -48,11 +48,12 @@ pub struct YevmBlockExecutor<'a, C> {
     receipts: Vec<Receipt>,
     cumulative_gas_used: u64,
     blob_gas_used: u64,
-    /// Where to report the block's loaded keys when it finishes (silt D13).
+    /// Where to report the block's read touches when it finishes (silt D13/D15).
     reads: Option<&'a silt_node::reads::ReadTouchSink>,
-    /// Hashes of the transactions executed, in order, while `reads` is set:
-    /// the sink keeps the keys only if they match a block the engine
-    /// announced.
+    /// The engine's ticket for the payload this executor was created for, if any (silt D15):
+    /// the sink keeps the values only if it names the block actually executed.
+    ticket: Option<silt_node::reads::Ticket>,
+    /// Hashes of the transactions executed, in order, while `reads` is set.
     tx_hashes: Vec<[u8; 32]>,
 }
 
@@ -80,13 +81,20 @@ impl<'a, C: EthChainSpec + EthereumHardforks> YevmBlockExecutor<'a, C> {
             cumulative_gas_used: 0,
             blob_gas_used: 0,
             reads: None,
+            ticket: None,
             tx_hashes: Vec::new(),
         }
     }
 
-    /// Reports the block's loaded keys to `reads` when it finishes.
-    pub fn with_reads(mut self, reads: Option<&'a silt_node::reads::ReadTouchSink>) -> Self {
+    /// Reports the block's read touches to `reads` when it finishes, kept only with the engine's
+    /// `ticket` for the block (silt D15).
+    pub fn with_reads(
+        mut self,
+        reads: Option<&'a silt_node::reads::ReadTouchSink>,
+        ticket: Option<silt_node::reads::Ticket>,
+    ) -> Self {
         self.reads = reads;
+        self.ticket = ticket;
         self
     }
 
@@ -394,13 +402,21 @@ impl<'a, C: EthChainSpec + EthereumHardforks> BlockExecutor for YevmBlockExecuto
         }
         if let Some(sink) = self.reads {
             let started = std::time::Instant::now();
-            let keys = self.evm.loaded_keys();
-            let txs = silt_node::reads::tx_digest(&self.tx_hashes);
+            let executed = silt_node::reads::Ticket {
+                number: self.block_number(),
+                parent_hash: self.ctx.parent_hash.0,
+                txs: silt_node::reads::tx_digest(&self.tx_hashes),
+            };
+            // Without the engine's ticket the sink drops them anyway (and counts it).
+            let values = if self.ticket == Some(executed) {
+                self.evm.loaded_values()
+            } else {
+                Default::default()
+            };
             sink.put(
-                self.block_number(),
-                self.ctx.parent_hash.0,
-                txs,
-                keys,
+                self.ticket,
+                executed,
+                values,
                 started.elapsed().as_micros() as u64,
             );
         }

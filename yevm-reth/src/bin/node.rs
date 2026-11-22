@@ -10,8 +10,10 @@
 //! committed block on the feed (`silt.toml` `bind`, default 127.0.0.1:8585) and serves binary
 //! state lookups and trie proofs (`lookup_bind`, default 127.0.0.1:8586); `silt_multiproof` is
 //! merged into the RPC transports `--http`/`--ws`/`--ipc` enable. Config: `./silt.toml`,
-//! defaults if absent. With `read_touches` (the default) the executors report each block's
-//! loaded keys, and the feed's diffs carry them, valued at the block (silt PLAN D13). With
+//! defaults if absent. With `early_publish` (the default) the node forwards the engine's executed
+//! blocks to the ExEx, which publishes each one as soon as it is validated, before it is canonical
+//! (silt PLAN D15). With `read_touches` (the default) the engine's executors report what each
+//! block loaded, with its values, and the feed's diffs carry them (silt PLAN D13/D15). With
 //! `pending_reads` too (the default), the "yevm-pending" ExEx feeds each new head to a worker
 //! that runs the pool's best transactions on it and hands what they read to the same sink, so
 //! the next diff carries those as well (silt PLAN D14, [`yevm_reth::pending`]).
@@ -273,8 +275,8 @@ fn main() {
         info!(target: "reth::cli", "Launching node with the yevm executor");
         let backfill = EthereumBackfill::new(builder.config());
         let silt = silt_node::SiltConfig::load()?;
-        // D13: executors report each block's loaded keys; the silt ExEx values and publishes
-        // them. 256 blocks: keys of blocks that never commit age out.
+        // D13/D15: the engine's executors report what each block loaded, with its values; the
+        // silt ExEx publishes them. 256 blocks: those of blocks that never commit age out.
         let reads = silt
             .read_touches
             .then(|| Arc::new(silt_node::reads::ReadTouchSink::new(256)));
@@ -283,13 +285,21 @@ fn main() {
             .map(|sink| sink as Arc<dyn silt_node::reads::ReadTouches>);
         // D14: the pool worker feeds the same sink.
         let pending_sink = reads.clone().filter(|_| silt.pending_reads);
+        // D15: the engine's executed blocks, forwarded once the node is up.
+        let (early_tx, early_rx) = silt_node::early::channel();
+        let early_publish = silt.early_publish;
         let sim_out = std::env::var_os("YEVM_SIM_OUT").map(PathBuf::from);
         let handle = builder
             .with_types::<EthereumNode>()
             .with_components(EthereumNode::components().executor(YevmExecutorBuilder { reads }))
             .with_add_ons(EthereumAddOns::default())
             .install_exex("silt", async move |ctx| {
-                Ok(silt_node::run_exex_with_reads(ctx, silt, silt_reads))
+                Ok(silt_node::run_exex_with(
+                    ctx,
+                    silt,
+                    silt_reads,
+                    Some(early_rx),
+                ))
             })
             .install_exex_if(pending_sink.is_some(), "yevm-pending", async move |ctx| {
                 Ok(run_pending_exex(
@@ -311,6 +321,10 @@ fn main() {
             .launch_with_debug_capabilities_and_backfill(backfill)
             .await?;
 
+        if early_publish {
+            let events = handle.node.add_ons_handle.engine_events.new_listener();
+            tokio::spawn(silt_node::early::forward_engine_events(events, early_tx));
+        }
         handle.wait_for_node_exit().await
     }) {
         eprintln!("Error: {err:?}");

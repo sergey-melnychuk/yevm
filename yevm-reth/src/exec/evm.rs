@@ -354,16 +354,45 @@ impl<'a> YevmEvm<'a> {
         Ok(pending_state)
     }
 
-    /// Every account and slot the overlay holds: all the state this EVM loaded or wrote since
-    /// it was created, i.e. one block's for a block executor (silt PLAN D13 read touches).
-    pub fn loaded_keys(&self) -> silt_node::reads::ReadKeys {
+    /// Every account and slot the overlay holds, with its value now: all the state this EVM loaded
+    /// or wrote since it was created, i.e. one block's for a block executor, at the block's end
+    /// (silt PLAN D13/D15 read touches). A key the block didn't write still has the value it was
+    /// loaded with; silt drops the written ones, whose values the diff carries. An account known
+    /// to be absent reads as the empty account, as `eth_*` does.
+    pub fn loaded_values(&self) -> silt_node::reads::ReadValues {
         let cache = &self.db.cache;
-        silt_node::reads::ReadKeys {
-            accounts: cache.accounts.keys().map(|a| a.0.0).collect(),
+        silt_node::reads::ReadValues {
+            accounts: cache
+                .accounts
+                .iter()
+                .map(|(address, info)| {
+                    let change = match info {
+                        Some(info) => silt_wire::AccountChange {
+                            balance: info.balance.to_be_bytes::<32>(),
+                            nonce: info.nonce,
+                            code_hash: info.code_hash.0,
+                        },
+                        None => silt_wire::AccountChange {
+                            balance: [0; 32],
+                            nonce: 0,
+                            code_hash: silt_wire::KECCAK_EMPTY,
+                        },
+                    };
+                    (address.0.0, change)
+                })
+                .collect(),
             slots: cache
                 .storage
                 .iter()
-                .flat_map(|(a, s)| s.slots.keys().map(move |k| (a.0.0, k.to_be_bytes::<32>())))
+                .flat_map(|(address, storage)| {
+                    storage.slots.iter().map(move |(key, value)| {
+                        (
+                            address.0.0,
+                            key.to_be_bytes::<32>(),
+                            value.to_be_bytes::<32>(),
+                        )
+                    })
+                })
                 .collect(),
         }
     }
