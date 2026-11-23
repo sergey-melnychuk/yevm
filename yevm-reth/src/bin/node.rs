@@ -155,6 +155,10 @@ fn sim_worker<P>(
     P: StateProviderFactory + HeaderProvider + Clone + Send + Sync + 'static,
 {
     // Thread-level nice: on Linux, PRIO_PROCESS with a thread id sets that thread only.
+    // Elsewhere (a development machine) the worker keeps the default priority.
+    #[cfg(not(target_os = "linux"))]
+    let _ = nice;
+    #[cfg(target_os = "linux")]
     unsafe {
         let tid = libc::syscall(libc::SYS_gettid) as libc::id_t;
         libc::setpriority(libc::PRIO_PROCESS, tid, nice);
