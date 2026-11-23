@@ -52,6 +52,7 @@ pub fn sload<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) ->
     if cold {
         evm.gas_charge(2000)?;
     }
+    evm.access_key(&acc, &key);
     evm.push(val)?;
     Ok(())
 }
@@ -168,6 +169,10 @@ pub fn sstore<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -
     let (gas, refund) = if evm.spec().state_gas() {
         let (gas, refund, set, credit) = sstore_gas_amsterdam(val, cur, org);
         let access = if is_cold { 2100 } else { 100 };
+        // EIP-7928: the slot is read once the access cost (and the stipend) is covered.
+        if evm.gas_remaining() >= access {
+            evm.access_key(&acc, &key);
+        }
         evm.state_credit(credit);
         evm.gas_charge(access + gas)?;
         evm.state_charge(set)?;

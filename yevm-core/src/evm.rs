@@ -119,6 +119,13 @@ pub struct Gas {
     pub spilled: i64,
     /// Spills made permanent by [`Self::state_commit`] (the top frame's delegations).
     pub committed: i64,
+    /// Amsterdam, once the transaction settled: the gas it used before refunds (execution and
+    /// state), the refund applied, the state gas it used, and its calldata floor, for block gas
+    /// accounting (EIP-7778, EIP-8037).
+    pub used: i64,
+    pub refunded: i64,
+    pub state_used: i64,
+    pub floor: i64,
 }
 
 impl Gas {
@@ -272,6 +279,10 @@ pub struct Evm {
     /// Whether the call or create the instruction yields charged a new account's state gas,
     /// which is credited back if the child fails (EIP-8037).
     pub new_account_charged: bool,
+    /// Accounts and slots the instruction read (EIP-7928), recorded in the state once it
+    /// completes or halts.
+    pub(crate) pending_access: Vec<Acc>,
+    pub(crate) pending_access_keys: Vec<(Acc, Int)>,
     pub(crate) pending_acc_warmup: [Acc; 2],
     pub(crate) pending_acc_count: usize,
 
@@ -319,6 +330,8 @@ impl Evm {
             pending_spill: 0,
             pending_state_credit: 0,
             new_account_charged: false,
+            pending_access: Vec::new(),
+            pending_access_keys: Vec::new(),
             pending_acc_warmup: [Acc::ZERO; 2],
             pending_acc_count: 0,
             step: None,
@@ -395,6 +408,13 @@ impl Evm {
             state.warm_acc(&self.pending_acc_warmup[i]);
         }
         self.pending_acc_count = 0;
+
+        for acc in self.pending_access.drain(..) {
+            state.access(&acc);
+        }
+        for (acc, key) in self.pending_access_keys.drain(..) {
+            state.access_key(&acc, &key);
+        }
     }
 
     pub fn reset(&mut self) {
@@ -406,7 +426,39 @@ impl Evm {
         self.pending_spill = 0;
         self.pending_state_credit = 0;
         self.new_account_charged = false;
+        self.pending_access.clear();
+        self.pending_access_keys.clear();
         self.pending_acc_count = 0;
+    }
+
+    /// Records that the instruction read `acc` (EIP-7928, Amsterdam).
+    pub fn access(&mut self, acc: &Acc) {
+        if self.head.spec.is(crate::Spec::Amsterdam) {
+            self.pending_access.push(*acc);
+        }
+    }
+
+    /// Records that the instruction read slot `key` of `acc` (EIP-7928, Amsterdam).
+    pub fn access_key(&mut self, acc: &Acc, key: &Int) {
+        if self.head.spec.is(crate::Spec::Amsterdam) {
+            self.pending_access_keys.push((*acc, *key));
+        }
+    }
+
+    /// The gas expanding memory to cover `regions` would cost, without expanding it.
+    pub fn mem_expand_cost(&self, regions: &[(usize, usize)]) -> i64 {
+        let len = self.memory.len();
+        let end = regions
+            .iter()
+            .filter(|(_, size)| *size > 0)
+            .map(|(offset, size)| offset.saturating_add(*size).div_ceil(32) * 32)
+            .max()
+            .unwrap_or(0);
+        if end <= len {
+            return 0;
+        }
+        let (old, new) = ((len / 32) as i64, (end / 32) as i64);
+        (new * new / 512 + 3 * new) - (old * old / 512 + 3 * old)
     }
 
     /// The fork rules of the block.

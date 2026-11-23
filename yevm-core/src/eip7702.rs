@@ -77,6 +77,8 @@ pub async fn apply_authorization_list(
         if !state.has_acc(&authority) {
             fetch(crate::Fetch::Account(authority), state, chain).await?;
         }
+        // EIP-7928: the authority is read once the authorization passes the checks above.
+        state.access(&authority);
         let acc = state.acc(&authority).unwrap_or_default();
         state.warm_acc(&authority);
         let delegated_before = match before.iter().find(|(a, _)| *a == authority) {

@@ -31,6 +31,8 @@ fn create_fails_early<S: State>(
     value: Int,
     state: &mut S,
 ) -> EvmResult<bool> {
+    // EIP-7928: the creator is read once the creation's costs are paid.
+    evm.access(&ctx.this);
     let balance = state.balance(&ctx.this).unwrap_or_default();
     let nonce = state.nonce(&ctx.this).unwrap_or_default();
     if balance < value || nonce >= Int::from(u64::MAX) || ctx.depth + 1 > 1024 {
@@ -41,9 +43,48 @@ fn create_fails_early<S: State>(
     Ok(false)
 }
 
+/// EIP-7928 (Amsterdam): what a call reads once its gas checks pass. The target's account (its
+/// code address for CALLCODE and DELEGATECALL) is read once the access, value and memory costs
+/// are covered, and a delegated target's code address once its access is covered too.
+fn record_call_access<S: State>(
+    evm: &mut Evm,
+    state: &mut S,
+    address: &Acc,
+    value: Int,
+    regions: &[(usize, usize)],
+) {
+    let spec = evm.spec();
+    if !spec.state_gas() {
+        return;
+    }
+    let access = if state.is_cold_acc(address) {
+        spec.cold_account()
+    } else {
+        100
+    };
+    let transfer = if value.is_zero() {
+        0
+    } else {
+        spec.call_value()
+    };
+    let first = access + transfer + evm.mem_expand_cost(regions);
+    if evm.gas_remaining() < first {
+        return;
+    }
+    evm.access(address);
+    if let Some(delegate) = state.auth(address) {
+        let cold = delegate != *address && state.is_cold_acc(&delegate);
+        let extra = if cold { spec.cold_account() } else { 100 };
+        if evm.gas_remaining() >= first + extra {
+            evm.access(&delegate);
+        }
+    }
+}
+
 /// Amsterdam (EIP-8037): a creation into an address that is not alive pays for the new account
 /// before the child's gas is set aside; the caller gets it back if the creation fails.
 fn charge_new_account<S: State>(evm: &mut Evm, address: &Acc, state: &mut S) -> EvmResult<()> {
+    evm.access(address);
     if !crate::exe::is_alive(state, address) {
         evm.state_charge(crate::gas::NEW_ACCOUNT)?;
         evm.new_account_charged = true;
@@ -130,6 +171,15 @@ pub fn call<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> 
         return Err(EvmYield::Fetch(Fetch::Account(delegate)));
     }
 
+    if !(ctx.is_static && !value.is_zero()) {
+        record_call_access(
+            evm,
+            state,
+            &address,
+            value,
+            &[(args_offset, args_size), (ret_offset, ret_size)],
+        );
+    }
     // EIP-2929: warm/cold address access (use pending warm to survive Fetch+reset)
     let access_cost: i64 = if state.is_cold_acc(&address) {
         evm.spec().cold_account()
@@ -186,6 +236,7 @@ pub fn call<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> 
     let max_child = available - available / 64;
     let mut gas = gas_arg.as_u64_saturating().min(max_child);
     evm.gas_charge(gas as i64)?;
+    evm.access(&ctx.this);
 
     // Gas stipend: add 2300 to child when sending value
     if has_value {
@@ -233,6 +284,13 @@ pub fn callcode<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S)
         return Err(EvmYield::Fetch(Fetch::Account(delegate)));
     }
 
+    record_call_access(
+        evm,
+        state,
+        &address,
+        value,
+        &[(args_offset, args_size), (ret_offset, ret_size)],
+    );
     let access_cost: i64 = if state.is_cold_acc(&address) {
         evm.spec().cold_account()
     } else {
@@ -262,6 +320,7 @@ pub fn callcode<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S)
     let max_child = available - available / 64;
     let mut gas = gas_arg.as_u64_saturating().min(max_child);
     evm.gas_charge(gas as i64)?;
+    evm.access(&ctx.this);
 
     if has_value {
         gas += 2300;
@@ -323,6 +382,13 @@ pub fn delegatecall<S: State>(
         return Err(EvmYield::Fetch(Fetch::Account(delegate)));
     }
 
+    record_call_access(
+        evm,
+        state,
+        &address,
+        Int::ZERO,
+        &[(args_offset, args_size), (ret_offset, ret_size)],
+    );
     let access_cost: i64 = if state.is_cold_acc(&address) {
         evm.spec().cold_account()
     } else {
@@ -440,6 +506,13 @@ pub fn staticcall<S: State>(
         return Err(EvmYield::Fetch(Fetch::Account(delegate)));
     }
 
+    record_call_access(
+        evm,
+        state,
+        &address,
+        Int::ZERO,
+        &[(args_offset, args_size), (ret_offset, ret_size)],
+    );
     // EIP-2929: warm/cold address access (applies to precompiles too)
     let access_cost: i64 = if state.is_cold_acc(&address) {
         evm.spec().cold_account()
@@ -524,10 +597,12 @@ pub fn selfdestruct<S: State>(
         // EIP-8037: Ether sent to an account that is not alive pays an account write and the
         // new account's state gas. EIP-8246: nothing is burned, the balance always moves, and
         // a contract destroyed in its creating transaction keeps what it holds.
+        evm.access(&beneficiary);
         if !balance.is_zero() && !crate::exe::is_alive(state, &beneficiary) {
             evm.gas_charge(crate::gas::ACCOUNT_WRITE)?;
             evm.state_charge(crate::gas::NEW_ACCOUNT)?;
         }
+        evm.access(&ctx.this);
         if beneficiary != ctx.this && !balance.is_zero() {
             let add = lift(|[a, b]| a + b);
             let to_bal = state.balance(&beneficiary).unwrap_or(Int::ZERO);

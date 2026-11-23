@@ -262,6 +262,8 @@ pub struct Executor {
     system: bool,
     /// How the last finished frame ended; after [`Executor::run`], the transaction's outcome.
     outcome: Option<Outcome>,
+    /// The state gas reservoir the transaction started with (Amsterdam).
+    reservoir: i64,
 }
 
 /// How the outermost frame of a transaction ended.
@@ -616,6 +618,7 @@ impl Executor {
             max_steps: Some(MAX_STEPS),
             system: false,
             outcome: None,
+            reservoir: 0,
         }
     }
 
@@ -734,6 +737,16 @@ impl Executor {
         // transaction's gas after its fees are paid, so they can be undone with a checkpoint.
         let amsterdam = !self.system && head.spec.state_gas();
         let mut delegations = (None, Vec::new());
+        // EIP-7928: the sender and the coinbase are always read; a system call reads its target.
+        if amsterdam {
+            state.access(&self.call.by);
+            state.access(&head.coinbase);
+        } else if self.system
+            && head.spec.state_gas()
+            && let Some(to) = self.call.to
+        {
+            state.access(&to);
+        }
         let (eip7702_refund, (intrinsic, floor, effective_gas_price)) = if self.system {
             (0, (0, 0, Int::ZERO))
         } else if amsterdam {
@@ -779,6 +792,7 @@ impl Executor {
         } else {
             (self.call.gas as i64 - intrinsic, 0)
         };
+        self.reservoir = reservoir;
 
         // A call to an account without code executes nothing, so it settles without a frame.
         // Traced runs keep the frame for its call and return events, and an unpaid value goes
@@ -802,8 +816,7 @@ impl Executor {
             };
             self.outcome = Some(Outcome::Return);
             result.gas_mut().refund += eip7702_refund;
-            let gas_final = self.settle(tx, head, effective_gas_price, &result, state, floor);
-            result.gas_mut().finalized = gas_final;
+            self.settle(tx, head, effective_gas_price, &mut result, state, floor);
             state.apply();
             return Ok(result);
         }
@@ -811,11 +824,12 @@ impl Executor {
         // Amsterdam: the top frame pays to access the code a delegated recipient points to.
         let delegation_access = if amsterdam {
             self.call.to.and_then(|to| state.auth(&to)).map(|delegate| {
-                if state.is_cold_acc(&delegate) {
+                let cost = if state.is_cold_acc(&delegate) {
                     head.spec.cold_account()
                 } else {
                     100
-                }
+                };
+                (cost, delegate)
             })
         } else {
             None
@@ -848,6 +862,16 @@ impl Executor {
                 return Ok(self.halt_before_run(tx, head, frame, reservoir, halt, state, floor));
             }
             frame.evm.gas.state_commit();
+            // EIP-7928: the recipient (the created address for a creation) is read once the
+            // delegations are paid for.
+            match mode {
+                CallMode::Create(created) => state.access(&created),
+                _ => {
+                    if let Some(to) = self.call.to {
+                        state.access(&to);
+                    }
+                }
+            }
         }
         // For top-level CREATE: collision check + initialize with nonce=1 (EIP-161).
         // Done AFTER the checkpoint so it's reverted on init-code failure.
@@ -891,8 +915,7 @@ impl Executor {
                 };
                 let mut result = result;
                 result.gas_mut().refund += eip7702_refund;
-                let gas_final = self.settle(tx, head, effective_gas_price, &result, state, floor);
-                result.gas_mut().finalized = gas_final;
+                self.settle(tx, head, effective_gas_price, &mut result, state, floor);
                 state.apply();
                 return Ok(result);
             }
@@ -922,7 +945,7 @@ impl Executor {
             let halt = HaltReason::OutOfGas;
             return Ok(self.halt_before_run(tx, head, frame, reservoir, halt, state, floor));
         }
-        if let Some(cost) = delegation_access {
+        if let Some((cost, delegate)) = delegation_access {
             if frame.evm.gas.remaining() < cost {
                 if let Some(checkpoint) = delegations.0 {
                     state.revert_to(checkpoint);
@@ -931,6 +954,7 @@ impl Executor {
                 return Ok(self.halt_before_run(tx, head, frame, reservoir, halt, state, floor));
             }
             frame.evm.gas.spent += cost;
+            state.access(&delegate);
         }
         // Validation guarantees the sender can pay the value unless the host skipped it (as
         // `eth_call` does). Then, like a call, the transaction fails without executing, keeping
@@ -951,8 +975,7 @@ impl Executor {
                 gas: frame.evm.gas,
             };
             result.gas_mut().refund += eip7702_refund;
-            let gas_final = self.settle(tx, head, effective_gas_price, &result, state, floor);
-            result.gas_mut().finalized = gas_final;
+            self.settle(tx, head, effective_gas_price, &mut result, state, floor);
             state.apply();
             return Ok(result);
         }
@@ -996,8 +1019,7 @@ impl Executor {
                 gas: frame.evm.gas,
             };
             result.gas_mut().refund += eip7702_refund;
-            let gas_final = self.settle(tx, head, effective_gas_price, &result, state, floor);
-            result.gas_mut().finalized = gas_final;
+            self.settle(tx, head, effective_gas_price, &mut result, state, floor);
             state.apply();
             return Ok(result);
         }
@@ -1549,8 +1571,7 @@ impl Executor {
         state.set_depth(0);
 
         result.gas_mut().refund += eip7702_refund;
-        let gas_final = self.settle(tx, head, effective_gas_price, &result, state, floor);
-        result.gas_mut().finalized = gas_final;
+        self.settle(tx, head, effective_gas_price, &mut result, state, floor);
 
         state.apply();
         Ok(result)
@@ -1587,27 +1608,36 @@ impl Executor {
             ret: vec![].into(),
             gas: frame.evm.gas,
         };
-        let gas_final = self.settle(tx, head, self.effective_gas_price, &result, state, floor);
-        result.gas_mut().finalized = gas_final;
+        self.settle(
+            tx,
+            head,
+            self.effective_gas_price,
+            &mut result,
+            state,
+            floor,
+        );
         state.apply();
         result
     }
 
-    /// Settles fees and refunds of a finished transaction; returns the gas it used. System
+    /// Settles fees and refunds of a finished transaction and records the gas it used in
+    /// `result` ([`Gas::finalized`], and from Amsterdam the block accounting fields). System
     /// calls pay no fees, so they only report the gas spent.
     fn settle(
         &self,
         tx: &Tx,
         head: &Head,
         effective_gas_price: Int,
-        result: &CallResult,
+        result: &mut CallResult,
         state: &mut impl State,
         floor: i64,
-    ) -> i64 {
+    ) {
         if self.system {
-            return result.gas().spent;
+            let gas = result.gas_mut();
+            gas.finalized = gas.spent;
+            return;
         }
-        finalized(
+        let finalized = finalized(
             &self.call,
             tx,
             head,
@@ -1615,7 +1645,16 @@ impl Executor {
             result,
             state,
             floor,
-        )
+        );
+        let reservoir = self.reservoir;
+        let gas = result.gas_mut();
+        gas.finalized = finalized;
+        if head.spec.state_gas() {
+            gas.used = self.call.gas as i64 - gas.remaining() - gas.state;
+            gas.refunded = gas.refund.min(gas.used / 5);
+            gas.state_used = gas.state_used(reservoir).max(0);
+            gas.floor = floor;
+        }
     }
 }
 

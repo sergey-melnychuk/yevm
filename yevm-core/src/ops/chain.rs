@@ -25,6 +25,7 @@ pub fn balance<S: State>(evm: &mut Evm, _: &Context, _: &Call, state: &mut S) ->
         evm.warm_acc(&acc);
         evm.gas_charge(evm.spec().cold_account_extra())?;
     }
+    evm.access(&acc);
     evm.push(balance)?;
     if let Some(step) = evm.step.as_mut() {
         step.debug.push(format!("BALANCE: {balance:?}"));
@@ -151,6 +152,7 @@ pub fn extcodesize<S: State>(evm: &mut Evm, _: &Context, _: &Call, state: &mut S
         evm.warm_acc(&acc);
         evm.gas_charge(evm.spec().cold_account_extra())?;
     }
+    evm.access(&acc);
     evm.push(size.into())?;
     Ok(())
 }
@@ -172,6 +174,7 @@ pub fn extcodecopy<S: State>(evm: &mut Evm, _: &Context, _: &Call, state: &mut S
     }
     evm.mem_expand(dest_offset, size)?;
     evm.gas_charge(3 * size.div_ceil(32) as i64)?;
+    evm.access(&acc);
 
     let code_len = code.len();
     let (lo, hi) = if offset >= Int::from(code_len) {
@@ -262,6 +265,7 @@ pub fn extcodehash<S: State>(evm: &mut Evm, _: &Context, _: &Call, state: &mut S
         evm.warm_acc(&acc);
         evm.gas_charge(evm.spec().cold_account_extra())?;
     }
+    evm.access(&acc);
     // EIP-1052 / EIP-161: return 0 for empty accounts (balance=0, nonce=0, code=empty)
     let hash = if account.code.0.0.is_empty() && account.nonce.is_zero() && account.value.is_zero()
     {
@@ -341,6 +345,7 @@ pub fn selfbalance<S: State>(
     let Some(balance) = state.balance(&acc) else {
         return Err(EvmYield::Fetch(Fetch::Balance(acc)));
     };
+    evm.access(&acc);
     evm.push(balance)?;
     Ok(())
 }

@@ -35,17 +35,26 @@ use yevm_core::{
 };
 use yevm_misc::buf::Buf;
 
-/// The only specification yevm implements.
+/// The earliest specification yevm implements.
 ///
-/// yevm has no fork schedule: it applies the latest mainnet rules (Osaka) to every block, so
-/// executing any other fork with it would silently diverge.
+/// yevm implements Osaka (with the blob-parameter-only forks after it) and Amsterdam, see
+/// [`yevm_spec`]; executing any other fork with it would silently diverge.
 pub const YEVM_SPEC: SpecId = SpecId::OSAKA;
+
+/// The yevm rules for an evm2 specification, or `None` for one yevm does not implement.
+pub fn yevm_spec(spec: SpecId) -> Option<yevm_core::Spec> {
+    match spec {
+        SpecId::OSAKA => Some(yevm_core::Spec::Osaka),
+        SpecId::AMSTERDAM => Some(yevm_core::Spec::Amsterdam),
+        _ => None,
+    }
+}
 
 /// Errors specific to executing with yevm.
 #[derive(Debug, thiserror::Error)]
 pub enum YevmError {
-    /// The active specification is not [`YEVM_SPEC`].
-    #[error("yevm only implements {YEVM_SPEC:?}, cannot execute {0:?}")]
+    /// The active specification is not one yevm implements (see [`yevm_spec`]).
+    #[error("yevm implements Osaka and Amsterdam, cannot execute {0:?}")]
     UnsupportedSpec(SpecId),
     /// An evm2 inspector is installed; yevm cannot drive evm2 inspectors.
     #[error("yevm cannot run evm2 inspectors (tracing is not supported)")]
@@ -177,7 +186,7 @@ impl<'a> YevmEvm<'a> {
         } else {
             (U256::ZERO, U256::ZERO)
         };
-        let mut head = convert::head(&self.env.block, base_fee, blob_base_fee);
+        let mut head = convert::head(&self.env.block, base_fee, blob_base_fee, self.env.spec);
         if !features.contains(EvmFeatures::BLOCK_GAS_LIMIT_CHECK) {
             // yevm always rejects transactions above the block gas limit.
             head.gas_limit = head.gas_limit.max(Int::from(call.gas));
@@ -239,6 +248,7 @@ impl<'a> YevmEvm<'a> {
             &self.env.block,
             self.env.block.basefee,
             self.env.block.blob_basefee,
+            self.env.spec,
         );
         self.run(
             Executor::system(call).with_max_steps(None),
@@ -253,7 +263,7 @@ impl<'a> YevmEvm<'a> {
         if self.inspector.is_some() {
             return Err(YevmError::UnsupportedInspector);
         }
-        if self.env.spec != YEVM_SPEC {
+        if yevm_spec(self.env.spec).is_none() {
             return Err(YevmError::UnsupportedSpec(self.env.spec));
         }
         Ok(())
@@ -316,11 +326,25 @@ impl<'a> YevmEvm<'a> {
         };
         let gas = outcome.gas();
         let gas_used = u64::try_from(gas.finalized).unwrap_or_default();
-        let total_gas_spent = u64::try_from(gas.spent).unwrap_or_default().max(gas_used);
+        // Amsterdam: the gas before refunds includes state gas, which the block counts apart
+        // from execution gas (EIP-7778, EIP-8037).
+        let (total_gas_spent, refunded, state_gas_spent) = if head.spec.state_gas() {
+            let total = u64::try_from(gas.used).unwrap_or_default();
+            let refunded = u64::try_from(gas.refunded).unwrap_or_default();
+            (
+                total,
+                refunded,
+                u64::try_from(gas.state_used).unwrap_or_default(),
+            )
+        } else {
+            let total = u64::try_from(gas.spent).unwrap_or_default().max(gas_used);
+            (total, total - gas_used, 0)
+        };
         let result = TxResult::<BaseEvmTypes> {
             status,
             total_gas_spent,
-            refunded: total_gas_spent - gas_used,
+            refunded,
+            state_gas_spent,
             floor_gas,
             stop: convert::stop_reason(status, executor.outcome(), output.is_empty()),
             output,
@@ -332,7 +356,7 @@ impl<'a> YevmEvm<'a> {
     }
 
     /// Moves the state changes of the last execution out of yevm's journal into a pending state.
-    fn pending_state(&mut self) -> Result<PendingState, DatabaseError> {
+    pub(crate) fn pending_state(&mut self) -> Result<PendingState, DatabaseError> {
         let mut pending_state = PendingState::default();
         for (acc, account, storage) in self.cache.entries() {
             let address = convert::address(acc);
@@ -352,6 +376,72 @@ impl<'a> YevmEvm<'a> {
             }
         }
         Ok(pending_state)
+    }
+
+    /// The last execution's contribution to the block access list (EIP-7928): what it changed,
+    /// and what it read as the specification counts reads (see `yevm_core::state::State::access`)
+    /// rather than everything yevm loaded. Reads in reverted frames and of accounts the
+    /// transaction destroyed are kept.
+    pub(crate) fn access_list_state(&mut self) -> Result<PendingState, DatabaseError> {
+        let (accounts, slots) = {
+            let (accounts, slots) = self.cache.accessed();
+            (accounts.clone(), slots.clone())
+        };
+        let mut pending = PendingState::default();
+        let mut listed = std::collections::HashSet::new();
+        for (acc, account, storage) in self.cache.entries() {
+            let address = convert::address(acc);
+            let (original, current) =
+                account_change(&mut self.originals, &mut self.db, &address, account)?;
+            let written: Vec<_> = storage
+                .iter()
+                .filter(|(key, slot)| {
+                    slot.original != slot.current || slots.contains(&(*acc, **key))
+                })
+                .map(|(key, slot)| (*key, slot.original, slot.current))
+                .collect();
+            if original == current && !accounts.contains(acc) && written.is_empty() {
+                continue;
+            }
+            listed.insert(*acc);
+            let alive = current.is_some();
+            pending.insert_account(address, original, current);
+            for (key, from, to) in written {
+                // A destroyed account's writes are gone: they count as reads.
+                let to = if alive { to } else { from };
+                pending.insert_storage(
+                    address,
+                    convert::u256(&key),
+                    convert::u256(&from),
+                    convert::u256(&to),
+                );
+            }
+        }
+        // Reads of accounts and slots the cache no longer holds (reverted creations, destroyed
+        // accounts) or never held as written.
+        for acc in &accounts {
+            if listed.insert(*acc) {
+                let address = convert::address(acc);
+                let info = load_account(&mut self.db, &address)?;
+                pending.insert_account(address, info.clone(), info);
+            }
+        }
+        for (acc, key) in &slots {
+            let address = convert::address(acc);
+            if listed.insert(*acc) {
+                let info = load_account(&mut self.db, &address)?;
+                pending.insert_account(address, info.clone(), info);
+            }
+            let key = convert::u256(key);
+            if pending
+                .account_changes_for(&address)
+                .is_some_and(|changes| changes.storage.slots.contains_key(&key))
+            {
+                continue;
+            }
+            pending.insert_storage(address, key, U256::ZERO, U256::ZERO);
+        }
+        Ok(pending)
     }
 
     /// Every account and slot the overlay holds: all the state this EVM loaded or wrote since
@@ -445,12 +535,9 @@ impl<'a> YevmEvm<'a> {
                 got,
             });
         }
-        if gas_limit > version.tx_gas_limit_cap {
-            return Err(HandlerError::TxGasLimitGreaterThanCap {
-                gas_limit,
-                cap: version.tx_gas_limit_cap,
-            });
-        }
+        // EIP-7825; from Amsterdam (EIP-8037) the cap bounds only the execution gas a
+        // transaction needs, and a larger total funds the state gas reservoir.
+        evm2::ethereum::validate_tx_gas_limit_cap(version, gas_limit)?;
         if features.contains(EvmFeatures::BLOCK_GAS_LIMIT_CHECK)
             && U256::from(gas_limit) > block.gas_limit
         {
@@ -540,6 +627,12 @@ impl<'a> YevmEvm<'a> {
                 got: gas_limit,
             });
         }
+        evm2::ethereum::validate_execution_gas_limit_cap(
+            version,
+            gas_limit,
+            gas.intrinsic_gas,
+            gas.floor_gas,
+        )?;
 
         let info = load_account(&mut self.db, &caller)?;
         let sender = info.clone().unwrap_or_else(AccountInfo::empty);

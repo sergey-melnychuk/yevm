@@ -53,6 +53,11 @@ pub trait State {
     /// Amsterdam (EIP-8246): accounts destroyed in the transaction that created them keep
     /// their balance when [`Self::apply`] clears them.
     fn keep_destroyed_balance(&mut self, _keep: bool) {}
+    /// EIP-7928 (Amsterdam): records that the transaction read `acc` the way the specification
+    /// counts reads (after the gas checks that guard it). Reverts keep it.
+    fn access(&mut self, _acc: &Acc) {}
+    /// EIP-7928 (Amsterdam): records that the transaction read slot `key` of `acc`.
+    fn access_key(&mut self, _acc: &Acc, _key: &Int) {}
 
     fn get_depth(&mut self) -> usize {
         0

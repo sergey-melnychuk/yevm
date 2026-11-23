@@ -49,7 +49,7 @@ use evm2::{
 use reth_chainspec::{ChainSpec, ChainSpecBuilder};
 use reth_ethereum::consensus::{Consensus, EthBeaconConsensus, FullConsensus, HeaderValidator};
 use reth_ethereum_primitives::{Block, EthPrimitives};
-use reth_evm::{BundleState, ConfigureEvm, execute::Executor};
+use reth_evm::{BlockExecutor, BlockExecutorFactory, BundleState, ConfigureEvm};
 use reth_evm_ethereum::EthEvmConfig;
 use reth_primitives_traits::{SealedBlock, SealedHeader};
 use serde::Deserialize;
@@ -68,9 +68,10 @@ use std::{
 };
 use yevm_reth::exec::YevmEvmConfig;
 
-/// The networks that run. yevm implements only the Osaka rules; the blob-parameter-only forks
-/// after Osaka (EIP-7892) change only the blob schedule, so their transitions run too.
+/// The networks that run. yevm implements the Osaka and Amsterdam rules; the blob-parameter-only
+/// forks after Osaka (EIP-7892) change only the blob schedule, so their transitions run too.
 const NETWORKS: &[&str] = &[
+    "Amsterdam",
     "Osaka",
     "OsakaToBPO1AtTime15k",
     "BPO1ToBPO2AtTime15k",
@@ -113,6 +114,8 @@ struct FixtureBlock {
     rlp: Bytes,
     /// Set if the block is invalid: the reason, as the fixture's filler named it.
     expect_exception: Option<String>,
+    /// The block access list the block commits to (Amsterdam), shown when ours differs.
+    block_access_list: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -559,6 +562,27 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 /// blob parameters are `A`'s from genesis and `B`'s from [`TRANSITION_TIME`], as given in the
 /// fixture's `config.blobSchedule`.
 fn chain_spec(network: &str, config: Option<&FixtureConfig>) -> Result<Arc<ChainSpec>, String> {
+    let params = |fork: &str| {
+        let fixture = config
+            .and_then(|c| c.blob_schedule.get(fork))
+            .ok_or_else(|| format!("{network}: no blob parameters for {fork}"))?;
+        Ok::<_, String>(BlobParams {
+            target_blob_count: fixture.target.to(),
+            max_blob_count: fixture.max.to(),
+            update_fraction: fixture.base_fee_update_fraction.to(),
+            ..BlobParams::osaka()
+        })
+    };
+    if network == "Amsterdam" {
+        let mut spec = ChainSpecBuilder::mainnet()
+            .reset()
+            .amsterdam_activated()
+            .build();
+        spec.blob_params = spec
+            .blob_params
+            .with_scheduled(vec![(0, params("Amsterdam")?)]);
+        return Ok(Arc::new(spec));
+    }
     let mut spec = ChainSpecBuilder::mainnet()
         .reset()
         .osaka_activated()
@@ -568,17 +592,6 @@ fn chain_spec(network: &str, config: Option<&FixtureConfig>) -> Result<Arc<Chain
             .strip_suffix("AtTime15k")
             .and_then(|n| n.split_once("To"))
             .ok_or_else(|| format!("unknown network {network}"))?;
-        let params = |fork: &str| {
-            let fixture = config
-                .and_then(|c| c.blob_schedule.get(fork))
-                .ok_or_else(|| format!("{network}: no blob parameters for {fork}"))?;
-            Ok::<_, String>(BlobParams {
-                target_blob_count: fixture.target.to(),
-                max_blob_count: fixture.max.to(),
-                update_fraction: fixture.base_fee_update_fraction.to(),
-                ..BlobParams::osaka()
-            })
-        };
         let mut scheduled = vec![(TRANSITION_TIME, params(to)?)];
         if from != "Osaka" {
             scheduled.insert(0, (0, params(from)?));
@@ -611,7 +624,14 @@ where
     for (index, block) in fixture.blocks.iter().enumerate() {
         // The position in the fixture: an invalid block may carry any number.
         let position = index + 1;
-        let imported = import_block(&evm_config, &consensus, &world, &head, &block.rlp);
+        let imported = import_block(
+            &evm_config,
+            &consensus,
+            &world,
+            &head,
+            &block.rlp,
+            block.block_access_list.as_ref(),
+        );
         match (imported, &block.expect_exception) {
             (Ok((header, next)), None) => {
                 head = header;
@@ -653,6 +673,7 @@ fn import_block<E>(
     world: &World,
     parent: &SealedHeader,
     rlp: &[u8],
+    expected_bal: Option<&serde_json::Value>,
 ) -> Result<(SealedHeader, World), String>
 where
     E: ConfigureEvm<Primitives = EthPrimitives>,
@@ -674,15 +695,47 @@ where
         .try_recover()
         .map_err(|e| format!("sender recovery: {e}"))?;
 
-    let mut executor = evm_config.batch_executor(world);
-    let result = executor
-        .execute_one(&block)
-        .map_err(|e| format!("execution: {e}"))?;
-    let changes = executor.into_state();
+    // As reth's block execution does, with the block access list built (EIP-7928) whenever the
+    // header commits to one.
+    let mut database = evm2::evm::Db::new(world);
+    let mut execute = || -> Result<_, reth_evm::BlockExecutionError> {
+        let evm_env = evm_config
+            .evm_env(block.header())
+            .map_err(reth_evm::BlockExecutionError::other)?;
+        let evm = evm_config
+            .block_executor_factory()
+            .evm_with_env(&mut database, evm_env);
+        let ctx = evm_config
+            .context_for_block(block.sealed_block())
+            .map_err(reth_evm::BlockExecutionError::other)?;
+        let mut executor = evm_config
+            .block_executor_factory()
+            .create_executor(evm, ctx);
+        if block.header().block_access_list_hash.is_some() {
+            executor.enable_block_access_list_builder();
+        }
+        executor.apply_pre_execution_changes()?;
+        for transaction in block.transactions_recovered() {
+            executor.execute_transaction(transaction)?;
+        }
+        executor.finish_with_block_access_list()
+    };
+    let (output, block_access_list) = execute().map_err(|e| format!("execution: {e}"))?;
+    let changes = output.state;
+    let result = output.result;
+    let bal_hash = block_access_list
+        .as_ref()
+        .map(|bal| alloy_eip7928::compute_block_access_list_hash(bal));
     FullConsensus::<EthPrimitives>::validate_block_post_execution(
-        consensus, &block, &result, None, None,
+        consensus, &block, &result, None, bal_hash,
     )
-    .map_err(|e| format!("block after execution: {e}"))?;
+    .map_err(|e| {
+        let diff = match (&block_access_list, expected_bal) {
+            (Some(have), Some(want)) => bal_diff(have, want),
+            _ => String::new(),
+        };
+        format!("block after execution: {e}{diff}")
+    })?;
 
     let mut next = world.clone();
     next.apply(&changes);
@@ -696,6 +749,65 @@ where
     next.block_hashes
         .insert(block.header().number, block.hash());
     Ok((block.clone_sealed_header(), next))
+}
+
+/// The accounts where the block access list built differs from the fixture's, as JSON.
+fn bal_diff(have: &alloy_eip7928::BlockAccessList, want: &serde_json::Value) -> String {
+    let have = serde_json::to_value(have).unwrap_or_default();
+    // alloy and the fixtures name the fields differently and pad hex differently.
+    fn normalize(v: &serde_json::Value) -> serde_json::Value {
+        use serde_json::Value;
+        match v {
+            Value::Object(map) => Value::Object(
+                map.iter()
+                    .map(|(k, v)| {
+                        let k = match k.as_str() {
+                            "blockAccessIndex" => "index",
+                            "postBalance" | "postNonce" | "postValue" | "newCode" | "postCode"
+                            | "code" => "value",
+                            "slot" => "key",
+                            "slotChanges" => "changes",
+                            k => k,
+                        };
+                        (k.to_owned(), normalize(v))
+                    })
+                    .collect(),
+            ),
+            Value::Array(items) => Value::Array(items.iter().map(normalize).collect()),
+            Value::String(s) if s.starts_with("0x") && s.len() != 42 => {
+                let digits = s[2..].trim_start_matches('0').to_lowercase();
+                Value::String(format!(
+                    "0x{}",
+                    if digits.is_empty() { "0" } else { &digits }
+                ))
+            }
+            v => v.clone(),
+        }
+    }
+    let by_address = |v: &serde_json::Value| -> BTreeMap<String, serde_json::Value> {
+        v.as_array()
+            .into_iter()
+            .flatten()
+            .map(|a| {
+                let address = a["address"].as_str().unwrap_or_default().to_lowercase();
+                (address, normalize(a))
+            })
+            .collect()
+    };
+    let (have, want) = (by_address(&have), by_address(want));
+    let mut out = String::new();
+    for address in have.keys().chain(want.keys()).collect::<BTreeSet<_>>() {
+        let (h, w) = (have.get(address), want.get(address));
+        if h != w {
+            let _ = write!(
+                out,
+                "\n  {address}\n    have {}\n    want {}",
+                h.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
+                w.map(|v| v.to_string()).unwrap_or_else(|| "-".into())
+            );
+        }
+    }
+    out
 }
 
 /// Decodes a block, rejecting trailing bytes.

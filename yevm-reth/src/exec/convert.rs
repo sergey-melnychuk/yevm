@@ -2,12 +2,13 @@
 
 use alloy_consensus::{Transaction, transaction::Recovered};
 use alloy_primitives::{Address, B256, Bytes, KECCAK256_EMPTY, Log, LogData, U256};
+use evm2::SpecId;
 use evm2::{
     bytecode::Bytecode, env::BlockEnv, ethereum::TxEnvelope, evm::AccountInfo,
     interpreter::InstrStop,
 };
 use yevm_core::{
-    Acc, Call, Head, Int, Tx,
+    Acc, Call, Head, Int, Spec, Tx,
     call::{AccessListItem, AuthorizationListItem},
     evm::HaltReason,
     exe::Outcome,
@@ -86,9 +87,12 @@ pub(crate) fn account_info(
     Some(info)
 }
 
-/// Builds the yevm block header for a block environment.
-pub(crate) fn head(block: &BlockEnv, base_fee: U256, blob_base_fee: U256) -> Head {
+/// Builds the yevm block header for a block environment under `spec`.
+pub(crate) fn head(block: &BlockEnv, base_fee: U256, blob_base_fee: U256, spec: SpecId) -> Head {
+    let spec = super::evm::yevm_spec(spec).unwrap_or_default();
     Head {
+        spec,
+        slot_number: spec.is(Spec::Amsterdam).then(|| int(block.slot_num)),
         number: block.number.saturating_to::<u64>().into(),
         gas_limit: int(block.gas_limit),
         coinbase: acc(block.beneficiary),

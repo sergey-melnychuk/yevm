@@ -333,6 +333,18 @@ impl State for DbState<'_, '_> {
         self.cache.apply();
     }
 
+    fn keep_destroyed_balance(&mut self, keep: bool) {
+        State::keep_destroyed_balance(&mut *self.cache, keep);
+    }
+
+    fn access(&mut self, acc: &Acc) {
+        State::access(&mut *self.cache, acc);
+    }
+
+    fn access_key(&mut self, acc: &Acc, key: &Int) {
+        State::access_key(&mut *self.cache, acc, key);
+    }
+
     fn get_depth(&mut self) -> usize {
         self.cache.get_depth()
     }

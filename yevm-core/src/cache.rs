@@ -94,6 +94,9 @@ pub struct Cache {
     destroyed: HashSet<Acc>,
     /// See [`State::keep_destroyed_balance`].
     keep_destroyed_balance: bool,
+    /// Accounts and slots the transaction read (EIP-7928), see [`State::access`].
+    accessed_accs: HashSet<Acc>,
+    accessed_keys: HashSet<(Acc, Int)>,
     hash: HashMap<u64, Int>,
     depth: usize,
     /// Logs emitted so far, as `(address, data, topics)`; reverted frames' logs are removed.
@@ -151,6 +154,11 @@ impl Cache {
     ///
     /// Accounts destroyed by `State::apply` are reported as empty accounts. Embedders use this
     /// to extract the state diff of an executed transaction.
+    /// The accounts and slots the transaction read (EIP-7928), see [`State::access`].
+    pub fn accessed(&self) -> (&HashSet<Acc>, &HashSet<(Acc, Int)>) {
+        (&self.accessed_accs, &self.accessed_keys)
+    }
+
     pub fn entries(&self) -> impl Iterator<Item = (&Acc, &Account, &HashMap<Int, Slot>)> {
         self.accounts
             .iter()
@@ -161,6 +169,8 @@ impl Cache {
         self.transient.clear();
         self.warm_accs.clear();
         self.warm_keys.clear();
+        self.accessed_accs.clear();
+        self.accessed_keys.clear();
         self.created.clear();
         self.destroyed.clear();
         self.depth = 0;
@@ -198,6 +208,8 @@ impl Cache {
         self.transient.clear();
         self.warm_accs.clear();
         self.warm_keys.clear();
+        self.accessed_accs.clear();
+        self.accessed_keys.clear();
         self.created.clear();
         self.destroyed.clear();
         self.hash.clear();
@@ -937,6 +949,14 @@ impl State for Cache {
 
     fn keep_destroyed_balance(&mut self, keep: bool) {
         self.keep_destroyed_balance = keep;
+    }
+
+    fn access(&mut self, acc: &Acc) {
+        self.accessed_accs.insert(*acc);
+    }
+
+    fn access_key(&mut self, acc: &Acc, key: &Int) {
+        self.accessed_keys.insert((*acc, *key));
     }
 
     fn get_chain_id(&self) -> u64 {
