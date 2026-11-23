@@ -11,6 +11,7 @@ pub mod chain;
 pub mod eip7702;
 pub mod evm;
 pub mod exe;
+pub mod gas;
 pub mod misc;
 pub mod ops;
 pub mod pre;

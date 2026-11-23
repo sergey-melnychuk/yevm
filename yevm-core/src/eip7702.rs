@@ -25,14 +25,31 @@ fn code_is_empty_or_eip7702(code: &[u8]) -> bool {
     code.is_empty() || (code.len() == 23 && code.starts_with(&[0xEF, 0x01, 0x00]))
 }
 
-/// Returns gas refund to add to the transaction refund counter (see revm `apply_eip7702_auth_list`).
+/// An authorization that was applied, for the gas Amsterdam charges for it (EIP-8037).
+#[derive(Clone, Copy, Debug)]
+pub struct Applied {
+    pub authority: Acc,
+    /// Whether the authority's account existed (was not empty) when it was applied.
+    pub existed: bool,
+    /// Whether the authority was delegated before the transaction.
+    pub delegated_before: bool,
+    /// Whether it clears the delegation (address zero).
+    pub clears: bool,
+}
+
+/// Applies the authorization list. Returns the gas refund to add to the transaction refund
+/// counter (see revm `apply_eip7702_auth_list`; Amsterdam has none) and the authorizations that
+/// were applied.
 pub async fn apply_authorization_list(
     tx: &Tx,
     chain_id: u64,
     state: &mut impl State,
     chain: &impl Chain,
-) -> Result<i64> {
+) -> Result<(i64, Vec<Applied>)> {
     let mut refund = 0i64;
+    let mut applied = Vec::new();
+    // Whether each authority seen so far was delegated before the transaction.
+    let mut before: Vec<(Acc, bool)> = Vec::new();
     for item in &tx.authorization_list {
         let signed = SignedAuthorization::new_unchecked(
             Authorization {
@@ -62,6 +79,14 @@ pub async fn apply_authorization_list(
         }
         let acc = state.acc(&authority).unwrap_or_default();
         state.warm_acc(&authority);
+        let delegated_before = match before.iter().find(|(a, _)| *a == authority) {
+            Some((_, delegated)) => *delegated,
+            None => {
+                let delegated = state.auth(&authority).is_some();
+                before.push((authority, delegated));
+                delegated
+            }
+        };
 
         let code = acc.code.0.as_slice();
         if !code_is_empty_or_eip7702(code) {
@@ -73,9 +98,16 @@ pub async fn apply_authorization_list(
         }
 
         // Revm: refund if authority already exists in the trie (not "empty + never existed").
-        if !account_is_empty_for_eip7702_refund(&acc) {
+        let existed = !account_is_empty_for_eip7702_refund(&acc);
+        if existed {
             refund += PER_EMPTY_ACCOUNT - PER_AUTH_BASE;
         }
+        applied.push(Applied {
+            authority,
+            existed,
+            delegated_before,
+            clears: item.address.is_zero(),
+        });
 
         if item.address.is_zero() {
             let hash = Int::from(yevm_misc::keccak256(&[]).as_ref());
@@ -88,7 +120,7 @@ pub async fn apply_authorization_list(
         }
         state.inc_nonce(&authority, Int::ONE);
     }
-    Ok(refund)
+    Ok((refund, applied))
 }
 
 fn account_is_empty_for_eip7702_refund(acc: &Account) -> bool {

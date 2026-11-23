@@ -9,8 +9,47 @@ use crate::{
     state::State,
 };
 
-/// EIP-3860: largest initcode CREATE and CREATE2 accept.
-const MAX_INITCODE_SIZE: usize = 2 * 24_576;
+/// Loads the creator and the created address, which Amsterdam's checks read. Instructions
+/// call it before they expand memory: a fetch reruns the instruction, and an expansion already
+/// made would then go unpaid.
+fn load_create_accounts<S: State>(ctx: &Context, address: &Acc, state: &mut S) -> EvmResult<()> {
+    if !state.has_acc(&ctx.this) {
+        return Err(EvmYield::Fetch(Fetch::Account(ctx.this)));
+    }
+    if !state.has_acc(address) {
+        return Err(EvmYield::Fetch(Fetch::Account(*address)));
+    }
+    Ok(())
+}
+
+/// Amsterdam (EIP-8037): a creation that cannot start (too deep, the creator cannot pay the
+/// value, or its nonce is at the maximum) fails before it charges the new account or withholds
+/// gas, pushing zero. Returns whether it failed.
+fn create_fails_early<S: State>(
+    evm: &mut Evm,
+    ctx: &Context,
+    value: Int,
+    state: &mut S,
+) -> EvmResult<bool> {
+    let balance = state.balance(&ctx.this).unwrap_or_default();
+    let nonce = state.nonce(&ctx.this).unwrap_or_default();
+    if balance < value || nonce >= Int::from(u64::MAX) || ctx.depth + 1 > 1024 {
+        evm.ret.clear();
+        evm.push(Int::ZERO)?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// Amsterdam (EIP-8037): a creation into an address that is not alive pays for the new account
+/// before the child's gas is set aside; the caller gets it back if the creation fails.
+fn charge_new_account<S: State>(evm: &mut Evm, address: &Acc, state: &mut S) -> EvmResult<()> {
+    if !crate::exe::is_alive(state, address) {
+        evm.state_charge(crate::gas::NEW_ACCOUNT)?;
+        evm.new_account_charged = true;
+    }
+    Ok(())
+}
 
 /// Allocate gas for a child frame per EIP-150 (63/64 rule).
 fn sub_call_gas(evm: &Evm) -> u64 {
@@ -22,12 +61,12 @@ pub fn create<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -
     if ctx.is_static {
         return Err(EvmYield::Halt(HaltReason::NonStatic));
     }
-    evm.gas_charge(32_000)?;
+    evm.gas_charge(evm.spec().create())?;
     let [value, offset, size] = evm.peek()?;
     evm::mem_check_int(offset, size)?;
     let (offset, size) = (offset.as_usize(), size.as_usize());
     // EIP-3860: oversized initcode aborts like running out of gas.
-    if size > MAX_INITCODE_SIZE {
+    if size > evm.spec().max_initcode_size() {
         return Err(EvmYield::Halt(HaltReason::OutOfGas));
     }
     let initcode_cost = 2 * ((size as i64 + 31) / 32);
@@ -37,9 +76,18 @@ pub fn create<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -
         return Err(EvmYield::Fetch(Fetch::Nonce(ctx.this)));
     };
     let address = create_address(&ctx.this, nonce);
+    if evm.spec().state_gas() {
+        load_create_accounts(ctx, &address, state)?;
+    }
 
     let data = evm.mem_get(offset, size)?;
     let data: Vec<u8> = data.to_vec();
+    if evm.spec().state_gas() {
+        if create_fails_early(evm, ctx, value, state)? {
+            return Ok(());
+        }
+        charge_new_account(evm, &address, state)?;
+    }
     let gas = sub_call_gas(evm);
     evm.gas_charge(gas as i64)?;
 
@@ -84,7 +132,7 @@ pub fn call<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> 
 
     // EIP-2929: warm/cold address access (use pending warm to survive Fetch+reset)
     let access_cost: i64 = if state.is_cold_acc(&address) {
-        2600
+        evm.spec().cold_account()
     } else {
         100
     };
@@ -93,7 +141,7 @@ pub fn call<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> 
 
     if let Some(delegate) = state.auth(&address) {
         let access_cost: i64 = if evm.is_cold_acc(&*state, &delegate) {
-            2600
+            evm.spec().cold_account()
         } else {
             100
         };
@@ -107,7 +155,7 @@ pub fn call<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> 
         return Err(EvmYield::Halt(HaltReason::NonStatic));
     }
     if has_value {
-        evm.gas_charge(9000)?;
+        evm.gas_charge(evm.spec().call_value())?;
     }
 
     // New account cost (sending value to dead account per EIP-161).
@@ -121,7 +169,11 @@ pub fn call<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> 
             .acc(&address)
             .map(|a| a.value.is_zero() && a.nonce.is_zero() && a.code.0.0.is_empty())
             .unwrap_or(true);
-        if is_empty {
+        if is_empty && evm.spec().state_gas() {
+            // EIP-8037: state gas for the new account, given back if the call fails.
+            evm.state_charge(crate::gas::NEW_ACCOUNT)?;
+            evm.new_account_charged = true;
+        } else if is_empty {
             evm.gas_charge(25000)?;
         }
     }
@@ -182,7 +234,7 @@ pub fn callcode<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S)
     }
 
     let access_cost: i64 = if state.is_cold_acc(&address) {
-        2600
+        evm.spec().cold_account()
     } else {
         100
     };
@@ -191,7 +243,7 @@ pub fn callcode<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S)
 
     if let Some(delegate) = state.auth(&address) {
         let access_cost: i64 = if evm.is_cold_acc(&*state, &delegate) {
-            2600
+            evm.spec().cold_account()
         } else {
             100
         };
@@ -203,7 +255,7 @@ pub fn callcode<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S)
 
     let has_value = !value.is_zero();
     if has_value {
-        evm.gas_charge(9000)?;
+        evm.gas_charge(evm.spec().call_value())?;
     }
 
     let available = evm.gas_remaining().max(0) as u64;
@@ -272,7 +324,7 @@ pub fn delegatecall<S: State>(
     }
 
     let access_cost: i64 = if state.is_cold_acc(&address) {
-        2600
+        evm.spec().cold_account()
     } else {
         100
     };
@@ -281,7 +333,7 @@ pub fn delegatecall<S: State>(
 
     if let Some(delegate) = state.auth(&address) {
         let access_cost: i64 = if evm.is_cold_acc(&*state, &delegate) {
-            2600
+            evm.spec().cold_account()
         } else {
             100
         };
@@ -313,26 +365,35 @@ pub fn delegatecall<S: State>(
     ))
 }
 
-pub fn create2(evm: &mut Evm, ctx: &Context, _: &Call, _: &mut dyn State) -> EvmResult<()> {
+pub fn create2<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> EvmResult<()> {
     if ctx.is_static {
         return Err(EvmYield::Halt(HaltReason::NonStatic));
     }
-    evm.gas_charge(32_000)?;
+    evm.gas_charge(evm.spec().create())?;
     let [value, offset, size, salt] = evm.peek()?;
     evm::mem_check_int(offset, size)?;
     let (offset, size) = (offset.as_usize(), size.as_usize());
     // EIP-3860: oversized initcode aborts like running out of gas.
-    if size > MAX_INITCODE_SIZE {
+    if size > evm.spec().max_initcode_size() {
         return Err(EvmYield::Halt(HaltReason::OutOfGas));
     }
     // EIP-3860 initcode word cost (2) + CREATE2 hash word cost (6) = 8 per word
     let word_cost = 8 * ((size as i64 + 31) / 32);
     evm.gas_charge(word_cost)?;
 
-    let data = evm.mem_get(offset, size)?;
-    let data: Vec<u8> = data.to_vec();
+    let data = evm.mem_peek(offset, size);
     let init_code_hash = Int::from(keccak256(&data).as_ref());
     let address = create2_address(&ctx.this, &salt, &init_code_hash);
+    if evm.spec().state_gas() {
+        load_create_accounts(ctx, &address, state)?;
+    }
+    evm.mem_expand(offset, size)?;
+    if evm.spec().state_gas() {
+        if create_fails_early(evm, ctx, value, state)? {
+            return Ok(());
+        }
+        charge_new_account(evm, &address, state)?;
+    }
 
     let gas = sub_call_gas(evm);
     evm.gas_charge(gas as i64)?;
@@ -381,7 +442,7 @@ pub fn staticcall<S: State>(
 
     // EIP-2929: warm/cold address access (applies to precompiles too)
     let access_cost: i64 = if state.is_cold_acc(&address) {
-        2600
+        evm.spec().cold_account()
     } else {
         100
     };
@@ -390,7 +451,7 @@ pub fn staticcall<S: State>(
 
     if let Some(delegate) = state.auth(&address) {
         let access_cost: i64 = if evm.is_cold_acc(&*state, &delegate) {
-            2600
+            evm.spec().cold_account()
         } else {
             100
         };
@@ -454,11 +515,31 @@ pub fn selfdestruct<S: State>(
 
     // EIP-2929: cold address surcharge for beneficiary (no warm cost — covered by 5000 base)
     if state.is_cold_acc(&beneficiary) {
-        evm.gas_charge(2600)?;
+        evm.gas_charge(evm.spec().cold_account())?;
     }
     evm.warm_acc(&beneficiary);
 
     let balance = state.balance(&ctx.this).unwrap_or(Int::ZERO);
+    if evm.spec().state_gas() {
+        // EIP-8037: Ether sent to an account that is not alive pays an account write and the
+        // new account's state gas. EIP-8246: nothing is burned, the balance always moves, and
+        // a contract destroyed in its creating transaction keeps what it holds.
+        if !balance.is_zero() && !crate::exe::is_alive(state, &beneficiary) {
+            evm.gas_charge(crate::gas::ACCOUNT_WRITE)?;
+            evm.state_charge(crate::gas::NEW_ACCOUNT)?;
+        }
+        if beneficiary != ctx.this && !balance.is_zero() {
+            let add = lift(|[a, b]| a + b);
+            let to_bal = state.balance(&beneficiary).unwrap_or(Int::ZERO);
+            state.set_value(&beneficiary, add([to_bal, balance]));
+            state.set_value(&ctx.this, Int::ZERO);
+            crate::exe::transfer_log(state, &ctx.this, &beneficiary, balance);
+        }
+        if state.created().contains(&ctx.this) {
+            state.destroy(&ctx.this);
+        }
+        return Err(EvmYield::Return(vec![]));
+    }
     if !balance.is_zero() && beneficiary != ctx.this {
         // EIP-161: creating empty account costs 25000 when transferring value
         let is_empty = state
@@ -522,7 +603,7 @@ mod tests {
 
     #[test]
     fn oversized_initcode_halts_create_and_create2() {
-        let size = Int::from(MAX_INITCODE_SIZE + 1);
+        let size = Int::from(crate::Spec::Osaka.max_initcode_size() + 1);
         let mut evm = Evm::new(
             Head::default(),
             vec![],

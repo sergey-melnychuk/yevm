@@ -23,7 +23,7 @@ pub fn balance<S: State>(evm: &mut Evm, _: &Context, _: &Call, state: &mut S) ->
 
     if state.is_cold_acc(&acc) {
         evm.warm_acc(&acc);
-        evm.gas_charge(2_500)?;
+        evm.gas_charge(evm.spec().cold_account_extra())?;
     }
     evm.push(balance)?;
     if let Some(step) = evm.step.as_mut() {
@@ -140,7 +140,8 @@ pub fn gasprice(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmR
 }
 
 pub fn extcodesize<S: State>(evm: &mut Evm, _: &Context, _: &Call, state: &mut S) -> EvmResult<()> {
-    evm.gas_charge(100)?;
+    // EIP-8038 (Amsterdam): reading the code costs another warm access.
+    evm.gas_charge(if evm.spec().state_gas() { 200 } else { 100 })?;
     let [acc] = evm.peek()?;
     let acc: Acc = acc.to();
     let Some(size) = state.code_size(&acc) else {
@@ -148,14 +149,15 @@ pub fn extcodesize<S: State>(evm: &mut Evm, _: &Context, _: &Call, state: &mut S
     };
     if state.is_cold_acc(&acc) {
         evm.warm_acc(&acc);
-        evm.gas_charge(2_500)?;
+        evm.gas_charge(evm.spec().cold_account_extra())?;
     }
     evm.push(size.into())?;
     Ok(())
 }
 
 pub fn extcodecopy<S: State>(evm: &mut Evm, _: &Context, _: &Call, state: &mut S) -> EvmResult<()> {
-    evm.gas_charge(100)?;
+    // EIP-8038 (Amsterdam): reading the code costs another warm access.
+    evm.gas_charge(if evm.spec().state_gas() { 200 } else { 100 })?;
     let [acc, dest_offset, offset, size] = evm.peek()?;
     let acc: Acc = acc.to();
     mem_check_int(dest_offset, size)?;
@@ -166,7 +168,7 @@ pub fn extcodecopy<S: State>(evm: &mut Evm, _: &Context, _: &Call, state: &mut S
     };
     if state.is_cold_acc(&acc) {
         evm.warm_acc(&acc);
-        evm.gas_charge(2_500)?;
+        evm.gas_charge(evm.spec().cold_account_extra())?;
     }
     evm.mem_expand(dest_offset, size)?;
     evm.gas_charge(3 * size.div_ceil(32) as i64)?;
@@ -258,7 +260,7 @@ pub fn extcodehash<S: State>(evm: &mut Evm, _: &Context, _: &Call, state: &mut S
     };
     if state.is_cold_acc(&acc) {
         evm.warm_acc(&acc);
-        evm.gas_charge(2_500)?;
+        evm.gas_charge(evm.spec().cold_account_extra())?;
     }
     // EIP-1052 / EIP-161: return 0 for empty accounts (balance=0, nonce=0, code=empty)
     let hash = if account.code.0.0.is_empty() && account.nonce.is_zero() && account.value.is_zero()
@@ -358,6 +360,14 @@ pub fn blobhash(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmR
         .copied()
         .unwrap_or(Int::ZERO);
     evm.push(hash)?;
+    Ok(())
+}
+
+/// SLOTNUM (EIP-7843, Amsterdam): the block's beacon slot number.
+pub fn slotnum(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmResult<()> {
+    evm.gas_charge(2)?;
+    let slot = evm.head.slot_number.unwrap_or_default();
+    evm.push(slot)?;
     Ok(())
 }
 

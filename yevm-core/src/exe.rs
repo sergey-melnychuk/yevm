@@ -11,7 +11,7 @@ use crate::Tx;
 use crate::call::Withdrawal;
 use crate::evm::{CallMode, Context, Evm, Gas, HaltReason, StepResult};
 use crate::misc::{create_address, is_precompile};
-use crate::{Acc, Call, Error, Int, Result};
+use crate::{Acc, Call, Error, Int, Result, Spec};
 use crate::{
     call::Head,
     chain::{Chain, fetch},
@@ -227,7 +227,6 @@ async fn process_request_queue(
 }
 
 const MAX_STEPS: u64 = 10_000_000;
-const MAX_CODE_SIZE: usize = 24_576;
 const CODE_DEPOSIT_GAS: i64 = 200;
 
 #[derive(Debug)]
@@ -287,6 +286,9 @@ pub struct CallFrame {
     /// True when this frame is a CREATE/CREATE2, false for CALL/STATICCALL/etc.
     /// Cannot rely on `call.to.is_zero()` because a plain CALL to address 0x0 is valid.
     pub is_create: bool,
+    /// Whether the caller paid a new account's state gas for this frame, which it gets back
+    /// if the frame fails (EIP-8037).
+    pub new_account: bool,
 }
 
 pub fn intrinsic(
@@ -295,25 +297,42 @@ pub fn intrinsic(
     head: &Head,
     state: &mut impl State,
 ) -> Result<(i64, i64, Int)> {
-    let mut total = 21_000i64;
-    let mut floor = 21_000i64;
+    let amsterdam = head.spec.is(Spec::Amsterdam);
     let has_code = call
         .to
         .and_then(|to| state.code_size(&to))
         .is_some_and(|size| size > 0);
     let is_create = call.is_create() && !has_code;
+    let zeroes = call.data.0.iter().filter(|b| **b == 0).count();
+    let non_zeroes = call.data.0.len() - zeroes;
+    let (mut total, mut floor) = if amsterdam {
+        // EIP-2780: the sender's base cost, plus the recipient's (an account write and a cold
+        // access for a creation; a cold access, and the value cost when value moves, for a call
+        // to another account; nothing for a self-transfer).
+        let recipient = if is_create {
+            crate::gas::ACCOUNT_WRITE + head.spec.cold_account()
+        } else if call.to == Some(call.by) {
+            0
+        } else if call.eth.is_zero() {
+            head.spec.cold_account()
+        } else {
+            head.spec.cold_account() + 6_000
+        };
+        let base = 12_000 + recipient;
+        // EIP-7976: the floor charges every calldata byte as 4 tokens of 16 gas.
+        (base, base + 64 * call.data.0.len() as i64)
+    } else {
+        // EIP-7623: floor calldata cost (TOTAL_COST_FLOOR_PER_TOKEN = 10)
+        let tokens = (zeroes + non_zeroes * 4) as i64;
+        let base = if is_create { 21_000 + 32_000 } else { 21_000 };
+        (base, 21_000 + 10 * tokens)
+    };
     if is_create {
-        total += 32_000;
         // EIP-3860: 2 gas per 32-byte word of initcode
         let initcode_cost = 2 * ((call.data.0.len() as i64 + 31) / 32);
         total += initcode_cost;
     }
-    let zeroes = call.data.0.iter().filter(|b| **b == 0).count();
-    let non_zeroes = call.data.0.len() - zeroes;
     total += (zeroes * 4 + non_zeroes * 16) as i64;
-    // EIP-7623: floor calldata cost (TOTAL_COST_FLOOR_PER_TOKEN = 10)
-    let tokens = (zeroes + non_zeroes * 4) as i64;
-    floor += 10 * tokens;
 
     // EIP-2929: pre-warm sender, target, coinbase, and precompile addresses.
     // For CREATE (to==0x0) there is no target; do not warm 0x0.
@@ -324,13 +343,21 @@ pub fn intrinsic(
     state.warm_acc(&head.coinbase);
     // Precompiles are warm without being inserted: `State::is_cold_acc` reports them warm.
 
-    // EIP-2930: access list gas (2400/address + 1900/storage key)
+    // EIP-2930: access list gas (2400/address + 1900/storage key); from Amsterdam 2900 and
+    // 2000, plus floor tokens (80 per address, 128 per key, at 16 gas) charged both ways
+    // (EIP-7981).
     for (acc, keys) in tx
         .access_list
         .iter()
         .map(|item| (item.address, &item.storage_keys))
     {
-        let al_cost = 2_400 + 1_900 * keys.len() as i64;
+        let al_cost = if amsterdam {
+            let tokens = 16 * (80 + 128 * keys.len() as i64);
+            floor += tokens;
+            head.spec.cold_account_extra() + 2_000 * keys.len() as i64 + tokens
+        } else {
+            2_400 + 1_900 * keys.len() as i64
+        };
         total += al_cost;
         state.warm_acc(&acc);
         for key in keys {
@@ -412,7 +439,14 @@ pub fn intrinsic(
     // EIP-7623 floor is only 21_000 + 10 * tokens (calc_tx_floor_cost); it must NOT include
     // authorization list gas — see revm `calculate_initial_tx_gas` (PRAGUE branch) and
     // `eip7623_check_gas_floor` (floor_gas excludes auth, initial_gas includes it).
-    let auth_cost = 25_000 * tx.authorization_list.len() as i64;
+    // Amsterdam charges only the state-independent part here (EIP-8037); account creation and
+    // delegation writes are charged when the authorizations are applied.
+    let per_auth = if amsterdam {
+        101 * 16 + 3_000 + head.spec.cold_account() + 2 * 100
+    } else {
+        25_000
+    };
+    let auth_cost = per_auth * tx.authorization_list.len() as i64;
     total += auth_cost;
     Ok((total, floor, effective_gas_price))
 }
@@ -429,10 +463,21 @@ pub fn finalized(
     // Settle gas: return unused gas to sender; coinbase receives the priority fee tip.
     let gas = result.gas();
 
-    let effective_refund = gas.refund.min(gas.spent / 5);
-    // EIP-7623: floor gas cost for calldata-heavy transactions
-    let final_gas = (gas.spent - effective_refund).max(0).max(floor) as u64;
-    let returned_gas = (gas.limit.max(0) as u64).saturating_sub(final_gas);
+    let (final_gas, returned_gas) = if head.spec.state_gas() {
+        // Amsterdam: the gas used is what the transaction's gas lost to execution and state,
+        // less refunds of at most a fifth of it, and at least the floor.
+        let used = call.gas as i64 - gas.remaining() - gas.state;
+        let final_gas = (used - gas.refund.min(used / 5)).max(floor).max(0) as u64;
+        (final_gas, call.gas.saturating_sub(final_gas))
+    } else {
+        let effective_refund = gas.refund.min(gas.spent / 5);
+        // EIP-7623: floor gas cost for calldata-heavy transactions
+        let final_gas = (gas.spent - effective_refund).max(0).max(floor) as u64;
+        (
+            final_gas,
+            (gas.limit.max(0) as u64).saturating_sub(final_gas),
+        )
+    };
     let mul = lift(|[a, b]| a * b);
     let sub = lift(|[a, b]| a - b);
     let add = lift(|[a, b]| a + b);
@@ -470,7 +515,8 @@ pub fn finalized(
     final_gas as i64
 }
 
-pub fn transfer(call: &Call, mode: &CallMode, state: &mut impl State) {
+/// Moves the transaction's value; with `log`, emits the EIP-7708 transfer log.
+pub fn transfer(call: &Call, mode: &CallMode, state: &mut impl State, log: bool) {
     if call.eth.is_zero() {
         return;
     }
@@ -483,7 +529,82 @@ pub fn transfer(call: &Call, mode: &CallMode, state: &mut impl State) {
         let to0 = state.balance(&to).unwrap_or_default();
         state.set_value(&to, add([to0, call.eth]));
         state.emit(Event::Move(call.by, to, call.eth));
+        if log {
+            transfer_log(state, &call.by, &to, call.eth);
+        }
     }
+}
+
+/// EIP-7708: an ETH transfer between different accounts emits an ERC-20 style `Transfer` log
+/// from the system address.
+pub fn transfer_log(state: &mut (impl State + ?Sized), from: &Acc, to: &Acc, value: Int) {
+    if value.is_zero() || from == to {
+        return;
+    }
+    // keccak256("Transfer(address,address,uint256)")
+    const TOPIC: Int =
+        yevm_base::int::int("0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef");
+    let topics = vec![TOPIC, from.to(), to.to()];
+    state.log(
+        &crate::gas::SYSTEM_ADDRESS,
+        value.as_ref().to_vec().into(),
+        topics,
+    );
+}
+
+/// Folds a finished child's state gas into its caller's (EIP-8037): the reservoir and spills
+/// come back; on success the caller repays spills from the reservoir, on failure it gets back
+/// the new account it paid for the child.
+fn merge_state_gas(parent: &mut Gas, child: &Gas, ok: bool, new_account: bool) {
+    parent.state += child.state;
+    parent.spilled += child.spilled;
+    if ok {
+        parent.state_repay();
+    } else if new_account {
+        parent.state_credit(crate::gas::NEW_ACCOUNT);
+    }
+}
+
+/// Whether `acc` is alive: it exists and is not empty (EIP-161).
+pub fn is_alive(state: &mut (impl State + ?Sized), acc: &Acc) -> bool {
+    state
+        .acc(acc)
+        .is_some_and(|a| !a.value.is_zero() || !a.nonce.is_zero() || !a.code.0.0.is_empty())
+}
+
+/// Charges an Amsterdam transaction's delegations (EIP-8037): a new account for an authority
+/// that did not exist, an account write once per authority, and the delegation's state for an
+/// authority that was not delegated before the transaction.
+fn charge_delegations(
+    call: &Call,
+    applied: &[crate::eip7702::Applied],
+    gas: &mut Gas,
+) -> std::result::Result<(), HaltReason> {
+    let halt = |_| HaltReason::OutOfGas;
+    let mut paid: Vec<Acc> = vec![call.by];
+    if call.is_create() || !call.eth.is_zero() {
+        paid.extend(call.to);
+    }
+    let mut delegated: Vec<Acc> = Vec::new();
+    for a in applied {
+        if !a.existed {
+            gas.state_charge(crate::gas::NEW_ACCOUNT).map_err(halt)?;
+        }
+        if !paid.contains(&a.authority) {
+            if gas.remaining() < crate::gas::ACCOUNT_WRITE {
+                return Err(HaltReason::OutOfGas);
+            }
+            gas.spent += crate::gas::ACCOUNT_WRITE;
+            paid.push(a.authority);
+        }
+        if !a.clears {
+            if !a.delegated_before && !delegated.contains(&a.authority) {
+                gas.state_charge(crate::gas::AUTH_BASE).map_err(halt)?;
+            }
+            delegated.push(a.authority);
+        }
+    }
+    Ok(())
 }
 
 impl Executor {
@@ -534,6 +655,8 @@ impl Executor {
         if !self.callstack.is_empty() {
             return Err(eyre::eyre!("inconsistent state: call stack empty").into());
         }
+
+        state.keep_destroyed_balance(head.spec.is(Spec::Amsterdam));
 
         // Txs are executed sequentially and all events they emit land into the
         // same channel. Emitting the `Tag` event is the only way to distinguish
@@ -607,15 +730,34 @@ impl Executor {
             CallMode::Call(0, 0)
         };
 
+        // Amsterdam (EIP-8037): gas has a state dimension, and delegations are charged on the
+        // transaction's gas after its fees are paid, so they can be undone with a checkpoint.
+        let amsterdam = !self.system && head.spec.state_gas();
+        let mut delegations = (None, Vec::new());
         let (eip7702_refund, (intrinsic, floor, effective_gas_price)) = if self.system {
             (0, (0, 0, Int::ZERO))
+        } else if amsterdam {
+            state.inc_nonce(&self.call.by, Int::ONE);
+            let intrinsic = intrinsic(&self.call, tx, head, state)?;
+            if !tx.authorization_list.is_empty() {
+                let checkpoint = state.checkpoint();
+                let (_, applied) = crate::eip7702::apply_authorization_list(
+                    tx,
+                    tx.chain_id.as_u64(),
+                    state,
+                    chain,
+                )
+                .await?;
+                delegations = (Some(checkpoint), applied);
+            }
+            (0, intrinsic)
         } else {
             // Tx consumes one sender nonce before execution; EIP-7702 auth checks need this
             // first when authority == sender (post-increment on-chain nonce vs signed tuple
             // nonce).
             state.inc_nonce(&self.call.by, Int::ONE);
 
-            let eip7702_refund =
+            let (eip7702_refund, _) =
                 crate::eip7702::apply_authorization_list(tx, tx.chain_id.as_u64(), state, chain)
                     .await?;
 
@@ -628,11 +770,21 @@ impl Executor {
                 want: intrinsic as u64,
             });
         }
+        // Amsterdam: execution gas up to the transaction cap; the rest is the state gas
+        // reservoir.
+        let (grant, reservoir) = if amsterdam {
+            let evm_gas = self.call.gas as i64 - intrinsic;
+            let grant = (crate::gas::TX_MAX_GAS_LIMIT - intrinsic).clamp(0, evm_gas);
+            (grant, evm_gas - grant)
+        } else {
+            (self.call.gas as i64 - intrinsic, 0)
+        };
 
         // A call to an account without code executes nothing, so it settles without a frame.
         // Traced runs keep the frame for its call and return events, and an unpaid value goes
         // through the frame's failure handling below.
         if !self.system
+            && !amsterdam
             && !state.records_trace()
             && let Some(to) = self.call.to
             && !is_precompile(&to)
@@ -640,7 +792,7 @@ impl Executor {
             && (self.call.eth.is_zero()
                 || state.balance(&self.call.by).unwrap_or_default() >= self.call.eth)
         {
-            transfer(&self.call, &mode, state);
+            transfer(&self.call, &mode, state, false);
             let mut gas = Gas::new(self.call.gas);
             gas.spent = intrinsic;
             let mut result = CallResult::Done {
@@ -655,6 +807,19 @@ impl Executor {
             state.apply();
             return Ok(result);
         }
+
+        // Amsterdam: the top frame pays to access the code a delegated recipient points to.
+        let delegation_access = if amsterdam {
+            self.call.to.and_then(|to| state.auth(&to)).map(|delegate| {
+                if state.is_cold_acc(&delegate) {
+                    head.spec.cold_account()
+                } else {
+                    100
+                }
+            })
+        } else {
+            None
+        };
 
         // One copy of the header for all frames of the transaction.
         let frame_head = Arc::new(head.clone());
@@ -673,6 +838,17 @@ impl Executor {
             chain,
         )
         .await?;
+        if amsterdam {
+            frame.evm.gas = Gas::new((intrinsic + grant) as u64).with_state(reservoir);
+            frame.evm.gas.spent = intrinsic;
+            if let (Some(checkpoint), applied) = &delegations
+                && let Err(halt) = charge_delegations(&self.call, applied, &mut frame.evm.gas)
+            {
+                state.revert_to(*checkpoint);
+                return Ok(self.halt_before_run(tx, head, frame, reservoir, halt, state, floor));
+            }
+            frame.evm.gas.state_commit();
+        }
         // For top-level CREATE: collision check + initialize with nonce=1 (EIP-161).
         // Done AFTER the checkpoint so it's reverted on init-code failure.
         if let CallMode::Create(created) = mode {
@@ -681,6 +857,27 @@ impl Executor {
             }
             let existing_nonce = state.nonce(&created).unwrap_or(Int::ZERO);
             let has_code = state.code_size(&created).is_some_and(|size| size > 0);
+            if amsterdam && (!existing_nonce.is_zero() || has_code) {
+                if let Some(checkpoint) = delegations.0 {
+                    state.revert_to(checkpoint);
+                }
+                let halt = HaltReason::CreateCollision;
+                return Ok(self.halt_before_run(tx, head, frame, reservoir, halt, state, floor));
+            }
+            // EIP-8037: a creation into an address that was empty pays for the new account.
+            let empty = existing_nonce.is_zero()
+                && !has_code
+                && state.balance(&created).unwrap_or_default().is_zero();
+            if amsterdam
+                && empty
+                && let Err(halt) = frame.evm.gas.state_charge(crate::gas::NEW_ACCOUNT)
+            {
+                let halt = match halt {
+                    crate::evm::EvmYield::Halt(halt) => halt,
+                    _ => HaltReason::OutOfGas,
+                };
+                return Ok(self.halt_before_run(tx, head, frame, reservoir, halt, state, floor));
+            }
             if !existing_nonce.is_zero() || has_code {
                 // Collision: drain gas, revert, return failure
                 self.outcome = Some(Outcome::Halt(HaltReason::CreateCollision));
@@ -712,6 +909,29 @@ impl Executor {
             // EIP-2929: add newly created address to accessed_addresses
             state.warm_acc(&created);
         }
+        // EIP-8037: value sent to an account that is not alive pays for the new account.
+        if amsterdam
+            && let Some(to) = self.call.to
+            && !self.call.eth.is_zero()
+            && !is_alive(state, &to)
+            && frame.evm.gas.state_charge(crate::gas::NEW_ACCOUNT).is_err()
+        {
+            if let Some(checkpoint) = delegations.0 {
+                state.revert_to(checkpoint);
+            }
+            let halt = HaltReason::OutOfGas;
+            return Ok(self.halt_before_run(tx, head, frame, reservoir, halt, state, floor));
+        }
+        if let Some(cost) = delegation_access {
+            if frame.evm.gas.remaining() < cost {
+                if let Some(checkpoint) = delegations.0 {
+                    state.revert_to(checkpoint);
+                }
+                let halt = HaltReason::OutOfGas;
+                return Ok(self.halt_before_run(tx, head, frame, reservoir, halt, state, floor));
+            }
+            frame.evm.gas.spent += cost;
+        }
         // Validation guarantees the sender can pay the value unless the host skipped it (as
         // `eth_call` does). Then, like a call, the transaction fails without executing, keeping
         // its nonce increment and spending only its intrinsic gas.
@@ -719,7 +939,9 @@ impl Executor {
             && state.balance(&self.call.by).unwrap_or_default() < self.call.eth
         {
             state.revert_to(frame.checkpoint);
-            let _ = frame.evm.gas_charge(intrinsic);
+            if !amsterdam {
+                let _ = frame.evm.gas_charge(intrinsic);
+            }
             frame.evm.apply(state);
             state.emit(Event::Halt(HaltReason::OutOfFunds, intrinsic.max(0) as u64));
             self.outcome = Some(Outcome::Halt(HaltReason::OutOfFunds));
@@ -734,8 +956,10 @@ impl Executor {
             state.apply();
             return Ok(result);
         }
-        transfer(&self.call, &mode, state);
-        let _ = frame.evm.gas_charge(intrinsic);
+        transfer(&self.call, &mode, state, amsterdam);
+        if !amsterdam {
+            let _ = frame.evm.gas_charge(intrinsic);
+        }
 
         // Top-level call to a precompile: run inline, skip the step loop.
         let call_to_is_precompile = self
@@ -760,6 +984,10 @@ impl Executor {
                 self.outcome = Some(Outcome::Halt(HaltReason::PrecompileFailure));
                 state.revert_to(frame.checkpoint);
                 state.emit(Event::Revert(vec![].into(), gas_used.max(0) as u64));
+                if amsterdam {
+                    // A failed precompile halts the frame: its state charges are undone.
+                    frame.evm.gas.drain();
+                }
             }
 
             let mut result = CallResult::Done {
@@ -781,6 +1009,8 @@ impl Executor {
 
         let mut result: Option<CallResult> = None;
         let mut last_popped_checkpoint: Option<usize> = None;
+        // Whether the last finished child had a new account paid for by its caller.
+        let mut last_new_account = false;
         let mut steps: u64 = 0;
 
         while let Some(this) = self.callstack.last_mut() {
@@ -827,6 +1057,12 @@ impl Executor {
                         if !status.is_zero() {
                             this.evm.gas.refund += gas.refund;
                         }
+                        merge_state_gas(
+                            &mut this.evm.gas,
+                            &gas,
+                            !status.is_zero(),
+                            last_new_account,
+                        );
                         this.evm.apply(state);
                         this.evm.pc += 1;
                         this.target = (0, 0);
@@ -848,6 +1084,7 @@ impl Executor {
                         //     this.ctx.depth, gas.limit, gas.spent, gas.refund, return_gas, this.evm.gas.spent, this.evm.gas.spent - return_gas);
                         this.evm.gas.spent -= return_gas;
                         this.evm.gas.refund += gas.refund;
+                        merge_state_gas(&mut this.evm.gas, &gas, true, last_new_account);
                         this.evm.apply(state);
                         this.evm.pc += 1;
                         this.evm.ret.clear();
@@ -888,12 +1125,14 @@ impl Executor {
                         }
                     });
                     last_popped_checkpoint = Some(this.checkpoint);
+                    last_new_account = this.new_account;
                     self.callstack.pop();
                 }
                 StepResult::Call(call, mode) => {
                     if state.records_trace() {
                         state.emit(Event::Call(call.clone(), mode));
                     }
+                    let new_account = std::mem::take(&mut this.evm.new_account_charged);
                     this.evm.apply(state);
                     let call_to_is_precompile =
                         call.to.map(|to| is_precompile(&to)).unwrap_or_default();
@@ -918,6 +1157,9 @@ impl Executor {
                             && state.balance(&call.by).unwrap_or_default() < call.eth;
                         if this.ctx.depth + 1 > MAX_CALL_DEPTH || underfunded {
                             this.evm.pending_gas_charge -= call.gas as i64;
+                            if new_account {
+                                this.evm.state_credit(crate::gas::NEW_ACCOUNT);
+                            }
                             this.evm.apply(state);
                             let _ = this.evm.push(Int::ZERO);
                             this.evm.apply(state);
@@ -949,6 +1191,12 @@ impl Executor {
                                 state.set_value(&call.by, sub([by0, call.eth]));
                                 state.set_value(&call_to, add([to0, call.eth]));
                             }
+                            if head.spec.state_gas() {
+                                transfer_log(state, &call.by, &call_to, call.eth);
+                            }
+                        }
+                        if !ok && new_account {
+                            this.evm.state_credit(crate::gas::NEW_ACCOUNT);
                         }
 
                         let status = if ok { Int::ONE } else { Int::ZERO };
@@ -1080,6 +1328,9 @@ impl Executor {
                             state.set_value(&creator, sub([by0, call.eth]));
                             let to0 = state.balance(&created).unwrap_or_default();
                             state.set_value(&created, add([to0, call.eth]));
+                            if head.spec.state_gas() {
+                                transfer_log(state, &creator, &created, call.eth);
+                            }
                         }
                     }
 
@@ -1108,6 +1359,9 @@ impl Executor {
                         state.revert_to(checkpoint);
                         // Return child gas (not consumed on depth failure)
                         this.evm.gas.spent -= child_gas as i64;
+                        if new_account {
+                            this.evm.gas.state_credit(crate::gas::NEW_ACCOUNT);
+                        }
                         this.evm.apply(state);
                         let _ = this.evm.push(Int::ZERO);
                         this.evm.apply(state);
@@ -1130,6 +1384,9 @@ impl Executor {
                             state.revert_to(checkpoint);
                             // Return child gas (not consumed on balance failure)
                             this.evm.gas.spent -= child_gas as i64;
+                            if new_account {
+                                this.evm.gas.state_credit(crate::gas::NEW_ACCOUNT);
+                            }
                             this.evm.apply(state);
                             let _ = this.evm.push(Int::ZERO);
                             this.evm.apply(state);
@@ -1151,7 +1408,16 @@ impl Executor {
                                 state.set_value(&by, sub([by0, child_value]));
                                 state.set_value(&to, add([to0, child_value]));
                             }
+                            if head.spec.state_gas() {
+                                transfer_log(state, &by, &to, child_value);
+                            }
                         }
+                    }
+                    // EIP-8037: the child takes the caller's whole state gas reservoir.
+                    if head.spec.state_gas() {
+                        frame.evm.gas = frame.evm.gas.with_state(this.evm.gas.state);
+                        this.evm.gas.state = 0;
+                        frame.new_account = new_account;
                     }
                     self.callstack.push(frame);
                 }
@@ -1164,15 +1430,27 @@ impl Executor {
                     }
                     self.outcome = Some(Outcome::Return);
                     let is_create = this.is_create;
+                    let max_code_size = head.spec.max_code_size();
                     result = Some(if is_create {
-                        let deploy_cost = CODE_DEPOSIT_GAS * ret.len() as i64;
+                        let amsterdam = head.spec.state_gas();
+                        // Amsterdam: hashing the code costs execution gas, storing it state gas.
+                        let deploy_cost = if amsterdam {
+                            6 * ret.len().div_ceil(32) as i64
+                        } else {
+                            CODE_DEPOSIT_GAS * ret.len() as i64
+                        };
                         // EIP-3541: reject code starting with 0xEF
                         let starts_with_ef = ret.first() == Some(&0xEF);
-                        if ret.len() > MAX_CODE_SIZE
-                            || starts_with_ef
-                            || this.evm.gas_remaining() < deploy_cost
+                        let mut out_of_gas = this.evm.gas_remaining() < deploy_cost;
+                        if amsterdam && !out_of_gas && !starts_with_ef && ret.len() <= max_code_size
                         {
-                            self.outcome = Some(Outcome::Halt(if ret.len() > MAX_CODE_SIZE {
+                            this.evm.gas.spent += deploy_cost;
+                            let deposit = crate::gas::COST_PER_STATE_BYTE * ret.len() as i64;
+                            out_of_gas = this.evm.gas.state_charge(deposit).is_err();
+                            this.evm.gas.spent -= deploy_cost;
+                        }
+                        if ret.len() > max_code_size || starts_with_ef || out_of_gas {
+                            self.outcome = Some(Outcome::Halt(if ret.len() > max_code_size {
                                 HaltReason::CodeSizeLimit
                             } else if starts_with_ef {
                                 HaltReason::InvalidCodePrefix
@@ -1201,6 +1479,7 @@ impl Executor {
                             gas: this.evm.gas,
                         }
                     });
+                    last_new_account = this.new_account;
                     self.callstack.pop();
                 }
                 StepResult::Revert(ret) => {
@@ -1213,12 +1492,13 @@ impl Executor {
                     self.outcome = Some(Outcome::Revert);
                     state.revert_to(this.checkpoint);
                     let mut gas = this.evm.gas;
-                    gas.refund = 0;
+                    gas.state_restore();
                     result = Some(CallResult::Done {
                         status: Int::ZERO,
                         ret: ret.into(),
                         gas,
                     });
+                    last_new_account = this.new_account;
                     self.callstack.pop();
                 }
                 StepResult::Halt(reason) => {
@@ -1232,6 +1512,7 @@ impl Executor {
                         ret: vec![].into(),
                         gas: this.evm.gas,
                     });
+                    last_new_account = this.new_account;
                     self.callstack.pop();
                 }
                 StepResult::Fetch(f) => {
@@ -1277,6 +1558,41 @@ impl Executor {
 }
 
 impl Executor {
+    /// Ends an Amsterdam transaction that failed before its code ran (a delegation or a new
+    /// account it could not pay for, or a creation collision): its frame's changes are undone,
+    /// its execution gas is consumed, and the state gas reservoir is back where it started.
+    #[allow(clippy::too_many_arguments)]
+    fn halt_before_run(
+        &mut self,
+        tx: &Tx,
+        head: &Head,
+        mut frame: CallFrame,
+        reservoir: i64,
+        halt: HaltReason,
+        state: &mut impl State,
+        floor: i64,
+    ) -> CallResult {
+        state.revert_to(frame.checkpoint);
+        let gas = &mut frame.evm.gas;
+        gas.spent = gas.limit;
+        gas.refund = 0;
+        gas.state = reservoir;
+        gas.state_base = reservoir;
+        gas.spilled = 0;
+        gas.committed = 0;
+        state.emit(Event::Halt(halt, gas.limit.max(0) as u64));
+        self.outcome = Some(Outcome::Halt(halt));
+        let mut result = CallResult::Done {
+            status: Int::ZERO,
+            ret: vec![].into(),
+            gas: frame.evm.gas,
+        };
+        let gas_final = self.settle(tx, head, self.effective_gas_price, &result, state, floor);
+        result.gas_mut().finalized = gas_final;
+        state.apply();
+        result
+    }
+
     /// Settles fees and refunds of a finished transaction; returns the gas it used. System
     /// calls pay no fees, so they only report the gas spent.
     fn settle(
@@ -1393,6 +1709,7 @@ async fn prepare(
         checkpoint,
         target: (0, 0),
         is_create,
+        new_account: false,
     })
 }
 

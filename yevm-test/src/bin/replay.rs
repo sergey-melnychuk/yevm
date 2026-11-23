@@ -1210,6 +1210,7 @@ mod live {
                         spent: 0,
                         refund: 0,
                         finalized: gas.tx_gas_used() as i64,
+                        ..Gas::default()
                     },
                 },
                 ExecutionResult::Success {
@@ -1225,6 +1226,7 @@ mod live {
                         spent: 0,
                         refund: 0,
                         finalized: gas.tx_gas_used() as i64,
+                        ..Gas::default()
                     },
                 },
                 ExecutionResult::Success {
@@ -1240,6 +1242,7 @@ mod live {
                         spent: 0,
                         refund: 0,
                         finalized: gas.tx_gas_used() as i64,
+                        ..Gas::default()
                     },
                 },
                 ExecutionResult::Revert {
@@ -1254,6 +1257,7 @@ mod live {
                         spent: 0,
                         refund: 0,
                         finalized: gas.tx_gas_used() as i64,
+                        ..Gas::default()
                     },
                 },
                 ExecutionResult::Halt {
@@ -1268,6 +1272,7 @@ mod live {
                         spent: 0,
                         refund: 0,
                         finalized: gas.tx_gas_used() as i64,
+                        ..Gas::default()
                     },
                 },
             },

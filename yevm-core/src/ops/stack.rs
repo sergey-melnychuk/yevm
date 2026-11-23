@@ -52,6 +52,76 @@ pub fn swap(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmResul
     Ok(())
 }
 
+/// EIP-8024: the byte after the instruction, zero past the end of the code.
+fn immediate(evm: &Evm) -> u8 {
+    evm.code.get(evm.pc + 1).copied().unwrap_or(0)
+}
+
+/// EIP-8024: the stack position (from the top, 1-based) a DUPN or SWAPN immediate names. Bytes
+/// 91 to 127 are not valid, so that code jumping into the immediate lands on a JUMPDEST or a
+/// PUSH, never on an instruction that misreads it.
+fn decode_single(x: u8) -> EvmResult<usize> {
+    if x <= 90 || x >= 128 {
+        Ok((x as usize + 145) % 256)
+    } else {
+        Err(EvmYield::Halt(HaltReason::BadOpcode(x)))
+    }
+}
+
+/// EIP-8024: the two stack positions (from the top, 1-based below it) an EXCHANGE immediate
+/// names.
+fn decode_pair(x: u8) -> EvmResult<(usize, usize)> {
+    if !(x <= 81 || x >= 128) {
+        return Err(EvmYield::Halt(HaltReason::BadOpcode(x)));
+    }
+    let k = x ^ 143;
+    let (q, r) = ((k / 16) as usize, (k % 16) as usize);
+    Ok(if q < r {
+        (q + 1, r + 1)
+    } else {
+        (r + 1, 29 - q)
+    })
+}
+
+/// DUPN (EIP-8024, Amsterdam): pushes a copy of the stack item the immediate names.
+pub fn dupn(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmResult<()> {
+    evm.gas_charge(3)?;
+    let n = decode_single(immediate(evm))?;
+    if n > evm.stack.len() {
+        return Err(EvmYield::Halt(HaltReason::StackUnderflow));
+    }
+    let int = crate::evm::int(evm.stack[evm.stack.len() - n]);
+    evm.push(int)?;
+    evm.pc += 1;
+    Ok(())
+}
+
+/// SWAPN (EIP-8024, Amsterdam): swaps the top with the item the immediate names below it.
+pub fn swapn(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmResult<()> {
+    evm.gas_charge(3)?;
+    let n = decode_single(immediate(evm))?;
+    if n + 1 > evm.stack.len() {
+        return Err(EvmYield::Halt(HaltReason::StackUnderflow));
+    }
+    let top = evm.stack.len() - 1;
+    evm.stack.swap(top, top - n);
+    evm.pc += 1;
+    Ok(())
+}
+
+/// EXCHANGE (EIP-8024, Amsterdam): swaps the two items below the top the immediate names.
+pub fn exchange(evm: &mut Evm, _: &Context, _: &Call, _: &mut dyn State) -> EvmResult<()> {
+    evm.gas_charge(3)?;
+    let (n, m) = decode_pair(immediate(evm))?;
+    if n.max(m) + 1 > evm.stack.len() {
+        return Err(EvmYield::Halt(HaltReason::StackUnderflow));
+    }
+    let top = evm.stack.len() - 1;
+    evm.stack.swap(top - n, top - m);
+    evm.pc += 1;
+    Ok(())
+}
+
 fn idx(op: u8) -> usize {
     match op {
         0x60..0x80 => op as usize - 0x60 + 1, // PUSH{1..32}

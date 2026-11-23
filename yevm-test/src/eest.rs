@@ -446,7 +446,11 @@ pub async fn run(case: &Case, spec: Spec, post: &Post) -> eyre::Result<()> {
             ));
         }
         if account.code.0.as_slice() != want.code.as_slice() {
-            diffs.push(format!("{acc:?} code differs"));
+            diffs.push(format!(
+                "{acc:?} code: have {}, want {}",
+                hex::encode(account.code.0.as_slice()),
+                hex::encode(want.code.as_slice())
+            ));
         }
         let want_storage: BTreeMap<Int, Int> = want
             .storage

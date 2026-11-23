@@ -118,6 +118,40 @@ fn sstore_gas(val: Int, cur: Int, org: Int) -> (i64, i64) {
     (g, r)
 }
 
+/// Amsterdam SSTORE (EIP-8037, EIP-8038): `(execution gas, refund, state gas, state gas credit)`
+/// on top of the access cost. Writing a slot costs 10000 execution gas, and setting a slot from
+/// zero also costs [`crate::gas::STORAGE_SET`] state gas, which is credited back when the slot
+/// returns to zero within the transaction.
+fn sstore_gas_amsterdam(val: Int, cur: Int, org: Int) -> (i64, i64, i64, i64) {
+    const WRITE: i64 = 10_000;
+    const CLEAR: i64 = (WRITE + 2_100) * 4_800 / 5_000;
+    let first_write = org == cur && cur != val;
+    let gas = if first_write { WRITE } else { 0 };
+    let mut refund = 0;
+    if cur != val {
+        if !org.is_zero() && !cur.is_zero() && val.is_zero() {
+            refund += CLEAR;
+        }
+        if !org.is_zero() && cur.is_zero() {
+            refund -= CLEAR;
+        }
+        if org == val {
+            refund += WRITE;
+        }
+    }
+    let set = if first_write && org.is_zero() {
+        crate::gas::STORAGE_SET
+    } else {
+        0
+    };
+    let credit = if cur != val && org == val && org.is_zero() {
+        crate::gas::STORAGE_SET
+    } else {
+        0
+    };
+    (gas, refund, set, credit)
+}
+
 pub fn sstore<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> EvmResult<()> {
     if ctx.is_static {
         return Err(EvmYield::Halt(HaltReason::NonStatic));
@@ -131,11 +165,21 @@ pub fn sstore<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -
     let Some((cur, org, is_cold)) = state.get_with_warmth(&acc, &key) else {
         return Err(EvmYield::Fetch(crate::evm::Fetch::StateCell(acc, key)));
     };
-    let (mut gas, refund) = sstore_gas(val, cur, org);
-    if is_cold {
-        gas += 2100;
-    }
-    evm.gas_charge(gas)?;
+    let (gas, refund) = if evm.spec().state_gas() {
+        let (gas, refund, set, credit) = sstore_gas_amsterdam(val, cur, org);
+        let access = if is_cold { 2100 } else { 100 };
+        evm.state_credit(credit);
+        evm.gas_charge(access + gas)?;
+        evm.state_charge(set)?;
+        (access + gas, refund)
+    } else {
+        let (mut gas, refund) = sstore_gas(val, cur, org);
+        if is_cold {
+            gas += 2100;
+        }
+        evm.gas_charge(gas)?;
+        (gas, refund)
+    };
     evm.gas_refund(refund)?;
     if let Some(step) = evm.step.as_mut() {
         step.debug.push(format!("SSTORE: key={key:?}"));

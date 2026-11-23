@@ -98,22 +98,94 @@ impl From<HaltReason> for StepResult {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+/// A frame's gas. `limit - spent` is the execution gas left.
+///
+/// From Amsterdam (EIP-8037) a frame also holds a state gas reservoir. State charges draw on
+/// it first and spill the rest into execution gas; a child frame takes the caller's whole
+/// reservoir, and a failed frame returns to the reservoir it started with. Before Amsterdam
+/// the state fields stay zero.
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Gas {
     pub limit: i64,
     pub spent: i64,
     pub refund: i64,
     pub finalized: i64,
+    /// State gas left in the reservoir.
+    pub state: i64,
+    /// The reservoir the frame started with (or had at its last commit); a failed frame
+    /// returns to it.
+    pub state_base: i64,
+    /// State gas charged from execution gas because the reservoir ran out.
+    pub spilled: i64,
+    /// Spills made permanent by [`Self::state_commit`] (the top frame's delegations).
+    pub committed: i64,
 }
 
 impl Gas {
     pub fn new(gas: u64) -> Self {
         Self {
             limit: gas as i64,
-            spent: 0,
-            refund: 0,
-            finalized: 0,
+            ..Self::default()
         }
+    }
+
+    /// Gives the frame a state gas reservoir of `state`.
+    pub fn with_state(mut self, state: i64) -> Self {
+        self.state = state;
+        self.state_base = state;
+        self
+    }
+
+    /// Charges state gas now: from the reservoir, then from execution gas.
+    pub fn state_charge(&mut self, gas: i64) -> EvmResult<()> {
+        if self.state >= gas {
+            self.state -= gas;
+        } else if self.state + self.remaining() >= gas {
+            let spill = gas - self.state;
+            self.state = 0;
+            self.spent += spill;
+            self.spilled += spill;
+        } else {
+            return Err(EvmYield::Halt(HaltReason::OutOfGas));
+        }
+        Ok(())
+    }
+
+    /// Credits state gas back: first undoing spills, then into the reservoir.
+    pub fn state_credit(&mut self, gas: i64) {
+        let unspill = gas.min(self.spilled);
+        self.spent -= unspill;
+        self.spilled -= unspill;
+        self.state += gas - unspill;
+    }
+
+    /// Undoes the frame's state charges after a revert or a halt: spills go back to execution
+    /// gas, the reservoir to its base, and refunds are dropped.
+    pub fn state_restore(&mut self) {
+        self.spent -= self.spilled;
+        self.spilled = 0;
+        self.state = self.state_base;
+        self.refund = 0;
+    }
+
+    /// Makes the state charges so far permanent: a later failure restores to this point.
+    pub fn state_commit(&mut self) {
+        self.committed += self.spilled;
+        self.state_base = self.state;
+        self.spilled = 0;
+    }
+
+    /// Pays spills back from the reservoir, after a child frame succeeded.
+    pub fn state_repay(&mut self) {
+        let repay = self.state.min(self.spilled);
+        self.spent -= repay;
+        self.state -= repay;
+        self.spilled -= repay;
+    }
+
+    /// State gas the frame used out of a reservoir that started at `reservoir`.
+    pub fn state_used(&self, reservoir: i64) -> i64 {
+        reservoir - self.state + self.spilled + self.committed
     }
 
     pub fn remaining(&self) -> i64 {
@@ -140,9 +212,13 @@ impl Gas {
         }
     }
 
+    /// Consumes the frame's execution gas after an exceptional halt; state charges are undone
+    /// (the reservoir returns to its base).
     pub fn drain(&mut self) {
         self.spent = self.limit;
         self.refund = 0;
+        self.state = self.state_base;
+        self.spilled = 0;
     }
 }
 
@@ -188,6 +264,14 @@ pub struct Evm {
     pub(crate) pending_stack_push_len: usize,
     pub(crate) pending_gas_charge: i64,
     pub(crate) pending_gas_refund: i64,
+    /// State gas the instruction draws from the reservoir, spills into execution gas (also in
+    /// `pending_gas_charge`), and credits back.
+    pub(crate) pending_state: i64,
+    pub(crate) pending_spill: i64,
+    pub(crate) pending_state_credit: i64,
+    /// Whether the call or create the instruction yields charged a new account's state gas,
+    /// which is credited back if the child fails (EIP-8037).
+    pub new_account_charged: bool,
     pub(crate) pending_acc_warmup: [Acc; 2],
     pub(crate) pending_acc_count: usize,
 
@@ -231,6 +315,10 @@ impl Evm {
             pending_stack_push_len: 0,
             pending_gas_charge: 0,
             pending_gas_refund: 0,
+            pending_state: 0,
+            pending_spill: 0,
+            pending_state_credit: 0,
+            new_account_charged: false,
             pending_acc_warmup: [Acc::ZERO; 2],
             pending_acc_count: 0,
             step: None,
@@ -294,6 +382,15 @@ impl Evm {
         self.gas.refund += self.pending_gas_refund;
         self.pending_gas_refund = 0;
 
+        self.gas.state -= self.pending_state;
+        self.gas.spilled += self.pending_spill;
+        self.pending_state = 0;
+        self.pending_spill = 0;
+        if self.pending_state_credit != 0 {
+            self.gas.state_credit(self.pending_state_credit);
+            self.pending_state_credit = 0;
+        }
+
         for i in 0..self.pending_acc_count {
             state.warm_acc(&self.pending_acc_warmup[i]);
         }
@@ -305,7 +402,38 @@ impl Evm {
         self.pending_stack_push_len = 0;
         self.pending_gas_charge = 0;
         self.pending_gas_refund = 0;
+        self.pending_state = 0;
+        self.pending_spill = 0;
+        self.pending_state_credit = 0;
+        self.new_account_charged = false;
         self.pending_acc_count = 0;
+    }
+
+    /// The fork rules of the block.
+    pub fn spec(&self) -> crate::Spec {
+        self.head.spec
+    }
+
+    /// Charges state gas (EIP-8037): from the reservoir, then from execution gas.
+    pub fn state_charge(&mut self, gas: i64) -> EvmResult<()> {
+        let reservoir = self.gas.state - self.pending_state;
+        if gas <= reservoir {
+            self.pending_state += gas;
+            return Ok(());
+        }
+        let spill = gas - reservoir;
+        if spill > self.gas_remaining() {
+            return Err(EvmYield::Halt(HaltReason::OutOfGas));
+        }
+        self.pending_state += reservoir;
+        self.pending_gas_charge += spill;
+        self.pending_spill += spill;
+        Ok(())
+    }
+
+    /// Credits state gas back once the instruction completes (EIP-8037).
+    pub fn state_credit(&mut self, gas: i64) {
+        self.pending_state_credit += gas;
     }
 
     #[inline]
@@ -395,6 +523,16 @@ impl Evm {
             self.memory[offset..offset + len].copy_from_slice(&source[..len]);
         }
         Ok(())
+    }
+
+    /// Reads memory without expanding it (bytes past its end read as zero), for instructions
+    /// that may still need to fetch state before they charge for the expansion.
+    pub fn mem_peek(&self, offset: usize, size: usize) -> Vec<u8> {
+        let lo = offset.min(self.memory.len());
+        let hi = offset.saturating_add(size).min(self.memory.len());
+        let mut ret = vec![0u8; size];
+        ret[..hi - lo].copy_from_slice(&self.memory[lo..hi]);
+        ret
     }
 
     pub fn mem_get(&mut self, offset: usize, size: usize) -> EvmResult<Vec<u8>> {

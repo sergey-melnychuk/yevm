@@ -57,7 +57,9 @@ enum Revert {
     Nonce(Acc, Int),
     Value(Acc, Int),
     Temp(Acc, Int, Int),
-    Code(Acc, Int),
+    /// The account's code hash before the change, and its code when known (a trace records
+    /// only the hash; the code is then found in `codes`).
+    Code(Acc, Option<Buf>, Int),
     Create(Acc),
     Delete(Acc),
     Log,
@@ -71,7 +73,7 @@ impl Revert {
             Event::Put(Target::Nonce { acc, val }, _) => Self::Nonce(*acc, *val),
             Event::Put(Target::Value { acc, val }, _) => Self::Value(*acc, *val),
             Event::Put(Target::Temp { acc, key, val }, _) => Self::Temp(*acc, *key, *val),
-            Event::Put(Target::Code { acc, hash }, _) => Self::Code(*acc, *hash),
+            Event::Put(Target::Code { acc, hash }, _) => Self::Code(*acc, None, *hash),
             Event::WarmAcc(acc) => Self::WarmAcc(*acc),
             Event::WarmKey(acc, key) => Self::WarmKey(*acc, *key),
             Event::Create(acc) => Self::Create(*acc),
@@ -90,6 +92,8 @@ pub struct Cache {
     warm_keys: HashSet<(Acc, Int)>,
     created: HashSet<Acc>,
     destroyed: HashSet<Acc>,
+    /// See [`State::keep_destroyed_balance`].
+    keep_destroyed_balance: bool,
     hash: HashMap<u64, Int>,
     depth: usize,
     /// Logs emitted so far, as `(address, data, topics)`; reverted frames' logs are removed.
@@ -250,9 +254,15 @@ impl Cache {
                     self.transient.insert((acc, key), val);
                 }
             }
-            Revert::Code(acc, _prev_hash) => {
+            Revert::Code(acc, prev_code, prev_hash) => {
+                let prev_code = prev_code.unwrap_or_else(|| {
+                    self.codes
+                        .get(&prev_hash)
+                        .map(|code| code.to_vec().into())
+                        .unwrap_or_default()
+                });
                 if let Some(entry) = self.accounts.get_mut(&acc) {
-                    entry.account.code = (Buf::default(), Int::ZERO);
+                    entry.account.code = (prev_code, prev_hash);
                 }
             }
             Revert::Create(acc) => {
@@ -421,13 +431,18 @@ impl Cache {
         hash: Int,
         load: impl FnOnce() -> Account,
     ) -> Int {
-        let prev = {
+        let (prev_code, prev) = {
             let entry = entry(&mut self.accounts, &mut self.spare_storage, *acc, load);
-            let (_, prev) = entry.account.code;
-            entry.account.code = (code, hash);
-            prev
+            std::mem::replace(&mut entry.account.code, (code, hash))
         };
-        self.journal(Revert::Code(*acc, prev), || {
+        // Code replaced by code (a delegation changed or cleared) is kept by hash, so that a
+        // revert recorded only in a trace can restore it.
+        if !prev_code.0.is_empty() {
+            self.codes
+                .entry(prev)
+                .or_insert_with(|| Arc::from(prev_code.as_slice()));
+        }
+        self.journal(Revert::Code(*acc, Some(prev_code), prev), || {
             Event::Put(
                 Target::Code {
                     acc: *acc,
@@ -896,8 +911,16 @@ impl State for Cache {
             // the post-destruction state instead of refetching stale pre-tx
             // state from the chain backend.
             let storage = self.spare_storage.pop().unwrap_or_default();
+            let mut account = AccountEntry::default().account;
+            if self.keep_destroyed_balance {
+                account.value = self
+                    .accounts
+                    .get(&acc)
+                    .map(|e| e.account.value)
+                    .unwrap_or_default();
+            }
             let empty = AccountEntry {
-                account: AccountEntry::default().account,
+                account,
                 storage,
                 fresh: true,
             };
@@ -910,6 +933,10 @@ impl State for Cache {
 
     fn set_chain_id(&mut self, id: u64) {
         self.chain_id = id;
+    }
+
+    fn keep_destroyed_balance(&mut self, keep: bool) {
+        self.keep_destroyed_balance = keep;
     }
 
     fn get_chain_id(&self) -> u64 {

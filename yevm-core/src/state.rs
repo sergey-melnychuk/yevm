@@ -50,6 +50,9 @@ pub trait State {
     fn created(&self) -> Vec<Acc>;
     fn destroyed(&self) -> Vec<Acc>;
     fn apply(&mut self);
+    /// Amsterdam (EIP-8246): accounts destroyed in the transaction that created them keep
+    /// their balance when [`Self::apply`] clears them.
+    fn keep_destroyed_balance(&mut self, _keep: bool) {}
 
     fn get_depth(&mut self) -> usize {
         0
