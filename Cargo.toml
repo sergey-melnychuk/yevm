@@ -38,6 +38,18 @@ lto = false
 codegen-units = 16
 incremental = false
 
+# reth v2.11.0's fastest build (its `release` with fat LTO and one codegen unit), spelled out, as
+# silt has it: to compare the yevm node with stock reth or silt-exex built the same way,
+# `cargo build -p yevm-reth --profile maxperf --bin node`. Unlike yevm's `release`, it unwinds.
+[profile.maxperf]
+inherits = "release"
+opt-level = 3
+lto = "fat"
+debug = "none"
+strip = "symbols"
+panic = "unwind"
+codegen-units = 1
+
 [workspace.dependencies]
 eyre = "0.6"
 thiserror = "2.0"

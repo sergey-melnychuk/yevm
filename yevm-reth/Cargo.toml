@@ -43,17 +43,42 @@ evm2 = { git = "https://github.com/alloy-rs/evm2", rev = "66687c18b34d3bdbb899f5
 alloy-eip7928 = { version = "0.4.10", features = ["std"] }
 alloy-rpc-types-engine = { version = "2.5.0", default-features = false, features = ["std"] }
 # silt (state-diff feed, binary lookups + proofs, silt_multiproof) installed into the `node`
-# bin. It must build against this same reth rev: silt 673bfbe (D12-D14, reth v2.11.0) pins reth v2.11.0 too.
-silt-node = { git = "https://github.com/sergey-melnychuk/silt.git", rev = "673bfbe0f2f79bd3e40bee19dad58eeaa6aba97a" }
+# bin. It must build against this same reth rev: silt e2de3b3 (D12-D16, reth v2.11.0) pins reth v2.11.0 too.
+silt-node = { git = "https://github.com/sergey-melnychuk/silt.git", rev = "e2de3b37a75f713b72115584157315ee1ad7c2c9" }
 # silt PLAN M6 (the `sim-bench` example and the node's opt-in sim task): the silt-cache consumer with its
 # yevm adapter and `sim` timing module, from the same silt rev as silt-node.
-silt-cache = { git = "https://github.com/sergey-melnychuk/silt.git", rev = "673bfbe0f2f79bd3e40bee19dad58eeaa6aba97a", features = ["yevm"] }
-silt-wire = { git = "https://github.com/sergey-melnychuk/silt.git", rev = "673bfbe0f2f79bd3e40bee19dad58eeaa6aba97a" }
+silt-cache = { git = "https://github.com/sergey-melnychuk/silt.git", rev = "e2de3b37a75f713b72115584157315ee1ad7c2c9", features = ["yevm"] }
+silt-wire = { git = "https://github.com/sergey-melnychuk/silt.git", rev = "e2de3b37a75f713b72115584157315ee1ad7c2c9" }
 serde_json.workspace = true
 futures.workspace = true
 libc = "0.2"
 thiserror.workspace = true
 tracing = "0.1"
+
+# Stock reth's default features (bin/reth/Cargo.toml at the pinned rev), as far as reth-ethereum
+# forwards them, the same set as silt-exex: so the yevm node and stock reth (or silt-exex) built
+# with the same profile differ only in the executor. Left out as there: `jit`, `otlp-logs` and
+# `min-trace-logs`.
+[features]
+default = [
+    "jemalloc",
+    "otlp",
+    "js-tracer",
+    "keccak-cache-global",
+    "asm-keccak",
+    "gmp",
+    "portable",
+]
+jemalloc = ["reth-ethereum/jemalloc"]
+otlp = ["reth-ethereum/otlp"]
+js-tracer = ["reth-ethereum/js-tracer"]
+keccak-cache-global = [
+    "reth-ethereum/keccak-cache-global",
+    "alloy-primitives/keccak-cache-global",
+]
+asm-keccak = ["reth-ethereum/asm-keccak", "alloy-primitives/asm-keccak"]
+gmp = ["reth-ethereum/gmp"]
+portable = ["reth-ethereum/portable"]
 
 [dev-dependencies]
 criterion = { package = "codspeed-criterion-compat", version = "4.3" }

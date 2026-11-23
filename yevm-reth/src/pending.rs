@@ -21,7 +21,7 @@ use alloy_primitives::B256;
 use reth_ethereum::pool::{PoolTransaction, TransactionPool};
 use reth_ethereum::provider::{HeaderProvider, StateProviderFactory};
 use reth_ethereum_primitives::TransactionSigned;
-use silt_node::reads::{ReadTouchSink, ReadValues};
+use silt_node::reads::{ReadTouchSink, ReadTouches, ReadValues};
 use silt_wire::{AccountChange, Addr, KECCAK_EMPTY, Word};
 use yevm_base::{Acc, Int};
 use yevm_core::{

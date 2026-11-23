@@ -59,12 +59,6 @@ pub struct YevmBlockExecutor<'a, C> {
     bal: Option<Bal>,
     /// The access list entries of a transaction executed but not yet committed.
     pending_access: Option<PendingState>,
-    /// Where to report the block's loaded keys when it finishes (silt D13).
-    reads: Option<&'a silt_node::reads::ReadTouchSink>,
-    /// Hashes of the transactions executed, in order, while `reads` is set:
-    /// the sink keeps the keys only if they match a block the engine
-    /// announced.
-    tx_hashes: Vec<[u8; 32]>,
 }
 
 impl<C> core::fmt::Debug for YevmBlockExecutor<'_, C> {
@@ -94,15 +88,7 @@ impl<'a, C: EthChainSpec + EthereumHardforks> YevmBlockExecutor<'a, C> {
             blob_gas_used: 0,
             bal: None,
             pending_access: None,
-            reads: None,
-            tx_hashes: Vec::new(),
         }
-    }
-
-    /// Reports the block's loaded keys to `reads` when it finishes.
-    pub fn with_reads(mut self, reads: Option<&'a silt_node::reads::ReadTouchSink>) -> Self {
-        self.reads = reads;
-        self
     }
 
     fn spec(&self) -> Result<SpecId, BlockExecutionError> {
@@ -403,9 +389,6 @@ impl<'a, C: EthChainSpec + EthereumHardforks> BlockExecutor for YevmBlockExecuto
         let (tx_env, tx) = transaction.into_parts();
         let tx = tx.tx();
         self.validate_transaction_gas_limit(tx.gas_limit())?;
-        if self.reads.is_some() {
-            self.tx_hashes.push(tx.tx_hash().0);
-        }
         let result = self
             .evm
             .execute(&tx_env)
@@ -452,9 +435,6 @@ impl<'a, C: EthChainSpec + EthereumHardforks> BlockExecutor for YevmBlockExecuto
         let (tx_env, tx) = transaction.into_parts();
         let tx = tx.tx();
         self.validate_transaction_gas_limit(tx.gas_limit())?;
-        if self.reads.is_some() {
-            self.tx_hashes.push(tx.tx_hash().0);
-        }
         let result = self
             .evm
             .execute_in_place(&tx_env)
@@ -514,18 +494,6 @@ impl<'a, C: EthChainSpec + EthereumHardforks> BlockExecutor for YevmBlockExecuto
         } else {
             self.cumulative_gas_used
         };
-        if let Some(sink) = self.reads {
-            let started = std::time::Instant::now();
-            let keys = self.evm.loaded_keys();
-            let txs = silt_node::reads::tx_digest(&self.tx_hashes);
-            sink.put(
-                self.block_number(),
-                self.ctx.parent_hash.0,
-                txs,
-                keys,
-                started.elapsed().as_micros() as u64,
-            );
-        }
         let output = BlockExecutionOutput::new(
             BlockExecutionResult {
                 receipts: self.receipts,

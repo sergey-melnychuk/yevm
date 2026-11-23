@@ -9,8 +9,9 @@
 //!
 //! # Limitations
 //!
-//! - yevm implements only the Osaka rules ([`YEVM_SPEC`]) and has no fork schedule; blocks of any
-//!   other fork fail with [`YevmError::UnsupportedSpec`] instead of silently diverging.
+//! - yevm implements the Osaka and Amsterdam rules (`yevm_spec`), taking the fork from each
+//!   block's environment (reth's fork schedule); blocks of any other fork fail with
+//!   [`YevmError::UnsupportedSpec`] instead of silently diverging.
 //! - evm2 inspectors cannot run on yevm, so tracing APIs fail with
 //!   [`YevmError::UnsupportedInspector`].
 //! - Engine prewarming loads transaction state into the shared cache, but sends no state root
@@ -26,7 +27,7 @@
 
 use alloy_consensus::Header;
 use alloy_eips::Decodable2718;
-use alloy_primitives::Bytes;
+use alloy_primitives::{Bytes, U256};
 use alloy_rpc_types_engine::ExecutionData;
 use core::convert::Infallible;
 use evm2::{BaseEvmTypes, evm::DynDatabase};
@@ -42,6 +43,7 @@ use reth_evm_ethereum::{
 };
 use reth_primitives_traits::{SealedBlock, SealedHeader, SignedTransaction};
 use reth_storage_errors::any::AnyError;
+use silt_node::reads::ReadTouchSink;
 use std::sync::Arc;
 
 mod convert;
@@ -53,12 +55,14 @@ pub use evm::{YEVM_SPEC, YevmError, YevmEvm};
 mod executor;
 pub use executor::YevmBlockExecutor;
 
+mod reads;
+
 /// Creates [`YevmBlockExecutor`]s and [`YevmEvm`]s.
 #[derive(Debug)]
 pub struct YevmBlockExecutorFactory<C = ChainSpec> {
     chain_spec: Arc<C>,
-    /// Where executors report each block's loaded keys (silt PLAN D13).
-    reads: Option<Arc<silt_node::reads::ReadTouchSink>>,
+    /// Where the engine's EVMs file what each block read (silt PLAN D13/D16).
+    reads: Option<Arc<ReadTouchSink>>,
 }
 
 impl<C> Clone for YevmBlockExecutorFactory<C> {
@@ -108,7 +112,7 @@ where
     where
         Self: 'a,
     {
-        YevmBlockExecutor::new(evm, ctx, self.chain_spec.as_ref()).with_reads(self.reads.as_deref())
+        YevmBlockExecutor::new(evm, ctx, self.chain_spec.as_ref())
     }
 
     fn evm_factory(&self) -> &Self::EvmFactory {
@@ -119,6 +123,18 @@ where
     where
         DB: DynDatabase + 'a,
     {
+        // silt D16: the EVM the engine executes an announced payload with (the next one created
+        // on the thread after `context_for_payload`) reads through a [`reads::Recording`], which
+        // files every account and slot it loads, with its value, when the EVM drops at the end
+        // of the block. Every other EVM (RPC, payload building, the pool worker) holds no ticket.
+        if let Some(sink) = &self.reads
+            && let Some(ticket) = ReadTouchSink::claim_ticket()
+        {
+            if evm_env.block.number == U256::from(ticket.number) {
+                return YevmEvm::new(reads::Recording::new(db, sink.clone(), ticket), evm_env);
+            }
+            sink.mismatched();
+        }
         YevmEvm::new(db, evm_env)
     }
 }
@@ -144,11 +160,10 @@ impl<C> YevmEvmConfig<C> {
         }
     }
 
-    /// Reports, after every block it executes, the accounts and slots the
-    /// block loaded to `sink`, keyed by (number, parent hash), for silt's
-    /// read touches (silt PLAN D13). Keys only: silt reads the values from
-    /// the committed state itself.
-    pub fn with_read_touches(mut self, sink: Arc<silt_node::reads::ReadTouchSink>) -> Self {
+    /// Files, for every payload the engine executes, the accounts and slots the block read,
+    /// with their values, in `sink`, keyed by the block's (number, hash): silt's read touches
+    /// (silt PLAN D13/D15/D16).
+    pub fn with_read_touches(mut self, sink: Arc<ReadTouchSink>) -> Self {
         self.executor_factory.reads = Some(sink);
         self
     }
@@ -191,6 +206,9 @@ where
     where
         Self: 'a,
     {
+        // A block the engine didn't get as a payload (synced, replayed): no read touches, and
+        // no ticket left over.
+        ReadTouchSink::clear_ticket();
         self.eth.context_for_block(block)
     }
 
@@ -215,20 +233,11 @@ where
         &self,
         payload: &'a ExecutionData,
     ) -> Result<ExecutionCtxFor<'a, Self>, Self::Error> {
-        // silt D13: only the engine's own executions report read keys, so
-        // the node's RPC (eth_simulateV1 on the same parent) can't add any.
+        // silt D16: only the engine's own executions file read touches, so the node's RPC
+        // (eth_simulateV1 on the same parent, with overrides) can't add any. The EVM created
+        // next on this thread executes this payload and claims the ticket.
         if let Some(sink) = &self.executor_factory.reads {
-            let hashes: Vec<[u8; 32]> = payload
-                .payload
-                .transactions()
-                .iter()
-                .map(|raw| alloy_primitives::keccak256(raw).0)
-                .collect();
-            sink.expect(
-                payload.payload.block_number(),
-                payload.payload.parent_hash().0,
-                silt_node::reads::tx_digest(&hashes),
-            );
+            sink.expect(payload.block_number(), payload.block_hash().0);
         }
         self.eth.context_for_payload(payload)
     }
