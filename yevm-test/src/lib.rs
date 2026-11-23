@@ -5,6 +5,9 @@
 #[cfg(test)]
 pub mod eth;
 
+#[cfg(test)]
+pub mod eest;
+
 pub mod revm;
 
 #[cfg(test)]

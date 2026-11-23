@@ -131,6 +131,30 @@ pub struct Head {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_beacon_block_root: Option<Int>,
+    /// EIP-7843: the beacon slot number of the block (Amsterdam onward), for `SLOTNUM`.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slot_number: Option<Int>,
+    /// The fork whose rules the block runs under. Block JSON does not carry it, so the host
+    /// sets it from the block's timestamp and its chain's fork schedule.
+    #[serde(skip)]
+    pub spec: Spec,
+}
+
+/// The fork rules yevm implements. Osaka covers the BPO forks too: they change only blob
+/// parameters, which the host passes in [`Head::blob_base_fee`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Spec {
+    #[default]
+    Osaka,
+    Amsterdam,
+}
+
+impl Spec {
+    /// Whether the rules of `fork` apply: `spec.is(Spec::Amsterdam)` holds from Amsterdam on.
+    pub fn is(self, fork: Spec) -> bool {
+        self >= fork
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

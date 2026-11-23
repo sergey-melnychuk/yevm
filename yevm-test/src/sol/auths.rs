@@ -97,6 +97,7 @@ fn test_head() -> Head {
         prevrandao: Int::ONE,
         parent_hash: int("0x1"),
         parent_beacon_block_root: None,
+        ..Head::default()
     }
 }
 

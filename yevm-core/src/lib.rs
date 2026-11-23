@@ -2,7 +2,7 @@ use thiserror::Error;
 
 pub use yevm_base::{Acc, Int};
 
-pub use crate::call::{Call, Head, Tx};
+pub use crate::call::{Call, Head, Spec, Tx};
 pub use crate::evm::Fetch;
 
 pub mod cache;

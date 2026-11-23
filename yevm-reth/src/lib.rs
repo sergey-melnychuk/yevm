@@ -311,6 +311,7 @@ impl RethDb {
             prevrandao: Self::hash(header.mix_hash().unwrap_or_default()),
             parent_hash: Self::hash(header.parent_hash()),
             parent_beacon_block_root: header.parent_beacon_block_root().map(Self::hash),
+            ..Head::default()
         }
     }
 
