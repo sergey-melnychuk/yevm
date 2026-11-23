@@ -367,7 +367,7 @@ fn rejects_blocks_before_osaka() {
 
     assert_eq!(
         error.to_string(),
-        "yevm only implements OSAKA, cannot execute PRAGUE"
+        "yevm implements Osaka and Amsterdam, cannot execute PRAGUE"
     );
 }
 
