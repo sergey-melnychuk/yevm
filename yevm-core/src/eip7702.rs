@@ -25,7 +25,8 @@ fn code_is_empty_or_eip7702(code: &[u8]) -> bool {
     code.is_empty() || (code.len() == 23 && code.starts_with(&[0xEF, 0x01, 0x00]))
 }
 
-/// An authorization that was applied, for the gas Amsterdam charges for it (EIP-8037).
+/// An authorization whose authority was read, in list order: applied ones for the gas Amsterdam
+/// charges for them (EIP-8037), rejected ones for the reads (EIP-7928).
 #[derive(Clone, Copy, Debug)]
 pub struct Applied {
     pub authority: Acc,
@@ -35,6 +36,9 @@ pub struct Applied {
     pub delegated_before: bool,
     /// Whether it clears the delegation (address zero).
     pub clears: bool,
+    /// Whether it was applied; `false` for one whose authority was read but whose code or
+    /// nonce did not allow it.
+    pub valid: bool,
 }
 
 /// Applies the authorization list. Returns the gas refund to add to the transaction refund
@@ -77,8 +81,13 @@ pub async fn apply_authorization_list(
         if !state.has_acc(&authority) {
             fetch(crate::Fetch::Account(authority), state, chain).await?;
         }
-        // EIP-7928: the authority is read once the authorization passes the checks above.
-        state.access(&authority);
+        let rejected = Applied {
+            authority,
+            existed: false,
+            delegated_before: false,
+            clears: false,
+            valid: false,
+        };
         let acc = state.acc(&authority).unwrap_or_default();
         state.warm_acc(&authority);
         let delegated_before = match before.iter().find(|(a, _)| *a == authority) {
@@ -92,10 +101,12 @@ pub async fn apply_authorization_list(
 
         let code = acc.code.0.as_slice();
         if !code_is_empty_or_eip7702(code) {
+            applied.push(rejected);
             continue;
         }
 
         if item.nonce.as_u64() != acc.nonce.as_u64() {
+            applied.push(rejected);
             continue;
         }
 
@@ -109,6 +120,7 @@ pub async fn apply_authorization_list(
             existed,
             delegated_before,
             clears: item.address.is_zero(),
+            valid: true,
         });
 
         if item.address.is_zero() {

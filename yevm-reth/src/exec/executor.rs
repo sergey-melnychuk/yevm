@@ -226,6 +226,8 @@ impl<'a, C: EthChainSpec + EthereumHardforks> YevmBlockExecutor<'a, C> {
             *increments.entry(withdrawal.address).or_default() += withdrawal.amount_wei();
         }
         let mut pending = PendingState::default();
+        // Every withdrawal's account is read, even when its balance does not change (EIP-7928).
+        let mut reads = PendingState::default();
         let index = self.bal_index(true);
         for (address, increment) in increments {
             let original = self.evm.account_info(&address)?;
@@ -238,10 +240,13 @@ impl<'a, C: EthChainSpec + EthereumHardforks> YevmBlockExecutor<'a, C> {
                     Some(current)
                 };
             if original != current {
-                pending.insert_account(address, original, current);
+                pending.insert_account(address, original.clone(), current);
+            } else {
+                reads.insert_account(address, original.clone(), original);
             }
         }
         self.record_access(index, &pending);
+        self.record_access(index, &reads);
         self.commit_pending(&pending);
         Ok(())
     }
@@ -531,6 +536,30 @@ impl<'a, C: EthChainSpec + EthereumHardforks> BlockExecutor for YevmBlockExecuto
             self.block_state.into_bundle(),
         );
         let block_access_list = self.bal.take().map(|bal| bal.to_alloy_bal());
+        // EIP-7928: every account and every distinct slot counts as an item, and the items may
+        // not cost more than the block's gas limit at 2000 gas each.
+        if let Some(list) = &block_access_list {
+            let items: u64 = list
+                .iter()
+                .map(|account| {
+                    let mut slots: Vec<_> = account
+                        .storage_changes
+                        .iter()
+                        .map(|change| change.slot)
+                        .chain(account.storage_reads.iter().copied())
+                        .collect();
+                    slots.sort_unstable();
+                    slots.dedup();
+                    1 + slots.len() as u64
+                })
+                .sum();
+            let gas_limit = self.evm.env().block.gas_limit.saturating_to::<u64>();
+            if items > gas_limit / 2000 {
+                return Err(BlockExecutionError::msg(format!(
+                    "block access list has {items} items, more than the gas limit allows"
+                )));
+            }
+        }
         Ok((output, block_access_list))
     }
 }

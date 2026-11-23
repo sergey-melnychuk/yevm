@@ -577,24 +577,28 @@ pub fn is_alive(state: &mut (impl State + ?Sized), acc: &Acc) -> bool {
 /// Charges an Amsterdam transaction's delegations (EIP-8037): a new account for an authority
 /// that did not exist, an account write once per authority, and the delegation's state for an
 /// authority that was not delegated before the transaction.
+/// Returns the index of the authorization that could not be paid for, on failure.
 fn charge_delegations(
     call: &Call,
     applied: &[crate::eip7702::Applied],
     gas: &mut Gas,
-) -> std::result::Result<(), HaltReason> {
-    let halt = |_| HaltReason::OutOfGas;
+) -> std::result::Result<(), (usize, HaltReason)> {
     let mut paid: Vec<Acc> = vec![call.by];
     if call.is_create() || !call.eth.is_zero() {
         paid.extend(call.to);
     }
     let mut delegated: Vec<Acc> = Vec::new();
-    for a in applied {
+    for (i, a) in applied.iter().enumerate() {
+        let halt = |_| (i, HaltReason::OutOfGas);
+        if !a.valid {
+            continue;
+        }
         if !a.existed {
             gas.state_charge(crate::gas::NEW_ACCOUNT).map_err(halt)?;
         }
         if !paid.contains(&a.authority) {
             if gas.remaining() < crate::gas::ACCOUNT_WRITE {
-                return Err(HaltReason::OutOfGas);
+                return Err((i, HaltReason::OutOfGas));
             }
             gas.spent += crate::gas::ACCOUNT_WRITE;
             paid.push(a.authority);
@@ -852,14 +856,28 @@ impl Executor {
             chain,
         )
         .await?;
+        // Amsterdam: a system call also gets a reservoir for the slots it may set.
+        if self.system && head.spec.state_gas() {
+            frame.evm.gas = frame.evm.gas.with_state(16 * crate::gas::STORAGE_SET);
+        }
         if amsterdam {
             frame.evm.gas = Gas::new((intrinsic + grant) as u64).with_state(reservoir);
             frame.evm.gas.spent = intrinsic;
-            if let (Some(checkpoint), applied) = &delegations
-                && let Err(halt) = charge_delegations(&self.call, applied, &mut frame.evm.gas)
-            {
-                state.revert_to(*checkpoint);
-                return Ok(self.halt_before_run(tx, head, frame, reservoir, halt, state, floor));
+            if let (Some(checkpoint), applied) = &delegations {
+                let charged = charge_delegations(&self.call, applied, &mut frame.evm.gas);
+                // EIP-7928: authorities are read one by one, up to the one that could not
+                // be paid for.
+                let read = match charged {
+                    Ok(()) => applied.len(),
+                    Err((n, _)) => n + 1,
+                };
+                for a in &applied[..read] {
+                    state.access(&a.authority);
+                }
+                if let Err((_, halt)) = charged {
+                    state.revert_to(*checkpoint);
+                    return Ok(self.halt_before_run(tx, head, frame, reservoir, halt, state, floor));
+                }
             }
             frame.evm.gas.state_commit();
             // EIP-7928: the recipient (the created address for a creation) is read once the

@@ -26,10 +26,10 @@ Block level (the reth node, not `eth_call`):
 
 | EIP | What | Status |
 |---|---|---|
-| 7778 | Block gas accounting without refunds | [ ] |
-| 7928 | Block-level access lists, built by the executor | [ ] |
-| 7997 | Deterministic CREATE2 factory at the fork | [ ] |
-| 8282 | Builder execution requests | [ ] |
+| 7778 | Block gas accounting without refunds | [x] |
+| 7928 | Block-level access lists, built by the executor | [x] |
+| 7997 | Deterministic CREATE2 factory at the fork | [x] (no executor change: the factory is in the chain's state) |
+| 8282 | Builder execution requests | [x] |
 
 ## Spec notes (execution-specs `src/ethereum/forks/amsterdam`, v21.0.3)
 
@@ -79,7 +79,7 @@ NEW_ACCOUNT state. Value moves emit a log from the system address (EIP-7708).
 2. Harness: run the v21.0.3 state tests for Osaka (regression) and Amsterdam.
 3. The EVM-level EIPs, simplest first, each checked against the Amsterdam state tests.
 4. 8037 last among them: it touches every charge that creates state.
-5. Block level in yevm-reth, checked with the Amsterdam blockchain tests.
+5. Block level in yevm-reth, checked with the Amsterdam blockchain tests. Done.
 6. Helios: yevm for Osaka and Amsterdam blocks, then drop revm as Helios's Ethereum engine.
 
 ## Log
@@ -97,3 +97,12 @@ NEW_ACCOUNT state. Value moves emit a log from the system address (EIP-7708).
   instead of the previous code (only reachable once delegations can be rolled back).
   Amsterdam: 16,415 of 16,907 pass, every executed case; the other 492 are invalid
   transactions (host validation). Osaka unchanged at 14,280.
+- 2026-11-23: block level in yevm-reth: the head's fork and slot number, separate execution
+  and state block gas, evm2's Amsterdam gas caps, EIP-8282 builder requests, balance-keeping
+  destroys, the state gas reservoir for system calls, and the block access list. The list is
+  built with evm2's `Bal` from each transaction's changes and the reads yevm-core records
+  where the specification reads state (`State::access`, after the guarding gas checks, kept
+  across reverts); authorities are read one by one as they are charged. Blocks whose list
+  exceeds the gas limit's item budget are rejected. yevm-reth also builds on macOS again.
+  Blockchain tests (v21.0.3, through reth's executor and consensus checks, access list hash
+  included): 43,880 of 43,880 pass, Osaka and Amsterdam.
