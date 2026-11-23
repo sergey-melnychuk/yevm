@@ -106,3 +106,9 @@ NEW_ACCOUNT state. Value moves emit a log from the system address (EIP-7708).
   exceeds the gas limit's item budget are rejected. yevm-reth also builds on macOS again.
   Blockchain tests (v21.0.3, through reth's executor and consensus checks, access list hash
   included): 43,880 of 43,880 pass, Osaka and Amsterdam.
+- 2026-11-23: the state test runner checks each transaction's validity before handing it to
+  yevm (`yevm-test/src/validate.rs`, ported from the specification's `check_transaction`,
+  `validate_transaction` and `recover_sender` for Osaka and Amsterdam): signature, chain ID,
+  nonce, balance, sender code, gas limits, the calldata floor and blob rules. yevm itself still
+  leaves this to its host. A rejection passes only for the reason the fixture expects. State
+  tests: Osaka 14,664 of 14,664, Amsterdam 16,907 of 16,907.

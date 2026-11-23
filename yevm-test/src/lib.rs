@@ -8,6 +8,9 @@ pub mod eth;
 #[cfg(test)]
 pub mod eest;
 
+#[cfg(test)]
+pub mod validate;
+
 pub mod revm;
 
 #[cfg(test)]

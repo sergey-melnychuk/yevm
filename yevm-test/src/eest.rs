@@ -1,11 +1,12 @@
 //! Execution-spec state tests (`fixtures/state_tests/for_<fork>`, execution-specs `tests@v21`)
 //! run through yevm alone.
 //!
-//! Each post entry is one transaction on a pre-state. It passes when yevm rejects the
-//! transaction exactly when the fixture expects an exception, and otherwise produces the
-//! fixture's receipt status and gas used, its logs (as the hash of their RLP list), and its
-//! post-state: every listed account's balance, nonce, code and storage, and no other
-//! non-empty account.
+//! Each post entry is one transaction on a pre-state. yevm leaves deciding whether a
+//! transaction may run to its host, so the runner decides it first, as the specification does
+//! ([`crate::validate`]): the entry passes when the runner rejects the transaction for the
+//! reason the fixture expects, or when it accepts it and yevm produces the fixture's receipt
+//! status and gas used, its logs (as the hash of their RLP list), and its post-state: every
+//! listed account's balance, nonce, code and storage, and no other non-empty account.
 //!
 //! ```text
 //! EEST_STATE=tmp/eest/v21.0.3/fixtures/state_tests EEST_FORK=Amsterdam \
@@ -180,6 +181,8 @@ pub struct Post {
     pub state: HashMap<Acc, State>,
     pub expect_exception: Option<String>,
     pub receipt: Option<Receipt>,
+    /// The signed transaction, for its signature and chain ID.
+    pub txbytes: Buf,
 }
 
 #[derive(Deserialize)]
@@ -369,16 +372,28 @@ pub async fn run(case: &Case, spec: Spec, post: &Post) -> eyre::Result<()> {
     let head = head(&case.env, spec);
     let (call, tx) = call_and_tx(&case.transaction, &post.indexes);
 
+    match (
+        crate::validate::validate(case, post, &head),
+        &post.expect_exception,
+    ) {
+        (Ok(()), None) => {}
+        (Err(have), Some(want)) => {
+            let expected = want
+                .split('|')
+                .any(|w| w.strip_prefix("TransactionException.") == Some(have));
+            eyre::ensure!(expected, "rejected as {have}, the fixture expects {want}");
+            return Ok(());
+        }
+        (Err(have), None) => eyre::bail!("rejected as {have}, the fixture accepts it"),
+        (Ok(()), Some(want)) => eyre::bail!("accepted, the fixture expects {want}"),
+    }
+
     let chain = PreChain::new(&case.pre);
     let mut state = Cache::new();
     let mut exe = Executor::new(call).with_max_steps(None);
-    let result = exe.run(&tx, &head, &mut state, &chain).await;
-
-    let result = match (result, &post.expect_exception) {
-        (Err(_), Some(_)) => return Ok(()),
-        (Ok(_), Some(want)) => eyre::bail!("accepted a transaction the fixture rejects: {want}"),
-        (Err(e), None) => eyre::bail!("rejected: {e}"),
-        (Ok(result), None) => result,
+    let result = match exe.run(&tx, &head, &mut state, &chain).await {
+        Ok(result) => result,
+        Err(e) => eyre::bail!("yevm rejected a valid transaction: {e}"),
     };
 
     if let Some(receipt) = &post.receipt {
@@ -585,17 +600,8 @@ async fn eest_state() -> eyre::Result<()> {
         println!("---\n{f}");
     }
     println!("\n=== EEST state tests, yevm on {fork} ===");
-    // yevm leaves transaction validation (signatures, balances, fee caps, intrinsic gas
-    // floors) to its host, as reth validates before executing.
-    let validation = failed
-        .iter()
-        .filter(|f| f.contains("accepted a transaction the fixture rejects"))
-        .count();
     println!("passed: {}", total - failed.len());
-    println!(
-        "failed: {} executed, {validation} invalid transactions accepted",
-        failed.len() - validation
-    );
+    println!("failed: {}", failed.len());
     println!(" TOTAL: {total}");
     println!("  time: {:.0?}", started.elapsed());
     println!("report: {}", report.display());

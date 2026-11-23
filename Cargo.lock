@@ -13599,7 +13599,9 @@ dependencies = [
 name = "yevm-test"
 version = "0.1.0"
 dependencies = [
+ "alloy-consensus 2.5.0",
  "alloy-eip7702",
+ "alloy-eips 2.5.0",
  "alloy-primitives",
  "alloy-provider",
  "async-trait",
