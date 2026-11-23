@@ -104,7 +104,7 @@ fn store_counts(store: &Store) -> (u64, u64, u64) {
 
 /// What the feed task hands the main loop.
 enum Feed {
-    Diff(BlockDiff),
+    Diff(Box<BlockDiff>),
     Reorg(u64, silt_wire::Word),
     Gap,
 }
@@ -140,7 +140,7 @@ async fn feed_task(
     .await?;
     loop {
         let item = match read_frame(&mut stream).await? {
-            Some(Frame::Diff(diff)) => Feed::Diff(diff),
+            Some(Frame::Diff(diff)) => Feed::Diff(Box::new(diff)),
             Some(Frame::Reorg {
                 fork_number,
                 fork_hash,
@@ -187,7 +187,7 @@ async fn advance_to(
             return true;
         }
         match tokio::time::timeout(Duration::from_secs(30), rx.recv()).await {
-            Ok(Some(Feed::Diff(diff))) => held.push_back(diff),
+            Ok(Some(Feed::Diff(diff))) => held.push_back(*diff),
             Ok(Some(Feed::Reorg(n, hash))) => {
                 held.retain(|d| d.number <= n);
                 if !store.rollback(n, hash) {
