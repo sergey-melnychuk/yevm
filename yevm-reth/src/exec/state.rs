@@ -411,9 +411,26 @@ impl State for DbState<'_, '_> {
     }
 
     fn jump_table(&mut self, hash: &Int, code: &[u8]) -> Arc<JumpTable> {
-        // evm2's SIMD analysis: the same table, several times faster than yevm's scalar loop.
-        self.cache.jump_table_with(hash, || {
-            JumpTable::from_bitmap(evm2::bytecode::analyze_legacy(code).as_slice())
+        let Self {
+            cache, originals, ..
+        } = self;
+        cache.jump_table_with(hash, || {
+            // reth stores legacy code with its jump table, and the `Bytecode` read with an
+            // account keeps it: take the table of the code loaded in this transaction instead of
+            // analysing the code again. Otherwise (code first loaded by an earlier transaction of
+            // the block, or init code) analyse it with evm2's SIMD analysis.
+            let hash = convert::b256(hash);
+            let stored = originals
+                .values()
+                .flatten()
+                .filter(|info| info.code_hash == hash)
+                .find_map(|info| info.code.as_ref())
+                .filter(|bytecode| bytecode.original_byte_slice().len() == code.len())
+                .and_then(|bytecode| bytecode.legacy_jump_table());
+            match stored {
+                Some(table) => JumpTable::from_bitmap(table.as_slice()),
+                None => JumpTable::from_bitmap(evm2::bytecode::analyze_legacy(code).as_slice()),
+            }
         })
     }
 }
