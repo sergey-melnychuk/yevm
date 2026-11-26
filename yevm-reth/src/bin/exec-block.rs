@@ -10,7 +10,8 @@
 //! prints one line per block and sums the warm runs: total time, time in state reads, the rest,
 //! and gas per second for each engine, and whether the receipts agree. A range also runs evm2
 //! without reth's shared precompile result cache ("evm2-nc"), with which evm2's warm run would
-//! otherwise reuse the precompile outputs of its first run.
+//! otherwise reuse the precompile outputs of its first run. `EXEC_BLOCK_PASSES=<n>` runs each
+//! engine n times per block instead of twice and keeps the last run (for profiling warm runs).
 //!
 //! Usage:
 //!   cargo run --release -p yevm-reth --bin exec-block -- <datadir> <block>[..<last>] [top]
@@ -227,14 +228,19 @@ impl EvmFactory for Uncached {
 /// evm2 without that cache, and yevm (which has none).
 const ENGINES: [&str; 3] = ["evm2", "evm2-nc", "yevm"];
 
-/// Executes blocks `from..=to`, each with every engine twice on the same pre-block state, and
-/// sums the second (warm) runs. Which engine goes first rotates from block to block, so none
+/// Executes blocks `from..=to`, each with every engine twice (or `EXEC_BLOCK_PASSES` times) on
+/// the same pre-block state, and sums the last (warm) runs. Which engine goes first rotates from block to block, so none
 /// gets the pages another loaded more often.
 fn range(factory: &Factory, from: u64, to: u64) -> eyre::Result<()> {
     eyre::ensure!(from <= to, "empty range {from}..{to}");
     let evm2 = EthEvmConfig::new(MAINNET.clone());
     let evm2_uncached = EthEvmConfig::new_with_evm_factory(MAINNET.clone(), Uncached::default());
     let yevm = YevmEvmConfig::new(MAINNET.clone());
+    let passes = std::env::var("EXEC_BLOCK_PASSES")
+        .ok()
+        .and_then(|n| n.parse::<usize>().ok())
+        .unwrap_or(2)
+        .max(1);
     let mut totals: [Totals; 3] = Default::default();
     let (mut txs, mut gas) = (0usize, 0u64);
     // yevm's time outside reads over evm2's and over uncached evm2's, per block.
@@ -258,7 +264,7 @@ fn range(factory: &Factory, from: u64, to: u64) -> eyre::Result<()> {
             }
         };
         let mut warm: [Option<Run>; 3] = Default::default();
-        for _pass in 0..2 {
+        for _pass in 0..passes {
             for i in 0..3 {
                 let engine = (i + number as usize) % 3;
                 warm[engine] = Some(once(engine)?);
