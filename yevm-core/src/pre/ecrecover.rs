@@ -1,5 +1,3 @@
-use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
-
 /// ecrecover (precompile 0x01)
 /// Input:  hash[32] ++ v[32] ++ r[32] ++ s[32]  (padded to 128 bytes)
 /// Output: zero-padded recovered address (32 bytes), or empty on invalid sig
@@ -19,37 +17,52 @@ pub fn ecrecover(input: &[u8], gas_limit: i64) -> (bool, Vec<u8>, i64) {
     if buf[32..63].iter().any(|&b| b != 0) || (v != 27 && v != 28) {
         return (true, vec![], GAS); // invalid v: success but empty output
     }
-    let rid = match RecoveryId::try_from(v - 27) {
-        Ok(r) => r,
-        Err(_) => return (true, vec![], GAS),
+
+    let hash: &[u8; 32] = buf[0..32].try_into().unwrap();
+    let sig: &[u8; 64] = buf[64..128].try_into().unwrap();
+    let Some(key) = recover(hash, sig, v - 27) else {
+        return (true, vec![], GAS);
     };
 
-    let r: [u8; 32] = buf[64..96].try_into().unwrap();
-    let s: [u8; 32] = buf[96..128].try_into().unwrap();
-    let sig = match Signature::from_scalars(r, s) {
-        Ok(s) => s,
-        Err(_) => return (true, vec![], GAS),
-    };
-
-    // EVM ecrecover accepts any s in [1, n-1], but k256 recovery requires low-s.
-    // Normalize s and flip recovery id if needed.
-    let (sig, rid) = if let Some(normalized) = sig.normalize_s() {
-        let new_rid = RecoveryId::new(!rid.is_y_odd(), rid.is_x_reduced());
-        (normalized, new_rid)
-    } else {
-        (sig, rid)
-    };
-
-    let key = match VerifyingKey::recover_from_prehash(&buf[0..32], &sig, rid) {
-        Ok(k) => k,
-        Err(_) => return (true, vec![], GAS),
-    };
-
-    let point = key.to_encoded_point(false);
-    let hash = yevm_misc::keccak256(&point.as_bytes()[1..]);
+    let hash = yevm_misc::keccak256(&key);
     let mut out = [0u8; 32];
     out[12..].copy_from_slice(&hash.as_ref()[12..]);
     (true, out.to_vec(), GAS)
+}
+
+/// Recovers the public key (64 bytes, uncompressed without its prefix) that signed `hash` with
+/// `sig` (r ++ s) and recovery id `rid` (0 or 1). Any s in [1, n-1] is accepted, high or low.
+#[cfg(not(any(target_arch = "wasm32", target_os = "espidf")))]
+fn recover(hash: &[u8; 32], sig: &[u8; 64], rid: u8) -> Option<[u8; 64]> {
+    use secp256k1::{
+        Message,
+        ecdsa::{RecoverableSignature, RecoveryId},
+    };
+    let rid = RecoveryId::try_from(i32::from(rid)).ok()?;
+    // Rejects r or s at or above the curve order; recovery rejects zero.
+    let sig = RecoverableSignature::from_compact(sig, rid).ok()?;
+    let key = sig.recover_ecdsa(Message::from_digest(*hash)).ok()?;
+    key.serialize_uncompressed()[1..].try_into().ok()
+}
+
+/// See the native [`recover`]; k256, for the browser and ESP32 builds.
+#[cfg(any(target_arch = "wasm32", target_os = "espidf"))]
+fn recover(hash: &[u8; 32], sig: &[u8; 64], rid: u8) -> Option<[u8; 64]> {
+    use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
+    let rid = RecoveryId::try_from(rid).ok()?;
+    let r: [u8; 32] = sig[..32].try_into().unwrap();
+    let s: [u8; 32] = sig[32..].try_into().unwrap();
+    let sig = Signature::from_scalars(r, s).ok()?;
+    // k256 recovery requires low s: normalize it and flip the recovery id.
+    let (sig, rid) = match sig.normalize_s() {
+        Some(normalized) => (
+            normalized,
+            RecoveryId::new(!rid.is_y_odd(), rid.is_x_reduced()),
+        ),
+        None => (sig, rid),
+    };
+    let key = VerifyingKey::recover_from_prehash(hash, &sig, rid).ok()?;
+    key.to_encoded_point(false).as_bytes()[1..].try_into().ok()
 }
 
 #[cfg(test)]
@@ -75,5 +88,40 @@ mod tests {
 
         input[32] = 0xf0;
         assert_eq!(ecrecover(&input, 3_000), (true, vec![], 3_000));
+    }
+
+    #[test]
+    fn high_s_recovers_like_its_low_s_twin() {
+        // The same signature with s replaced by n - s and v flipped recovers the same key.
+        let low = hex::decode(concat!(
+            "456e9aea5e197a1f1af7a3e85a3212fa4049a3ba34c2289b4c860fc0b0c64ef3",
+            "000000000000000000000000000000000000000000000000000000000000001c",
+            "9242685bf161793cc25603c231bc2f568eb630ea16aa137d2664ac8038825608",
+            "4f8ae3bd7535248d0bd448298cc2e2071e56992d0774dc340c368ae950852ada",
+        ))
+        .unwrap();
+        let n = num_bigint::BigUint::parse_bytes(
+            b"fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141",
+            16,
+        )
+        .unwrap();
+        let s = num_bigint::BigUint::from_bytes_be(&low[96..128]);
+        let mut high = low.clone();
+        high[63] = 27;
+        let high_s = (n - s).to_bytes_be();
+        high[96..128].fill(0);
+        high[128 - high_s.len()..128].copy_from_slice(&high_s);
+        assert_eq!(ecrecover(&high, 3_000), ecrecover(&low, 3_000));
+
+        // r = 0 and s at the curve order are invalid.
+        let mut zero_r = low.clone();
+        zero_r[64..96].fill(0);
+        assert_eq!(ecrecover(&zero_r, 3_000), (true, vec![], 3_000));
+        let mut big_s = low;
+        big_s[96..128].copy_from_slice(
+            &hex::decode("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141")
+                .unwrap(),
+        );
+        assert_eq!(ecrecover(&big_s, 3_000), (true, vec![], 3_000));
     }
 }

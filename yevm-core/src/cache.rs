@@ -128,6 +128,19 @@ impl Cache {
         Self::default()
     }
 
+    /// The jump table of the code whose hash is `hash`, built with `analyse` the first time,
+    /// for states over a host that analyses code itself.
+    pub fn jump_table_with(
+        &mut self,
+        hash: &Int,
+        analyse: impl FnOnce() -> JumpTable,
+    ) -> Arc<JumpTable> {
+        self.jump_tables
+            .entry(*hash)
+            .or_insert_with(|| Arc::new(analyse()))
+            .clone()
+    }
+
     pub fn with_sender(sender: mpsc::Sender<Trace>, filter: u32) -> Self {
         Self {
             sender: Some(sender),
@@ -1047,10 +1060,7 @@ impl State for Cache {
     }
 
     fn jump_table(&mut self, hash: &Int, code: &[u8]) -> Arc<JumpTable> {
-        self.jump_tables
-            .entry(*hash)
-            .or_insert_with(|| Arc::new(JumpTable::new(code)))
-            .clone()
+        self.jump_table_with(hash, || JumpTable::new(code))
     }
 }
 

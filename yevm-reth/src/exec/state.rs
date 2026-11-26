@@ -411,7 +411,10 @@ impl State for DbState<'_, '_> {
     }
 
     fn jump_table(&mut self, hash: &Int, code: &[u8]) -> Arc<JumpTable> {
-        self.cache.jump_table(hash, code)
+        // evm2's SIMD analysis: the same table, several times faster than yevm's scalar loop.
+        self.cache.jump_table_with(hash, || {
+            JumpTable::from_bitmap(evm2::bytecode::analyze_legacy(code).as_slice())
+        })
     }
 }
 

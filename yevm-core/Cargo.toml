@@ -25,7 +25,10 @@ ripemd = "0.1"
 num-bigint = "0.4"
 num-traits = "0.2"
 num-integer = "0.1"
-bn = { package = "substrate-bn", version = "0.6" }
+# bn254 (precompiles 0x06-0x08) on arkworks 0.6, the release evm2 uses; BLS12-381 below stays on 0.5.
+ark-bn254 = { version = "0.6", default-features = false, features = ["curve", "std"] }
+ark-ec-06 = { package = "ark-ec", version = "0.6", default-features = false, features = ["std"] }
+ark-ff-06 = { package = "ark-ff", version = "0.6", default-features = false, features = ["std"] }
 kzg-rs = "0.2"
 p256 = { version = "0.13", features = ["ecdsa"] }
 ark-bls12-381 = { version = "0.5", default-features = false, features = ["curve", "std"] }
@@ -37,6 +40,11 @@ yevm-base.workspace = true
 yevm-misc.workspace = true
 alloy-eip7702 = { version = "0.6.3", features = ["k256"] }
 alloy-primitives = { version = "1.5", default-features = false, features = ["rlp"] }
+
+# Native builds recover ecrecover signatures with libsecp256k1 (C), several times faster than k256;
+# the browser and ESP32 builds keep k256.
+[target.'cfg(not(any(target_arch = "wasm32", target_os = "espidf")))'.dependencies]
+secp256k1 = { version = "0.33", default-features = false, features = ["global-context", "recovery"] }
 
 ## Allow `EvmYield` as result error despite the size
 ## TODO: consider `Call(Call, CallMode),` => `Call(Box<Call>, CallMode),`

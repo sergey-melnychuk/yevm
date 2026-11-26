@@ -1260,6 +1260,22 @@ impl JumpTable {
         Self(bits)
     }
 
+    /// A table from a finished analysis: one bit per code byte, least significant bit first
+    /// (bit `pc % 8` of byte `pc / 8` is set for a `JUMPDEST` at `pc`), as hosts with their own
+    /// analysis (evm2's SIMD one) produce it.
+    pub fn from_bitmap(bitmap: &[u8]) -> Self {
+        Self(
+            bitmap
+                .chunks(8)
+                .map(|chunk| {
+                    let mut word = [0u8; 8];
+                    word[..chunk.len()].copy_from_slice(chunk);
+                    u64::from_le_bytes(word)
+                })
+                .collect(),
+        )
+    }
+
     /// Returns whether `pc` is a `JUMPDEST` instruction.
     pub fn contains(&self, pc: usize) -> bool {
         self.0
@@ -1301,5 +1317,23 @@ mod tests {
         let table = JumpTable::new(&[0x5B, 0x61, 0x5B, 0x5B, 0x5B, 0x60]);
         let jumpdests: Vec<_> = (0..7).map(|pc| table.contains(pc)).collect();
         assert_eq!(jumpdests, [true, false, false, false, true, false, false]);
+    }
+
+    #[test]
+    fn bitmap_tables_match_the_analysis() {
+        // 70 bytes, so the bitmap spans two words with a partial last chunk.
+        let mut code = vec![0x5B; 70];
+        code[3] = 0x61; // PUSH2 hides 4 and 5
+        code[66] = 0x7F; // PUSH32 runs past the end
+        let analysed = JumpTable::new(&code);
+        let mut bitmap = vec![0u8; code.len().div_ceil(8)];
+        for pc in (0..code.len()).filter(|&pc| analysed.contains(pc)) {
+            bitmap[pc / 8] |= 1 << (pc % 8);
+        }
+        let table = JumpTable::from_bitmap(&bitmap);
+        for pc in 0..80 {
+            assert_eq!(table.contains(pc), analysed.contains(pc), "pc {pc}");
+        }
+        assert!(table.contains(65) && !table.contains(4) && !table.contains(67));
     }
 }
