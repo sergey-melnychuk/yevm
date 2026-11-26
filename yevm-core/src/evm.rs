@@ -1351,9 +1351,11 @@ pub fn mem_check(offset: usize, size: usize) -> EvmResult<()> {
     Err(EvmYield::Halt(HaltReason::OutOfMemory))
 }
 
-/// The `JUMPDEST` instructions of a contract's code, which excludes `0x5B` bytes in PUSH data.
+/// The `JUMPDEST` instructions of a contract's code, which excludes `0x5B` bytes in PUSH data: one
+/// bit per code byte, least significant bit first (bit `pc % 8` of byte `pc / 8` is set for a
+/// `JUMPDEST` at `pc`), the layout evm2 (and reth's stored bytecode) uses.
 #[derive(Debug)]
-pub struct JumpTable(Vec<u64>);
+pub struct JumpTable(Box<[u8]>);
 
 impl JumpTable {
     /// Analyses `code`, skipping the immediate data of PUSH1-PUSH32.
@@ -1361,41 +1363,31 @@ impl JumpTable {
         const JUMPDEST: u8 = 0x5B;
         const PUSH1: u8 = 0x60;
         const PUSH32: u8 = 0x7F;
-        let mut bits = vec![0u64; code.len().div_ceil(64)];
+        let mut bits = vec![0u8; code.len().div_ceil(8)];
         let mut pc = 0;
         while let Some(&op) = code.get(pc) {
             if op == JUMPDEST {
-                bits[pc / 64] |= 1 << (pc % 64);
+                bits[pc / 8] |= 1 << (pc % 8);
             }
             pc += 1;
             if (PUSH1..=PUSH32).contains(&op) {
                 pc += usize::from(op - PUSH1) + 1;
             }
         }
-        Self(bits)
+        Self(bits.into())
     }
 
-    /// A table from a finished analysis: one bit per code byte, least significant bit first
-    /// (bit `pc % 8` of byte `pc / 8` is set for a `JUMPDEST` at `pc`), as hosts with their own
-    /// analysis (evm2's SIMD one) produce it.
+    /// A table from a finished analysis in the same layout (evm2's SIMD one, or reth's stored
+    /// table).
     pub fn from_bitmap(bitmap: &[u8]) -> Self {
-        Self(
-            bitmap
-                .chunks(8)
-                .map(|chunk| {
-                    let mut word = [0u8; 8];
-                    word[..chunk.len()].copy_from_slice(chunk);
-                    u64::from_le_bytes(word)
-                })
-                .collect(),
-        )
+        Self(bitmap.into())
     }
 
     /// Returns whether `pc` is a `JUMPDEST` instruction.
     pub fn contains(&self, pc: usize) -> bool {
         self.0
-            .get(pc / 64)
-            .is_some_and(|bits| bits & (1 << (pc % 64)) != 0)
+            .get(pc / 8)
+            .is_some_and(|bits| bits & (1 << (pc % 8)) != 0)
     }
 }
 
@@ -1436,7 +1428,7 @@ mod tests {
 
     #[test]
     fn bitmap_tables_match_the_analysis() {
-        // 70 bytes, so the bitmap spans two words with a partial last chunk.
+        // 70 bytes, so the bitmap ends in a partial byte.
         let mut code = vec![0x5B; 70];
         code[3] = 0x61; // PUSH2 hides 4 and 5
         code[66] = 0x7F; // PUSH32 runs past the end
