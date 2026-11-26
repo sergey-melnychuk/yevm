@@ -9,6 +9,12 @@ mod p256verify;
 mod ripemd160;
 mod sha256;
 
+/// Loads what precompiles otherwise load on first use, the KZG trusted setup (hundreds of
+/// milliseconds), so that the first transaction calling them does not wait for it.
+pub fn warm_up() {
+    kzg::load_settings();
+}
+
 /// Run a precompile. Returns `(success, output, gas_used)`.
 /// `success=false` means out-of-gas or invalid input; output is empty and gas_used equals gas_limit.
 pub fn run(id: u64, input: &[u8], gas_limit: i64) -> (bool, Vec<u8>, i64) {

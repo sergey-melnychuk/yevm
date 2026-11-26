@@ -1,10 +1,9 @@
-use std::sync::Arc;
+use std::{cell::RefCell, sync::Arc};
 
 use crate::call::Head;
 use crate::trace::{Event, Step};
 use serde::{Deserialize, Serialize};
 use yevm_base::math::{U256, lift};
-use yevm_misc::keccak256;
 
 use crate::{
     Acc, Call, Int, Result, ops,
@@ -250,6 +249,67 @@ pub enum EvmYield {
 
 pub type EvmResult<T> = std::result::Result<T, EvmYield>;
 
+/// Stacks and memories of finished frames, reused by new frames on the same thread: a frame then
+/// allocates neither, and its stack, pooled at the full stack limit, never grows.
+mod spare {
+    use super::{Evm, RefCell, U256};
+
+    /// The most stacks (32 KiB each) and memories kept per thread.
+    const FRAMES: usize = 64;
+    /// Larger memories are freed rather than kept.
+    const MEMORY: usize = 1 << 16;
+
+    #[derive(Default)]
+    struct Spare {
+        stacks: Vec<Vec<U256>>,
+        memories: Vec<Vec<u8>>,
+    }
+
+    thread_local! {
+        static SPARE: RefCell<Spare> = RefCell::default();
+    }
+
+    pub(super) fn stack() -> Vec<U256> {
+        SPARE
+            .try_with(|spare| spare.borrow_mut().stacks.pop())
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| Vec::with_capacity(Evm::STACK_SIZE_LIMIT))
+    }
+
+    pub(super) fn memory() -> Vec<u8> {
+        SPARE
+            .try_with(|spare| spare.borrow_mut().memories.pop())
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+    }
+
+    /// Keeps `stack` and `memory` for later frames, emptied.
+    pub(super) fn keep(mut stack: Vec<U256>, mut memory: Vec<u8>) {
+        let _ = SPARE.try_with(|spare| {
+            let mut spare = spare.borrow_mut();
+            if stack.capacity() >= Evm::STACK_SIZE_LIMIT && spare.stacks.len() < FRAMES {
+                stack.clear();
+                spare.stacks.push(stack);
+            }
+            if (1..=MEMORY).contains(&memory.capacity()) && spare.memories.len() < FRAMES {
+                memory.clear();
+                spare.memories.push(memory);
+            }
+        });
+    }
+}
+
+impl Drop for Evm {
+    fn drop(&mut self) {
+        spare::keep(
+            std::mem::take(&mut self.stack),
+            std::mem::take(&mut self.memory),
+        );
+    }
+}
+
 pub struct Evm {
     pub pc: usize,
     pub gas: Gas,
@@ -310,13 +370,17 @@ impl Evm {
         Self {
             pc: 0,
             gas: Gas::new(gas),
-            // Frames without code need no stack; others grow theirs on demand.
+            // Frames without code need no stack or memory; others reuse those of finished frames.
             stack: if code.is_empty() {
                 Vec::new()
             } else {
-                Vec::with_capacity(64)
+                spare::stack()
             },
-            memory: Vec::new(),
+            memory: if code.is_empty() {
+                Vec::new()
+            } else {
+                spare::memory()
+            },
             jumpdests: None,
             code,
             head: head.into(),
@@ -631,7 +695,12 @@ impl Evm {
         let mut steps = 0;
         loop {
             if fast {
-                match self.fast_run(ctx, call, limit, &mut steps) {
+                let fast = if limit == u64::MAX {
+                    self.fast_run::<false>(ctx, call, limit, &mut steps)
+                } else {
+                    self.fast_run::<true>(ctx, call, limit, &mut steps)
+                };
+                match fast {
                     Fast::Halt(reason) => return Ok((StepResult::Halt(reason), steps)),
                     Fast::Limit => return Ok((StepResult::Ok, steps)),
                     Fast::Generic => {}
@@ -652,36 +721,62 @@ impl Evm {
     /// stack, arithmetic, comparison, bitwise, memory, call-context, hashing or jump
     /// instructions, which never read state, so they need none of the deferred effects that let
     /// [`Self::step`] retry an instruction after a fetch. Mirrors the instructions in [`ops`]
-    /// exactly. Counts executed instructions in `steps`, up to `limit`.
+    /// exactly. With `COUNT`, counts executed instructions in `steps`, up to `limit`; without
+    /// it (no step limit) counts nothing.
+    ///
+    /// The stack is used through a raw pointer, with its length and capacity in locals (the
+    /// capacity capped at the stack limit, so that a push checks one bound), and the remaining
+    /// gas in a local; both are written back on exit.
     ///
     /// Returns [`Fast::Generic`] at the first instruction it does not execute, with `pc` at it.
     #[inline(always)]
-    fn fast_run(&mut self, ctx: &Context, call: &Call, limit: u64, steps: &mut u64) -> Fast {
+    fn fast_run<const COUNT: bool>(
+        &mut self,
+        ctx: &Context,
+        call: &Call,
+        limit: u64,
+        steps: &mut u64,
+    ) -> Fast {
         // Disjoint field borrows: the loop below never calls methods on `self`.
         let code: &[u8] = &self.code;
-        let gas_limit = self.gas.limit;
-        let mut spent = self.gas.spent;
+        let mut remaining = self.gas.limit - self.gas.spent;
         let mut pc = self.pc;
         let stack = &mut self.stack;
+        let mut sp = stack.len();
+        let mut cap = stack.capacity().min(Self::STACK_SIZE_LIMIT);
+        let mut base = stack.as_mut_ptr();
         let memory = &mut self.memory;
         let jumpdests = &mut self.jumpdests;
 
         macro_rules! charge {
             ($gas:expr) => {{
                 let gas: i64 = $gas;
-                if gas_limit - spent < gas {
+                if remaining < gas {
                     break Fast::Halt(HaltReason::OutOfGas);
                 }
-                spent += gas;
+                remaining -= gas;
             }};
         }
         macro_rules! operands {
             ($n:expr) => {{
-                let len = stack.len();
-                if len < $n {
+                if sp < $n {
                     break Fast::Halt(HaltReason::StackUnderflow);
                 }
-                len
+                sp
+            }};
+        }
+        // The word at `index` (below `sp`), and writing one (at or below `sp`, within `cap`).
+        macro_rules! at {
+            ($index:expr) => {
+                // SAFETY: callers index below `sp`, which is within the initialized words.
+                unsafe { *base.add($index) }
+            };
+        }
+        macro_rules! put {
+            ($index:expr, $value:expr) => {{
+                let value: U256 = $value;
+                // SAFETY: callers write at most at `sp`, which is below `cap`.
+                unsafe { base.add($index).write(value) }
             }};
         }
         // Replaces the top two words with `f(top, second)`.
@@ -689,10 +784,10 @@ impl Evm {
             ($gas:expr, |$a:ident, $b:ident| $result:expr) => {{
                 charge!($gas);
                 let len = operands!(2);
-                let $a = stack[len - 1];
-                let $b = stack[len - 2];
-                stack[len - 2] = $result;
-                stack.truncate(len - 1);
+                let $a = at!(len - 1);
+                let $b = at!(len - 2);
+                put!(len - 2, $result);
+                sp = len - 1;
                 pc += 1;
             }};
         }
@@ -701,17 +796,26 @@ impl Evm {
             ($gas:expr, |$x:ident| $result:expr) => {{
                 charge!($gas);
                 let len = operands!(1);
-                let $x = stack[len - 1];
-                stack[len - 1] = $result;
+                let $x = at!(len - 1);
+                put!(len - 1, $result);
                 pc += 1;
             }};
         }
         macro_rules! push {
             ($value:expr) => {{
-                if stack.len() >= Self::STACK_SIZE_LIMIT {
-                    break Fast::Halt(HaltReason::StackOverflow);
+                let value: U256 = $value;
+                if sp == cap {
+                    if sp >= Self::STACK_SIZE_LIMIT {
+                        break Fast::Halt(HaltReason::StackOverflow);
+                    }
+                    // SAFETY: the words below `sp` are initialized.
+                    unsafe { stack.set_len(sp) };
+                    stack.reserve((2 * sp).clamp(64, Self::STACK_SIZE_LIMIT) - sp);
+                    cap = stack.capacity().min(Self::STACK_SIZE_LIMIT);
+                    base = stack.as_mut_ptr();
                 }
-                stack.push($value);
+                put!(sp, value);
+                sp += 1;
             }};
         }
         // Expands memory to cover `size` bytes at `offset` (checked by `memory_range`),
@@ -777,7 +881,7 @@ impl Evm {
             ($n:literal) => {{
                 charge!(3);
                 let len = operands!($n);
-                push!(stack[len - $n]);
+                push!(at!(len - $n));
                 pc += 1;
             }};
         }
@@ -785,7 +889,8 @@ impl Evm {
             ($n:literal) => {{
                 charge!(3);
                 let len = operands!($n + 1);
-                stack.swap(len - 1, len - 1 - $n);
+                // SAFETY: both are below `sp`.
+                unsafe { core::ptr::swap(base.add(len - 1), base.add(len - 1 - $n)) };
                 pc += 1;
             }};
         }
@@ -794,13 +899,15 @@ impl Evm {
         let signed = |x: U256| x ^ (U256::ONE << 255);
 
         let result = loop {
-            if *steps >= limit {
+            if COUNT && *steps >= limit {
                 break Fast::Limit;
             }
             let Some(&op) = code.get(pc) else {
                 break Fast::Generic;
             };
-            *steps += 1;
+            if COUNT {
+                *steps += 1;
+            }
             match op {
                 0x01 => binary!(3, |a, b| a.wrapping_add(b)),
                 0x02 => binary!(5, |a, b| a.wrapping_mul(b)),
@@ -846,7 +953,7 @@ impl Evm {
                 0x20 => {
                     charge!(30);
                     let len = operands!(2);
-                    let (offset, size) = (stack[len - 1], stack[len - 2]);
+                    let (offset, size) = (at!(len - 1), at!(len - 2));
                     let Some(size) = usize::try_from(size)
                         .ok()
                         .filter(|&size| size <= Self::MEMORY_SIZE_LIMIT)
@@ -859,14 +966,16 @@ impl Evm {
                         memory_range!(offset, size)
                     };
                     charge!(6 * size.div_ceil(32) as i64);
+                    // alloy's keccak, which caches hashes of short inputs (mapping slots) in
+                    // builds with its `keccak-cache-global` feature, such as reth's.
                     let hash = if size == 0 {
-                        keccak256(&[])
+                        alloy_primitives::KECCAK256_EMPTY
                     } else {
                         expand!(offset, size);
-                        keccak256(&memory[offset..offset + size])
+                        alloy_primitives::keccak256(&memory[offset..offset + size])
                     };
-                    stack[len - 2] = word(hash);
-                    stack.truncate(len - 1);
+                    put!(len - 2, U256::from_be_bytes(hash.0));
+                    sp = len - 1;
                     pc += 1;
                 }
                 // ADDRESS
@@ -909,59 +1018,58 @@ impl Evm {
                 0x50 => {
                     charge!(2);
                     let len = operands!(1);
-                    stack.truncate(len - 1);
+                    sp = len - 1;
                     pc += 1;
                 }
                 // MLOAD
                 0x51 => {
                     charge!(3);
                     let len = operands!(1);
-                    let offset = memory_range!(stack[len - 1], 32);
+                    let offset = memory_range!(at!(len - 1), 32);
                     expand!(offset, 32);
                     let mut bytes = [0u8; 32];
                     bytes.copy_from_slice(&memory[offset..offset + 32]);
-                    stack[len - 1] = U256::from_be_bytes(bytes);
+                    put!(len - 1, U256::from_be_bytes(bytes));
                     pc += 1;
                 }
                 // MSTORE
                 0x52 => {
                     charge!(3);
                     let len = operands!(2);
-                    let offset = memory_range!(stack[len - 1], 32);
+                    let offset = memory_range!(at!(len - 1), 32);
                     expand!(offset, 32);
-                    memory[offset..offset + 32]
-                        .copy_from_slice(&stack[len - 2].to_be_bytes::<32>());
-                    stack.truncate(len - 2);
+                    memory[offset..offset + 32].copy_from_slice(&at!(len - 2).to_be_bytes::<32>());
+                    sp = len - 2;
                     pc += 1;
                 }
                 // MSTORE8
                 0x53 => {
                     charge!(3);
                     let len = operands!(2);
-                    let offset = memory_range!(stack[len - 1], 1);
+                    let offset = memory_range!(at!(len - 1), 1);
                     expand!(offset, 1);
-                    memory[offset] = stack[len - 2].byte(0);
-                    stack.truncate(len - 2);
+                    memory[offset] = at!(len - 2).byte(0);
+                    sp = len - 2;
                     pc += 1;
                 }
                 // JUMP
                 0x56 => {
                     charge!(8);
                     let len = operands!(1);
-                    let dst = jump_target!(stack[len - 1]);
-                    stack.truncate(len - 1);
+                    let dst = jump_target!(at!(len - 1));
+                    sp = len - 1;
                     pc = dst;
                 }
                 // JUMPI
                 0x57 => {
                     charge!(10);
                     let len = operands!(2);
-                    if stack[len - 2].is_zero() {
+                    if at!(len - 2).is_zero() {
                         pc += 1;
                     } else {
-                        pc = jump_target!(stack[len - 1]);
+                        pc = jump_target!(at!(len - 1));
                     }
-                    stack.truncate(len - 2);
+                    sp = len - 2;
                 }
                 // PC
                 0x58 => {
@@ -978,7 +1086,7 @@ impl Evm {
                 // GAS
                 0x5A => {
                     charge!(2);
-                    push!(U256::from((gas_limit - spent).max(0) as u64));
+                    push!(U256::from(remaining.max(0) as u64));
                     pc += 1;
                 }
                 // JUMPDEST
@@ -1059,13 +1167,17 @@ impl Evm {
                 0x9E => swap_n!(15),
                 0x9F => swap_n!(16),
                 _ => {
-                    *steps -= 1;
+                    if COUNT {
+                        *steps -= 1;
+                    }
                     break Fast::Generic;
                 }
             }
         };
+        // SAFETY: the words below `sp` are initialized, and `sp` is within the capacity.
+        unsafe { stack.set_len(sp) };
         self.pc = pc;
-        self.gas.spent = spent;
+        self.gas.spent = self.gas.limit - remaining;
         result
     }
 

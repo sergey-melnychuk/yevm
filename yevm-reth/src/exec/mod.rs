@@ -152,8 +152,14 @@ pub struct YevmEvmConfig<C = ChainSpec> {
 }
 
 impl<C> YevmEvmConfig<C> {
-    /// Creates a configuration for the given chain.
+    /// Creates a configuration for the given chain. The first one created in the process also
+    /// starts loading the KZG trusted setup in the background, so that the first block with a
+    /// point evaluation does not wait for it.
     pub fn new(chain_spec: Arc<C>) -> Self {
+        static WARM_UP: std::sync::Once = std::sync::Once::new();
+        WARM_UP.call_once(|| {
+            std::thread::spawn(yevm_core::pre::warm_up);
+        });
         Self {
             executor_factory: YevmBlockExecutorFactory::new(chain_spec.clone()),
             eth: EthEvmConfig::new(chain_spec),

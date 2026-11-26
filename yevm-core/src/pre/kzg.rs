@@ -53,6 +53,12 @@ const BLS_MODULUS: [u8; 32] = [
     0x53, 0xbd, 0xa4, 0x02, 0xff, 0xfe, 0x5b, 0xfe, 0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x01,
 ];
 
+/// Loads the trusted setup unless it is loaded.
+#[cfg(not(any(target_arch = "wasm32", target_os = "espidf")))]
+pub(super) fn load_settings() {
+    c_kzg::ethereum_kzg_settings(0);
+}
+
 /// Whether `proof` shows that the polynomial committed to by `commitment` is `y` at `z`.
 #[cfg(not(any(target_arch = "wasm32", target_os = "espidf")))]
 fn verify(commitment: &[u8; 48], z: &[u8; 32], y: &[u8; 32], proof: &[u8; 48]) -> bool {
@@ -68,12 +74,19 @@ fn verify(commitment: &[u8; 48], z: &[u8; 32], y: &[u8; 32], proof: &[u8; 48]) -
 }
 
 #[cfg(any(target_arch = "wasm32", target_os = "espidf"))]
+static SETTINGS: std::sync::LazyLock<kzg_rs::KzgSettings> = std::sync::LazyLock::new(|| {
+    kzg_rs::KzgSettings::load_trusted_setup_file().expect("failed to load KZG trusted setup")
+});
+
+/// Loads the trusted setup unless it is loaded.
+#[cfg(any(target_arch = "wasm32", target_os = "espidf"))]
+pub(super) fn load_settings() {
+    std::sync::LazyLock::force(&SETTINGS);
+}
+
+#[cfg(any(target_arch = "wasm32", target_os = "espidf"))]
 fn verify(commitment: &[u8; 48], z: &[u8; 32], y: &[u8; 32], proof: &[u8; 48]) -> bool {
-    use kzg_rs::{Bytes32, Bytes48, KzgProof, KzgSettings};
-    use std::sync::LazyLock;
-    static SETTINGS: LazyLock<KzgSettings> = LazyLock::new(|| {
-        KzgSettings::load_trusted_setup_file().expect("failed to load KZG trusted setup")
-    });
+    use kzg_rs::{Bytes32, Bytes48, KzgProof};
     let (Ok(commitment), Ok(z), Ok(y), Ok(proof)) = (
         Bytes48::from_slice(commitment),
         Bytes32::from_slice(z),

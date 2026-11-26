@@ -41,6 +41,8 @@ alloy-primitives = { version = "1.5", default-features = false, features = ["rlp
 # (blst). The browser and ESP32 builds keep k256, arkworks and kzg-rs.
 [target.'cfg(not(any(target_arch = "wasm32", target_os = "espidf")))'.dependencies]
 secp256k1 = { version = "0.33", default-features = false, features = ["global-context", "recovery"] }
+# SHA3 hashes with alloy's keccak256 (cached in builds with `keccak-cache-global`); assembly here.
+alloy-primitives = { version = "1.5", default-features = false, features = ["asm-keccak"] }
 mcl_rust = { version = "1.2", default-features = false }
 c-kzg = { version = "2.1", default-features = false, features = ["std", "ethereum_kzg_settings"] }
 

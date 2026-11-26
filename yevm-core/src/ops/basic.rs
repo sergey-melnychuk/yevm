@@ -2,7 +2,6 @@ use yevm_base::{
     Int,
     math::{ONE, ZERO, lift},
 };
-use yevm_misc::keccak256;
 
 use crate::evm::{self, Evm, EvmResult, EvmYield};
 use crate::state::State;
@@ -328,8 +327,8 @@ pub fn hash(evm: &mut Evm, state: &mut dyn State) -> EvmResult<()> {
     let (offset, size) = (offset.as_usize(), size.as_usize());
     evm.gas_charge(6 * size.div_ceil(32) as i64)?;
     let data = evm.mem_get(offset, size)?;
-    let hash = keccak256(&data);
-    let hash_int = Int::from(hash.as_ref());
+    // The same keccak as the fast path (see `Evm::fast_run`).
+    let hash_int = Int::from(alloy_primitives::keccak256(&data).as_slice());
     state.emit(Event::Hash(data.into(), hash_int));
     evm.push(hash_int)?;
     Ok(())
