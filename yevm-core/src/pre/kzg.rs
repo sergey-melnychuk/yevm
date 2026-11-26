@@ -1,10 +1,5 @@
-use std::sync::LazyLock;
-
-use kzg_rs::{Bytes32, Bytes48, KzgProof, KzgSettings};
-
-static KZG_SETTINGS: LazyLock<KzgSettings> = LazyLock::new(|| {
-    KzgSettings::load_trusted_setup_file().expect("failed to load KZG trusted setup")
-});
+//! KZG point evaluation (EIP-4844). Native builds verify with c-kzg (blst), as evm2 does; the
+//! browser and ESP32 builds with kzg-rs.
 
 /// KZG point evaluation (precompile 0x0A) - EIP-4844
 /// Input: versioned_hash (32) || z (32) || y (32) || commitment (48) || proof (48)
@@ -31,45 +26,61 @@ pub fn point_evaluation(input: &[u8], gas_limit: i64) -> (bool, Vec<u8>, i64) {
         return (false, vec![], gas_limit);
     }
 
-    let Ok(z_bytes) = Bytes32::from_slice(z) else {
-        return (false, vec![], gas_limit);
-    };
-    let Ok(y_bytes) = Bytes32::from_slice(y) else {
-        return (false, vec![], gas_limit);
-    };
-    let Ok(commitment_bytes) = Bytes48::from_slice(commitment) else {
-        return (false, vec![], gas_limit);
-    };
-    let Ok(proof_bytes) = Bytes48::from_slice(proof) else {
-        return (false, vec![], gas_limit);
-    };
-
-    let result = KzgProof::verify_kzg_proof(
-        &commitment_bytes,
-        &z_bytes,
-        &y_bytes,
-        &proof_bytes,
-        &KZG_SETTINGS,
+    let proved = verify(
+        commitment.try_into().unwrap(),
+        z.try_into().unwrap(),
+        y.try_into().unwrap(),
+        proof.try_into().unwrap(),
     );
-
-    match result {
-        Ok(true) => {
-            // Return FIELD_ELEMENTS_PER_BLOB and BLS_MODULUS
-            let mut out = vec![0u8; 64];
-            // FIELD_ELEMENTS_PER_BLOB = 4096 = 0x1000
-            out[30] = 0x10;
-            // BLS_MODULUS
-            let bls_modulus =
-                hex::decode("73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001")
-                    .unwrap();
-            out[32..64].copy_from_slice(&bls_modulus);
-            (true, out, GAS)
-        }
-        _ => (false, vec![], gas_limit),
+    if !proved {
+        return (false, vec![], gas_limit);
     }
+    // FIELD_ELEMENTS_PER_BLOB (4096) ++ BLS_MODULUS.
+    let mut out = vec![0u8; 64];
+    out[30] = 0x10;
+    out[32..64].copy_from_slice(&BLS_MODULUS);
+    (true, out, GAS)
 }
 
 fn sha2_hash(data: &[u8]) -> Vec<u8> {
     use sha2::{Digest, Sha256};
     Sha256::digest(data).to_vec()
+}
+
+/// The BLS12-381 scalar field modulus, big-endian.
+const BLS_MODULUS: [u8; 32] = [
+    0x73, 0xed, 0xa7, 0x53, 0x29, 0x9d, 0x7d, 0x48, 0x33, 0x39, 0xd8, 0x08, 0x09, 0xa1, 0xd8, 0x05,
+    0x53, 0xbd, 0xa4, 0x02, 0xff, 0xfe, 0x5b, 0xfe, 0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x01,
+];
+
+/// Whether `proof` shows that the polynomial committed to by `commitment` is `y` at `z`.
+#[cfg(not(any(target_arch = "wasm32", target_os = "espidf")))]
+fn verify(commitment: &[u8; 48], z: &[u8; 32], y: &[u8; 32], proof: &[u8; 48]) -> bool {
+    use c_kzg::{Bytes32, Bytes48};
+    c_kzg::ethereum_kzg_settings(0)
+        .verify_kzg_proof(
+            &Bytes48::new(*commitment),
+            &Bytes32::new(*z),
+            &Bytes32::new(*y),
+            &Bytes48::new(*proof),
+        )
+        .unwrap_or(false)
+}
+
+#[cfg(any(target_arch = "wasm32", target_os = "espidf"))]
+fn verify(commitment: &[u8; 48], z: &[u8; 32], y: &[u8; 32], proof: &[u8; 48]) -> bool {
+    use kzg_rs::{Bytes32, Bytes48, KzgProof, KzgSettings};
+    use std::sync::LazyLock;
+    static SETTINGS: LazyLock<KzgSettings> = LazyLock::new(|| {
+        KzgSettings::load_trusted_setup_file().expect("failed to load KZG trusted setup")
+    });
+    let (Ok(commitment), Ok(z), Ok(y), Ok(proof)) = (
+        Bytes48::from_slice(commitment),
+        Bytes32::from_slice(z),
+        Bytes32::from_slice(y),
+        Bytes48::from_slice(proof),
+    ) else {
+        return false;
+    };
+    KzgProof::verify_kzg_proof(&commitment, &z, &y, &proof, &SETTINGS).unwrap_or(false)
 }

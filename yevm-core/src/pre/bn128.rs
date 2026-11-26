@@ -1,8 +1,15 @@
-//! bn254 (alt_bn128) precompiles 0x06-0x08 (EIP-196, EIP-197) on arkworks, the library evm2 uses.
+//! bn254 (alt_bn128) precompiles 0x06-0x08 (EIP-196, EIP-197). Native builds run them on
+//! herumi's mcl, as evm2 does; the browser and ESP32 builds on arkworks.
 
-use ark_bn254::{Bn254, Fq, Fq2, Fr, G1Affine, G1Projective, G2Affine};
-use ark_ec_06::{AffineRepr, CurveGroup, pairing::Pairing};
-use ark_ff_06::{BigInt, One, PrimeField, Zero};
+#[cfg(any(test, target_arch = "wasm32", target_os = "espidf"))]
+mod ark;
+#[cfg(not(any(target_arch = "wasm32", target_os = "espidf")))]
+mod mcl;
+
+#[cfg(any(target_arch = "wasm32", target_os = "espidf"))]
+use ark as backend;
+#[cfg(not(any(target_arch = "wasm32", target_os = "espidf")))]
+use mcl as backend;
 
 /// ecAdd (precompile 0x06) - BN128 point addition
 /// Gas: 150
@@ -14,12 +21,10 @@ pub fn ec_add(input: &[u8], gas_limit: i64) -> (bool, Vec<u8>, i64) {
     let mut buf = [0u8; 128];
     let n = input.len().min(128);
     buf[..n].copy_from_slice(&input[..n]);
-
-    let (Some(p1), Some(p2)) = (read_g1(&buf[0..64]), read_g1(&buf[64..128])) else {
-        return (false, vec![], gas_limit);
-    };
-    let sum = (G1Projective::from(p1) + p2).into_affine();
-    (true, encode_g1(sum), GAS)
+    match backend::add(&buf[..64], &buf[64..]) {
+        Some(sum) => (true, sum.to_vec(), GAS),
+        None => (false, vec![], gas_limit),
+    }
 }
 
 /// ecMul (precompile 0x07) - BN128 scalar multiplication
@@ -32,14 +37,12 @@ pub fn ec_mul(input: &[u8], gas_limit: i64) -> (bool, Vec<u8>, i64) {
     let mut buf = [0u8; 96];
     let n = input.len().min(96);
     buf[..n].copy_from_slice(&input[..n]);
-
-    let Some(p) = read_g1(&buf[0..64]) else {
-        return (false, vec![], gas_limit);
-    };
     // The scalar is any 256-bit number: multiplying by it is multiplying by it modulo the
     // group order, as in geth.
-    let scalar = Fr::from_be_bytes_mod_order(&buf[64..96]);
-    (true, encode_g1((p * scalar).into_affine()), GAS)
+    match backend::mul(&buf[..64], &buf[64..]) {
+        Some(product) => (true, product.to_vec(), GAS),
+        None => (false, vec![], gas_limit),
+    }
 }
 
 /// ecPairing (precompile 0x08) - BN128 pairing check
@@ -48,79 +51,18 @@ pub fn ec_pairing(input: &[u8], gas_limit: i64) -> (bool, Vec<u8>, i64) {
     if !input.len().is_multiple_of(192) {
         return (false, vec![], gas_limit);
     }
-    let num_pairs = input.len() / 192;
-    let gas = 45_000 + 34_000 * num_pairs as i64;
+    let gas = 45_000 + 34_000 * (input.len() / 192) as i64;
     if gas > gas_limit {
         return (false, vec![], gas_limit);
     }
-
-    let (mut g1s, mut g2s) = (Vec::with_capacity(num_pairs), Vec::with_capacity(num_pairs));
-    for pair in input.as_chunks::<192>().0 {
-        let (Some(g1), Some(g2)) = (read_g1(&pair[..64]), read_g2(&pair[64..])) else {
-            return (false, vec![], gas_limit);
-        };
-        // A pair with the point at infinity contributes the identity.
-        if !g1.is_zero() && !g2.is_zero() {
-            g1s.push(g1);
-            g2s.push(g2);
+    match backend::pairing(input) {
+        Some(holds) => {
+            let mut out = vec![0u8; 32];
+            out[31] = u8::from(holds);
+            (true, out, gas)
         }
+        None => (false, vec![], gas_limit),
     }
-    // One Miller loop over all pairs and a single final exponentiation.
-    let holds = g1s.is_empty() || Bn254::multi_pairing(g1s, g2s).0.is_one();
-
-    let mut out = vec![0u8; 32];
-    out[31] = u8::from(holds);
-    (true, out, gas)
-}
-
-/// A field element from 32 big-endian bytes, `None` unless it is below the modulus.
-fn read_fq(bytes: &[u8]) -> Option<Fq> {
-    let mut limbs = [0u64; 4];
-    for (i, limb) in limbs.iter_mut().enumerate() {
-        let end = 32 - 8 * i;
-        *limb = u64::from_be_bytes(bytes[end - 8..end].try_into().unwrap());
-    }
-    Fq::from_bigint(BigInt::new(limbs))
-}
-
-fn write_fq(value: Fq, out: &mut [u8]) {
-    for (i, limb) in value.into_bigint().0.iter().enumerate() {
-        let end = 32 - 8 * i;
-        out[end - 8..end].copy_from_slice(&limb.to_be_bytes());
-    }
-}
-
-/// A G1 point from x ++ y (64 bytes), (0, 0) being the point at infinity. G1's cofactor is 1,
-/// so every point on the curve is in the group.
-fn read_g1(bytes: &[u8]) -> Option<G1Affine> {
-    let (x, y) = (read_fq(&bytes[..32])?, read_fq(&bytes[32..64])?);
-    if x.is_zero() && y.is_zero() {
-        return Some(G1Affine::zero());
-    }
-    let point = G1Affine::new_unchecked(x, y);
-    point.is_on_curve().then_some(point)
-}
-
-/// A G2 point from x_im ++ x_re ++ y_im ++ y_re (128 bytes), (0, 0) being the point at infinity;
-/// it must be on the curve and in the order-r subgroup.
-fn read_g2(bytes: &[u8]) -> Option<G2Affine> {
-    let x = Fq2::new(read_fq(&bytes[32..64])?, read_fq(&bytes[0..32])?);
-    let y = Fq2::new(read_fq(&bytes[96..128])?, read_fq(&bytes[64..96])?);
-    if x.is_zero() && y.is_zero() {
-        return Some(G2Affine::zero());
-    }
-    let point = G2Affine::new_unchecked(x, y);
-    (point.is_on_curve() && point.is_in_correct_subgroup_assuming_on_curve()).then_some(point)
-}
-
-/// x ++ y, all zero for the point at infinity.
-fn encode_g1(point: G1Affine) -> Vec<u8> {
-    let mut out = vec![0u8; 64];
-    if let Some((x, y)) = point.xy() {
-        write_fq(x, &mut out[..32]);
-        write_fq(y, &mut out[32..]);
-    }
-    out
 }
 
 #[cfg(test)]
@@ -197,5 +139,112 @@ mod tests {
         assert_eq!(ec_pairing(&[], 1_000_000).1[31], 1);
         let infinity = hex(&format!("{:0128}{G2}", 0));
         assert_eq!(ec_pairing(&infinity, 1_000_000).1[31], 1);
+    }
+
+    /// mcl against arkworks: sums, products (scalars at and above r too) and pairings, including
+    /// G2 points on the curve but outside the subgroup, which both must reject.
+    #[cfg(not(any(target_arch = "wasm32", target_os = "espidf")))]
+    #[test]
+    fn mcl_matches_arkworks() {
+        use ark_bn254::{Fq, Fq2, Fr, G1Projective, G2Affine, G2Projective};
+        use ark_ec_06::{AffineRepr, CurveGroup, PrimeGroup};
+        use ark_ff_06::PrimeField;
+
+        // xorshift64: deterministic inputs.
+        fn word(seed: &mut u64) -> u64 {
+            *seed ^= *seed << 13;
+            *seed ^= *seed >> 7;
+            *seed ^= *seed << 17;
+            *seed
+        }
+        fn bytes32(seed: &mut u64) -> [u8; 32] {
+            let mut out = [0u8; 32];
+            for chunk in out.chunks_mut(8) {
+                chunk.copy_from_slice(&word(seed).to_be_bytes());
+            }
+            out
+        }
+        let seed = &mut 0x9e37_79b9_7f4a_7c15u64;
+        let g1 = |k: &[u8; 32]| {
+            let point = (G1Projective::generator() * Fr::from_be_bytes_mod_order(k)).into_affine();
+            let mut out = [0u8; 64];
+            if let Some((x, y)) = point.xy() {
+                ark::write_fq(x, &mut out[..32]);
+                ark::write_fq(y, &mut out[32..]);
+            }
+            out
+        };
+        let encode_g2 = |point: G2Affine| {
+            let mut out = [0u8; 128];
+            if let Some((x, y)) = point.xy() {
+                ark::write_fq(x.c1, &mut out[0..32]);
+                ark::write_fq(x.c0, &mut out[32..64]);
+                ark::write_fq(y.c1, &mut out[64..96]);
+                ark::write_fq(y.c0, &mut out[96..128]);
+            }
+            out
+        };
+        let fr_bytes = |v: Fr| {
+            let mut out = [0u8; 32];
+            for (j, limb) in v.into_bigint().0.iter().enumerate() {
+                out[24 - 8 * j..32 - 8 * j].copy_from_slice(&limb.to_be_bytes());
+            }
+            out
+        };
+
+        let r = hex(R);
+        for i in 0..64 {
+            let (a, b) = (g1(&bytes32(seed)), g1(&bytes32(seed)));
+            assert_eq!(mcl::add(&a, &b), ark::add(&a, &b), "add #{i}");
+            assert_eq!(mcl::add(&a, &a), ark::add(&a, &a), "double #{i}");
+            let mut scalar = bytes32(seed);
+            if i % 4 == 0 {
+                scalar[..16].copy_from_slice(&r[..16]); // around r
+            }
+            assert_eq!(mcl::mul(&a, &scalar), ark::mul(&a, &scalar), "mul #{i}");
+        }
+        assert_eq!(mcl::mul(&g1(&[1; 32]), &r), Some([0; 64]));
+
+        let (mut outside, mut inside) = (0, 0);
+        for i in 0..64u64 {
+            // On the curve, almost surely outside the subgroup (G2's cofactor is about 2^254).
+            let x = Fq2::new(Fq::from(i + 1), Fq::from(word(seed)));
+            if let Some(point) = G2Affine::get_point_from_x_unchecked(x, i % 2 == 0) {
+                let pair = [g1(&bytes32(seed)).as_slice(), &encode_g2(point)].concat();
+                let expected = ark::pairing(&pair);
+                assert_eq!(
+                    mcl::pairing(&pair),
+                    expected,
+                    "pairing with a curve point #{i}"
+                );
+                if expected.is_none() {
+                    outside += 1;
+                }
+            }
+            // In the subgroup: e(aG1, bG2) · e(-abG1, G2) = 1, and a random pair rarely holds.
+            let (a, b) = (Fr::from(word(seed)), Fr::from(word(seed)));
+            let q = (G2Projective::generator() * b).into_affine();
+            let generator = encode_g2(G2Projective::generator().into_affine());
+            let holds = [
+                &g1(&fr_bytes(a))[..],
+                &encode_g2(q),
+                &g1(&fr_bytes(-(a * b))),
+                &generator,
+            ]
+            .concat();
+            assert_eq!(mcl::pairing(&holds), Some(true), "pairing that holds #{i}");
+            assert_eq!(ark::pairing(&holds), Some(true));
+            let random = [&g1(&bytes32(seed))[..], &encode_g2(q)].concat();
+            assert_eq!(
+                mcl::pairing(&random),
+                ark::pairing(&random),
+                "random pairing #{i}"
+            );
+            inside += 1;
+        }
+        assert!(
+            outside > 16 && inside == 64,
+            "{outside} outside, {inside} inside"
+        );
     }
 }
