@@ -724,9 +724,7 @@ impl Evm {
     /// exactly. With `COUNT`, counts executed instructions in `steps`, up to `limit`; without
     /// it (no step limit) counts nothing.
     ///
-    /// The stack is used through a raw pointer, with its length and capacity in locals (the
-    /// capacity capped at the stack limit, so that a push checks one bound), and the remaining
-    /// gas in a local; both are written back on exit.
+    /// The remaining gas is kept in a local and written back on exit.
     ///
     /// Returns [`Fast::Generic`] at the first instruction it does not execute, with `pc` at it.
     #[inline(always)]
@@ -742,9 +740,6 @@ impl Evm {
         let mut remaining = self.gas.limit - self.gas.spent;
         let mut pc = self.pc;
         let stack = &mut self.stack;
-        let mut sp = stack.len();
-        let mut cap = stack.capacity().min(Self::STACK_SIZE_LIMIT);
-        let mut base = stack.as_mut_ptr();
         let memory = &mut self.memory;
         let jumpdests = &mut self.jumpdests;
 
@@ -759,24 +754,11 @@ impl Evm {
         }
         macro_rules! operands {
             ($n:expr) => {{
-                if sp < $n {
+                let len = stack.len();
+                if len < $n {
                     break Fast::Halt(HaltReason::StackUnderflow);
                 }
-                sp
-            }};
-        }
-        // The word at `index` (below `sp`), and writing one (at or below `sp`, within `cap`).
-        macro_rules! at {
-            ($index:expr) => {
-                // SAFETY: callers index below `sp`, which is within the initialized words.
-                unsafe { *base.add($index) }
-            };
-        }
-        macro_rules! put {
-            ($index:expr, $value:expr) => {{
-                let value: U256 = $value;
-                // SAFETY: callers write at most at `sp`, which is below `cap`.
-                unsafe { base.add($index).write(value) }
+                len
             }};
         }
         // Replaces the top two words with `f(top, second)`.
@@ -784,10 +766,10 @@ impl Evm {
             ($gas:expr, |$a:ident, $b:ident| $result:expr) => {{
                 charge!($gas);
                 let len = operands!(2);
-                let $a = at!(len - 1);
-                let $b = at!(len - 2);
-                put!(len - 2, $result);
-                sp = len - 1;
+                let $a = stack[len - 1];
+                let $b = stack[len - 2];
+                stack[len - 2] = $result;
+                stack.truncate(len - 1);
                 pc += 1;
             }};
         }
@@ -796,26 +778,18 @@ impl Evm {
             ($gas:expr, |$x:ident| $result:expr) => {{
                 charge!($gas);
                 let len = operands!(1);
-                let $x = at!(len - 1);
-                put!(len - 1, $result);
+                let $x = stack[len - 1];
+                stack[len - 1] = $result;
                 pc += 1;
             }};
         }
         macro_rules! push {
             ($value:expr) => {{
                 let value: U256 = $value;
-                if sp == cap {
-                    if sp >= Self::STACK_SIZE_LIMIT {
-                        break Fast::Halt(HaltReason::StackOverflow);
-                    }
-                    // SAFETY: the words below `sp` are initialized.
-                    unsafe { stack.set_len(sp) };
-                    stack.reserve((2 * sp).clamp(64, Self::STACK_SIZE_LIMIT) - sp);
-                    cap = stack.capacity().min(Self::STACK_SIZE_LIMIT);
-                    base = stack.as_mut_ptr();
+                if stack.len() >= Self::STACK_SIZE_LIMIT {
+                    break Fast::Halt(HaltReason::StackOverflow);
                 }
-                put!(sp, value);
-                sp += 1;
+                stack.push(value);
             }};
         }
         // Expands memory to cover `size` bytes at `offset` (checked by `memory_range`),
@@ -881,7 +855,7 @@ impl Evm {
             ($n:literal) => {{
                 charge!(3);
                 let len = operands!($n);
-                push!(at!(len - $n));
+                push!(stack[len - $n]);
                 pc += 1;
             }};
         }
@@ -889,8 +863,7 @@ impl Evm {
             ($n:literal) => {{
                 charge!(3);
                 let len = operands!($n + 1);
-                // SAFETY: both are below `sp`.
-                unsafe { core::ptr::swap(base.add(len - 1), base.add(len - 1 - $n)) };
+                stack.swap(len - 1, len - 1 - $n);
                 pc += 1;
             }};
         }
@@ -953,7 +926,7 @@ impl Evm {
                 0x20 => {
                     charge!(30);
                     let len = operands!(2);
-                    let (offset, size) = (at!(len - 1), at!(len - 2));
+                    let (offset, size) = (stack[len - 1], stack[len - 2]);
                     let Some(size) = usize::try_from(size)
                         .ok()
                         .filter(|&size| size <= Self::MEMORY_SIZE_LIMIT)
@@ -974,8 +947,8 @@ impl Evm {
                         expand!(offset, size);
                         alloy_primitives::keccak256(&memory[offset..offset + size])
                     };
-                    put!(len - 2, U256::from_be_bytes(hash.0));
-                    sp = len - 1;
+                    stack[len - 2] = U256::from_be_bytes(hash.0);
+                    stack.truncate(len - 1);
                     pc += 1;
                 }
                 // ADDRESS
@@ -1018,58 +991,59 @@ impl Evm {
                 0x50 => {
                     charge!(2);
                     let len = operands!(1);
-                    sp = len - 1;
+                    stack.truncate(len - 1);
                     pc += 1;
                 }
                 // MLOAD
                 0x51 => {
                     charge!(3);
                     let len = operands!(1);
-                    let offset = memory_range!(at!(len - 1), 32);
+                    let offset = memory_range!(stack[len - 1], 32);
                     expand!(offset, 32);
                     let mut bytes = [0u8; 32];
                     bytes.copy_from_slice(&memory[offset..offset + 32]);
-                    put!(len - 1, U256::from_be_bytes(bytes));
+                    stack[len - 1] = U256::from_be_bytes(bytes);
                     pc += 1;
                 }
                 // MSTORE
                 0x52 => {
                     charge!(3);
                     let len = operands!(2);
-                    let offset = memory_range!(at!(len - 1), 32);
+                    let offset = memory_range!(stack[len - 1], 32);
                     expand!(offset, 32);
-                    memory[offset..offset + 32].copy_from_slice(&at!(len - 2).to_be_bytes::<32>());
-                    sp = len - 2;
+                    memory[offset..offset + 32]
+                        .copy_from_slice(&stack[len - 2].to_be_bytes::<32>());
+                    stack.truncate(len - 2);
                     pc += 1;
                 }
                 // MSTORE8
                 0x53 => {
                     charge!(3);
                     let len = operands!(2);
-                    let offset = memory_range!(at!(len - 1), 1);
+                    let offset = memory_range!(stack[len - 1], 1);
                     expand!(offset, 1);
-                    memory[offset] = at!(len - 2).byte(0);
-                    sp = len - 2;
+                    memory[offset] = stack[len - 2].byte(0);
+                    stack.truncate(len - 2);
                     pc += 1;
                 }
                 // JUMP
                 0x56 => {
                     charge!(8);
                     let len = operands!(1);
-                    let dst = jump_target!(at!(len - 1));
-                    sp = len - 1;
+                    let dst = jump_target!(stack[len - 1]);
+                    stack.truncate(len - 1);
                     pc = dst;
                 }
                 // JUMPI
                 0x57 => {
                     charge!(10);
                     let len = operands!(2);
-                    if at!(len - 2).is_zero() {
+                    if stack[len - 2].is_zero() {
                         pc += 1;
                     } else {
-                        pc = jump_target!(at!(len - 1));
+                        pc = jump_target!(stack[len - 1]);
                     }
-                    sp = len - 2;
+                    stack.truncate(len - 2);
                 }
                 // PC
                 0x58 => {
@@ -1174,8 +1148,6 @@ impl Evm {
                 }
             }
         };
-        // SAFETY: the words below `sp` are initialized, and `sp` is within the capacity.
-        unsafe { stack.set_len(sp) };
         self.pc = pc;
         self.gas.spent = self.gas.limit - remaining;
         result

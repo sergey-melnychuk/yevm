@@ -1,16 +1,9 @@
 //! bn254 on herumi's mcl, for native builds: C++ that JIT-compiles its field arithmetic (with
 //! `mulx`/`adcx`/`adox` where the CPU has them), several times faster than arkworks here.
 
-use std::sync::{Once, OnceLock};
+use std::sync::Once;
 
 use mcl_rust::{CurveType, Fp, Fp2, Fr, G1, G2, GT};
-
-// Parts of mcl's C API that `mcl_rust` does not wrap.
-unsafe extern "C" {
-    fn mclBn_millerLoopVec(z: *mut GT, x: *const G1, y: *const G2, n: usize);
-    fn mclBn_verifyOrderG2(do_verify: i32);
-    fn mclBnFp_serialize(buf: *mut u8, max_buf_size: usize, x: *const Fp) -> usize;
-}
 
 /// The base field modulus p, big-endian.
 const P: [u8; 32] = [
@@ -18,22 +11,17 @@ const P: [u8; 32] = [
     0x97, 0x81, 0x6a, 0x91, 0x68, 0x71, 0xca, 0x8d, 0x3c, 0x20, 0x8c, 0x16, 0xd8, 0x7c, 0xfd, 0x47,
 ];
 
-/// The curve parameter x (often called u) of alt_bn128.
-const X: u64 = 4965661367192848881;
-
 /// Sets mcl up for alt_bn128 once per process. mcl's curve is global; anything else in the process
 /// that uses mcl (evm2 in yevm-reth) sets up the same curve.
 fn init() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
         // SNARK is Ethereum's alt_bn128; mcl's BN254 is a different curve.
+        // mcl's validity check of a G2 point includes the subgroup check.
         assert!(
             mcl_rust::init(CurveType::SNARK),
             "mcl: alt_bn128 setup failed"
         );
-        // `read_g2` checks the subgroup with the endomorphism below, much cheaper than mcl's
-        // multiplication by r.
-        unsafe { mclBn_verifyOrderG2(0) };
     });
 }
 
@@ -73,14 +61,15 @@ pub(super) fn pairing(input: &[u8]) -> Option<bool> {
             g2s.push(g2);
         }
     }
-    if g1s.is_empty() {
-        return Some(true);
+    // A Miller loop per pair, their product, and a single final exponentiation.
+    let mut product = GT::from_int(1);
+    for (g1, g2) in g1s.iter().zip(&g2s) {
+        let mut miller = GT::zero();
+        mcl_rust::miller_loop(&mut miller, g1, g2);
+        product = &product * &miller;
     }
-    // One Miller loop over all pairs and a single final exponentiation.
-    let mut miller = GT::zero();
-    unsafe { mclBn_millerLoopVec(&mut miller, g1s.as_ptr(), g2s.as_ptr(), g1s.len()) };
     let mut result = GT::zero();
-    mcl_rust::final_exp(&mut result, &miller);
+    mcl_rust::final_exp(&mut result, &product);
     Some(result.is_one())
 }
 
@@ -96,9 +85,8 @@ fn read_fp(bytes: &[u8]) -> Option<Fp> {
 }
 
 fn write_fp(fp: &Fp, out: &mut [u8]) {
-    let mut le = [0u8; 32];
-    let len = unsafe { mclBnFp_serialize(le.as_mut_ptr(), le.len(), fp) };
-    assert_eq!(len, 32, "mcl: field element serialization failed");
+    let mut le = fp.serialize();
+    assert_eq!(le.len(), 32, "mcl: field element serialization failed");
     le.reverse();
     out.copy_from_slice(&le);
 }
@@ -131,7 +119,7 @@ fn read_g2(bytes: &[u8]) -> Option<G2> {
     let mut point = G2::zero();
     (point.x, point.y) = (x, y);
     point.z.d[0] = Fp::from_int(1);
-    (point.is_valid() && in_subgroup(&point)).then_some(point)
+    point.is_valid().then_some(point)
 }
 
 /// x ++ y, all zero for the point at infinity.
@@ -144,63 +132,4 @@ fn encode_g1(point: &G1) -> [u8; 64] {
         write_fp(&affine.y, &mut out[32..]);
     }
     out
-}
-
-/// Whether a G2 point on the curve is in the order-r subgroup: for BN curves that is
-/// `[x + 1]P + ψ([x]P) + ψ²([x]P) = ψ³([2x]P)`, with ψ the untwist-Frobenius-twist endomorphism
-/// (El Housni, Guillevic, Piellard, "Co-factor clearing and subgroup membership testing on
-/// pairing-friendly curves", eprint 2022/348). It takes a 63-bit multiplication where checking
-/// `[r]P = 0` takes a 254-bit one.
-fn in_subgroup(p: &G2) -> bool {
-    // ψ(x, y) = (conj(x) · c_x, conj(y) · c_y) with c_x = ξ^((p-1)/3), c_y = ξ^((p-1)/2), ξ = u + 9.
-    static COEFFS: OnceLock<(Fp2, Fp2)> = OnceLock::new();
-    let (cx, cy) = COEFFS.get_or_init(|| {
-        let fp2 = |re: &str, im: &str| {
-            let mut value = Fp2::zero();
-            assert!(value.d[0].set_str(re, 10) && value.d[1].set_str(im, 10));
-            value
-        };
-        (
-            fp2(
-                "21575463638280843010398324269430826099269044274347216827212613867836435027261",
-                "10307601595873709700152284273816112264069230130616436755625194854815875713954",
-            ),
-            fp2(
-                "2821565182194536844548159561693502659359617185244120367078079554186484126554",
-                "3505843767911556378687030309984248845540243509899259641013678093033130930403",
-            ),
-        )
-    });
-    let conj = |a: &Fp2| {
-        let mut c = a.clone();
-        Fp::neg(&mut c.d[1], &a.d[1]);
-        c
-    };
-    // Conjugation is a field automorphism, so it applies to Jacobian coordinates as well.
-    let psi = |a: &G2| {
-        let mut image = G2::zero();
-        (image.x, image.y, image.z) = (&conj(&a.x) * cx, &conj(&a.y) * cy, conj(&a.z));
-        image
-    };
-
-    // [x]P by double-and-add: mcl's `G2::mul` uses the GLV endomorphism, which gives the right
-    // product only for points already in the subgroup.
-    let mut xp = p.clone();
-    for bit in (0..X.ilog2()).rev() {
-        let mut doubled = G2::zero();
-        G2::dbl(&mut doubled, &xp);
-        xp = doubled;
-        if (X >> bit) & 1 == 1 {
-            xp += p;
-        }
-    }
-    let psi_xp = psi(&xp);
-    let psi2_xp = psi(&psi_xp);
-    let mut rhs = G2::zero();
-    G2::dbl(&mut rhs, &psi(&psi2_xp));
-    let mut lhs = psi2_xp;
-    lhs += &psi_xp;
-    lhs += &xp;
-    lhs += p;
-    lhs == rhs
 }

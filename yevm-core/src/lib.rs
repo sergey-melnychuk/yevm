@@ -1,3 +1,6 @@
+// No unsafe code: yevm is also meant to be read, to learn the EVM from.
+#![forbid(unsafe_code)]
+
 use thiserror::Error;
 
 pub use yevm_base::{Acc, Int};
