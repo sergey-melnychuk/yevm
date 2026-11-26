@@ -1,7 +1,8 @@
+use alloy_primitives::Bytes;
 use serde::{Deserialize, Serialize};
 use yevm_misc::buf::Buf;
 
-use std::sync::Arc;
+use std::{fmt, ops::Deref, sync::Arc};
 
 use crate::{Acc, Head, Int, chain::Fetched, evm::JumpTable, trace::Event};
 
@@ -9,7 +10,111 @@ use crate::{Acc, Head, Int, chain::Fetched, evm::JumpTable, trace::Event};
 pub struct Account {
     pub value: Int,
     pub nonce: Int,
-    pub code: (Buf, Int),
+    pub code: (Code, Int),
+}
+
+/// Contract code, shared: cloning an account, reading its code or running it in a call frame
+/// copies nothing. Serialized like [`Buf`], as 0x-prefixed hex.
+#[derive(Clone, Default, PartialEq, Eq, Hash)]
+pub struct Code(Bytes);
+
+impl Code {
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn to_vec(&self) -> Vec<u8> {
+        self.0.to_vec()
+    }
+}
+
+impl Deref for Code {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl AsRef<[u8]> for Code {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+/// Takes the bytes without copying them.
+impl From<Bytes> for Code {
+    fn from(bytes: Bytes) -> Self {
+        Self(bytes)
+    }
+}
+
+/// Takes the vector without copying it.
+impl From<Vec<u8>> for Code {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self(bytes.into())
+    }
+}
+
+impl From<Buf> for Code {
+    fn from(buf: Buf) -> Self {
+        buf.into_vec().into()
+    }
+}
+
+impl From<&[u8]> for Code {
+    fn from(bytes: &[u8]) -> Self {
+        Self(Bytes::copy_from_slice(bytes))
+    }
+}
+
+/// Shares the bytes without copying them.
+impl From<Code> for Bytes {
+    fn from(code: Code) -> Self {
+        code.0
+    }
+}
+
+impl From<Code> for Buf {
+    fn from(code: Code) -> Self {
+        code.to_vec().into()
+    }
+}
+
+impl fmt::Debug for Code {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("0x")?;
+        for byte in self.0.iter() {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Display for Code {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
+impl Serialize for Code {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for Code {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Buf::deserialize(d)?.into())
+    }
 }
 
 pub trait State {
@@ -22,14 +127,14 @@ pub trait State {
 
     fn inc_nonce(&mut self, acc: &Acc, nonce: Int) -> Int;
     fn set_value(&mut self, acc: &Acc, value: Int) -> Int;
-    fn set_code(&mut self, acc: &Acc, code: Buf, hash: Int) -> Int;
+    fn set_code(&mut self, acc: &Acc, code: Code, hash: Int) -> Int;
     fn set_auth(&mut self, src: &Acc, dst: &Acc);
 
     fn merge(&mut self, acc: &Acc, chain: Account);
 
     fn balance(&mut self, acc: &Acc) -> Option<Int>;
     fn nonce(&mut self, acc: &Acc) -> Option<Int>;
-    fn code(&mut self, acc: &Acc) -> Option<(Buf, Int)>;
+    fn code(&mut self, acc: &Acc) -> Option<(Code, Int)>;
     fn acc(&mut self, acc: &Acc) -> Option<Account>;
 
     fn is_cold_acc(&self, acc: &Acc) -> bool;
@@ -126,21 +231,19 @@ pub trait State {
         self.acc(acc).is_some()
     }
 
-    /// The size of `acc`'s code, if loaded. Unlike [`Self::code`], copies nothing.
+    /// The size of `acc`'s code, if loaded.
     fn code_size(&mut self, acc: &Acc) -> Option<usize> {
         self.code(acc).map(|(code, _)| code.len())
     }
 
-    /// The hash of `acc`'s code, if loaded. Unlike [`Self::code`], copies nothing.
+    /// The hash of `acc`'s code, if loaded.
     fn code_hash(&mut self, acc: &Acc) -> Option<Int> {
         self.code(acc).map(|(_, hash)| hash)
     }
 
-    /// `acc`'s code as bytes shared with every frame that runs it, with its hash. States may
-    /// cache it by hash.
-    fn frame_code(&mut self, acc: &Acc) -> Option<(Arc<[u8]>, Int)> {
+    /// `acc`'s code to run in a call frame, with its hash.
+    fn frame_code(&mut self, acc: &Acc) -> Option<(Code, Int)> {
         self.code(acc)
-            .map(|(code, hash)| (code.into_vec().into(), hash))
     }
 
     /// Returns the jump table of `code`, whose hash is `hash`. States may cache it by hash.

@@ -76,7 +76,11 @@ impl Chain for PreChain {
         Ok(self.0.get(acc).cloned().unwrap_or_default())
     }
     async fn code(&self, acc: &Acc) -> eyre::Result<(Buf, Int)> {
-        Ok(self.0.get(acc).map(|a| a.code.clone()).unwrap_or_default())
+        Ok(self
+            .0
+            .get(acc)
+            .map(|a| (a.code.0.clone().into(), a.code.1))
+            .unwrap_or_default())
     }
     async fn nonce(&self, acc: &Acc) -> eyre::Result<u64> {
         Ok(self

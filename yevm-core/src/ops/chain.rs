@@ -267,10 +267,9 @@ pub fn extcodehash<S: State>(evm: &mut Evm, _: &Context, _: &Call, state: &mut S
     }
     evm.access(&acc);
     // EIP-1052 / EIP-161: return 0 for empty accounts (balance=0, nonce=0, code=empty)
-    let hash = if account.code.0.0.is_empty() && account.nonce.is_zero() && account.value.is_zero()
-    {
+    let hash = if account.code.0.is_empty() && account.nonce.is_zero() && account.value.is_zero() {
         Int::ZERO
-    } else if account.code.1.is_zero() && account.code.0.0.is_empty() {
+    } else if account.code.1.is_zero() && account.code.0.is_empty() {
         // Non-empty account (has balance or nonce) with no code: return keccak256("")
         yevm_misc::keccak256(&[])
     } else {

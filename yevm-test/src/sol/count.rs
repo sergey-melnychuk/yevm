@@ -1,6 +1,5 @@
 use yevm_base::{Int, acc};
 use yevm_core::{Call, state::Account};
-use yevm_misc::buf::Buf;
 
 use crate::sol::{assert_match, ethers, head, load, run, tx};
 
@@ -15,7 +14,7 @@ async fn test_deploy_counter() -> eyre::Result<()> {
         Account {
             value: ethers(1),
             nonce: Int::ZERO,
-            code: (Buf::default(), Int::ZERO),
+            code: (Default::default(), Int::ZERO),
         },
         vec![],
     )];

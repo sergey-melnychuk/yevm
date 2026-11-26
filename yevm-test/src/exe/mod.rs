@@ -63,7 +63,7 @@ async fn create2_selfdestruct_then_redeploy_same_address() -> eyre::Result<()> {
         Account {
             value: crate::sol::ethers(1),
             nonce: Int::ZERO,
-            code: (Buf::default(), Int::ZERO),
+            code: (Default::default(), Int::ZERO),
         },
     );
     state.insert_account(

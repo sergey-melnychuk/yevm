@@ -28,7 +28,7 @@ async fn test_token_buy_use_give() -> eyre::Result<()> {
             Account {
                 value: super::ethers(1),
                 nonce: Int::ZERO,
-                code: (Buf::default(), Int::ZERO),
+                code: (Default::default(), Int::ZERO),
             },
             vec![],
         ),
@@ -37,7 +37,7 @@ async fn test_token_buy_use_give() -> eyre::Result<()> {
             Account {
                 value: super::ethers(1),
                 nonce: Int::ZERO,
-                code: (Buf::default(), Int::ZERO),
+                code: (Default::default(), Int::ZERO),
             },
             vec![],
         ),
@@ -46,7 +46,7 @@ async fn test_token_buy_use_give() -> eyre::Result<()> {
             Account {
                 value: super::ethers(1),
                 nonce: Int::ZERO,
-                code: (Buf::default(), Int::ZERO),
+                code: (Default::default(), Int::ZERO),
             },
             vec![],
         ),

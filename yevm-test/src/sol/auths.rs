@@ -142,7 +142,7 @@ async fn test_meta_tx() -> eyre::Result<()> {
                 Account {
                     value: super::ethers(1),
                     nonce: Int::ZERO,
-                    code: (Buf::default(), Int::ZERO),
+                    code: (Default::default(), Int::ZERO),
                 },
                 vec![],
             ),
@@ -151,7 +151,7 @@ async fn test_meta_tx() -> eyre::Result<()> {
                 Account {
                     value: Int::ZERO,
                     nonce: Int::ZERO,
-                    code: (auth_src.bin_runtime.clone(), auth_hash),
+                    code: (auth_src.bin_runtime.clone().into(), auth_hash),
                 },
                 vec![],
             ),
@@ -160,7 +160,7 @@ async fn test_meta_tx() -> eyre::Result<()> {
                 Account {
                     value: Int::ZERO,
                     nonce: Int::ZERO,
-                    code: (box_src.bin_runtime.clone(), box_hash),
+                    code: (box_src.bin_runtime.clone().into(), box_hash),
                 },
                 vec![],
             ),

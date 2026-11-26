@@ -2,11 +2,10 @@
 
 use alloy_eip7702::{Authorization, SignedAuthorization};
 use alloy_primitives::{Address, U256};
-use yevm_misc::buf::Buf;
 
 use crate::Tx;
 use crate::chain::{Chain, fetch};
-use crate::state::{Account, State};
+use crate::state::{Account, Code, State};
 use crate::{Acc, Int, Result};
 
 /// Per EIP-7702 / `alloy_eip7702::constants` (matches revm initial gas and refund schedule).
@@ -125,7 +124,7 @@ pub async fn apply_authorization_list(
 
         if item.address.is_zero() {
             let hash = Int::from(yevm_misc::keccak256(&[]).as_ref());
-            state.set_code(&authority, Buf::default(), hash);
+            state.set_code(&authority, Code::default(), hash);
         } else {
             state.set_auth(&authority, &item.address);
             if !state.has_acc(&item.address) {
@@ -138,5 +137,5 @@ pub async fn apply_authorization_list(
 }
 
 fn account_is_empty_for_eip7702_refund(acc: &Account) -> bool {
-    acc.value.is_zero() && acc.nonce.is_zero() && acc.code.0.0.is_empty()
+    acc.value.is_zero() && acc.nonce.is_zero() && acc.code.0.is_empty()
 }

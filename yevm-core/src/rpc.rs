@@ -102,7 +102,7 @@ impl Chain for Rpc {
         Ok(Account {
             value,
             nonce: nonce.into(),
-            code,
+            code: (code.0.into(), code.1),
         })
     }
 

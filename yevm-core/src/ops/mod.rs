@@ -421,7 +421,7 @@ pub mod tests {
     use crate::{
         Acc, Call, Head, Int,
         evm::Context,
-        state::{Account, State},
+        state::{Account, Code, State},
         trace::Event,
     };
 
@@ -471,7 +471,7 @@ pub mod tests {
         fn set_value(&mut self, _: &Acc, _: Int) -> Int {
             Int::ZERO
         }
-        fn set_code(&mut self, _: &Acc, _: Buf, _: Int) -> Int {
+        fn set_code(&mut self, _: &Acc, _: Code, _: Int) -> Int {
             Int::ZERO
         }
         fn balance(&mut self, _: &Acc) -> Option<Int> {
@@ -480,7 +480,7 @@ pub mod tests {
         fn nonce(&mut self, _: &Acc) -> Option<Int> {
             None
         }
-        fn code(&mut self, _: &Acc) -> Option<(Buf, Int)> {
+        fn code(&mut self, _: &Acc) -> Option<(Code, Int)> {
             None
         }
         fn acc(&mut self, _: &Acc) -> Option<Account> {

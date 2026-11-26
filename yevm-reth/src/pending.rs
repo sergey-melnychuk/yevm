@@ -137,7 +137,8 @@ impl<C: Chain + Send + Sync> Chain for Recording<C> {
     }
 
     async fn code(&self, acc: &Acc) -> eyre::Result<(Buf, Int)> {
-        Ok(self.acc(acc).await?.code)
+        let (code, hash) = self.acc(acc).await?.code;
+        Ok((code.into(), hash))
     }
 
     async fn nonce(&self, acc: &Acc) -> eyre::Result<u64> {

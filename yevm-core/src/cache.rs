@@ -7,7 +7,7 @@ use crate::{
     chain::Fetched,
     evm::JumpTable,
     misc::is_precompile,
-    state::{Account, State},
+    state::{Account, Code, State},
     trace::{Event, Target, Trace, filter},
 };
 use futures::channel::mpsc;
@@ -59,7 +59,7 @@ enum Revert {
     Temp(Acc, Int, Int),
     /// The account's code hash before the change, and its code when known (a trace records
     /// only the hash; the code is then found in `codes`).
-    Code(Acc, Option<Buf>, Int),
+    Code(Acc, Option<Code>, Int),
     Create(Acc),
     Delete(Acc),
     Log,
@@ -114,8 +114,9 @@ pub struct Cache {
     journal_only: bool,
     /// Jump tables by code hash. Code is content-addressed, so [`Cache::clear`] keeps them.
     jump_tables: HashMap<Int, Arc<JumpTable>>,
-    /// Shared code by code hash, kept by [`Cache::clear`] like `jump_tables`.
-    codes: HashMap<Int, Arc<[u8]>>,
+    /// Code replaced by other code, by code hash, for reverts recorded only in a trace. Kept by
+    /// [`Cache::clear`] like `jump_tables`.
+    codes: HashMap<Int, Code>,
     /// Empty storage maps of cleared accounts, reused to avoid regrowing them per transaction.
     spare_storage: Vec<HashMap<Int, Slot>>,
     /// The journal when no trace is recorded (see [`Self::set_journal_only`]): undo records
@@ -280,12 +281,8 @@ impl Cache {
                 }
             }
             Revert::Code(acc, prev_code, prev_hash) => {
-                let prev_code = prev_code.unwrap_or_else(|| {
-                    self.codes
-                        .get(&prev_hash)
-                        .map(|code| code.to_vec().into())
-                        .unwrap_or_default()
-                });
+                let prev_code = prev_code
+                    .unwrap_or_else(|| self.codes.get(&prev_hash).cloned().unwrap_or_default());
                 if let Some(entry) = self.accounts.get_mut(&acc) {
                     entry.account.code = (prev_code, prev_hash);
                 }
@@ -452,7 +449,7 @@ impl Cache {
     pub fn set_code_or_load(
         &mut self,
         acc: &Acc,
-        code: Buf,
+        code: Code,
         hash: Int,
         load: impl FnOnce() -> Account,
     ) -> Int {
@@ -462,10 +459,8 @@ impl Cache {
         };
         // Code replaced by code (a delegation changed or cleared) is kept by hash, so that a
         // revert recorded only in a trace can restore it.
-        if !prev_code.0.is_empty() {
-            self.codes
-                .entry(prev)
-                .or_insert_with(|| Arc::from(prev_code.as_slice()));
+        if !prev_code.is_empty() {
+            self.codes.entry(prev).or_insert_with(|| prev_code.clone());
         }
         self.journal(Revert::Code(*acc, Some(prev_code), prev), || {
             Event::Put(
@@ -632,7 +627,7 @@ impl State for Cache {
         self.set_value_or_load(acc, value, Account::default)
     }
 
-    fn set_code(&mut self, acc: &Acc, code: Buf, hash: Int) -> Int {
+    fn set_code(&mut self, acc: &Acc, code: Code, hash: Int) -> Int {
         self.set_code_or_load(acc, code, hash, Account::default)
     }
 
@@ -677,11 +672,11 @@ impl State for Cache {
         val
     }
 
-    fn code(&mut self, acc: &Acc) -> Option<(Buf, Int)> {
+    fn code(&mut self, acc: &Acc) -> Option<(Code, Int)> {
         let (code, hash) = self.accounts.get(acc).map(|e| e.account.code.clone())?;
         self.trace(|| Event::Get(Target::Code { acc: *acc, hash }));
         if !code.is_empty() {
-            self.trace(|| Event::Code(code.clone(), hash));
+            self.trace(|| Event::Code(code.clone().into(), hash));
         }
         Some((code, hash))
     }
@@ -799,8 +794,8 @@ impl State for Cache {
     fn auth(&self, acc: &Acc) -> Option<Acc> {
         let entry = self.accounts.get(acc)?;
         let (code, _) = &entry.account.code;
-        if code.0.len() == 23 && code.0.starts_with(&[0xEF, 0x01, 0x00]) {
-            let acc = Acc::from(&code.0[3..]);
+        if code.len() == 23 && code.starts_with(&[0xEF, 0x01, 0x00]) {
+            let acc = Acc::from(&code[3..]);
             if acc.is_zero() { None } else { Some(acc) }
         } else {
             None
@@ -1040,23 +1035,11 @@ impl State for Cache {
         self.accounts.get(acc).map(|e| e.account.code.1)
     }
 
-    fn frame_code(&mut self, acc: &Acc) -> Option<(Arc<[u8]>, Int)> {
+    fn frame_code(&mut self, acc: &Acc) -> Option<(Code, Int)> {
         if self.records_trace() {
-            return self
-                .code(acc)
-                .map(|(code, hash)| (code.into_vec().into(), hash));
+            return self.code(acc);
         }
-        let (code, hash) = &self.accounts.get(acc)?.account.code;
-        // A zero hash marks code whose hash is unknown, which must not be shared by hash.
-        if hash.is_zero() {
-            return Some((Arc::from(code.as_slice()), *hash));
-        }
-        let code = self
-            .codes
-            .entry(*hash)
-            .or_insert_with(|| Arc::from(code.as_slice()))
-            .clone();
-        Some((code, *hash))
+        self.accounts.get(acc).map(|e| e.account.code.clone())
     }
 
     fn jump_table(&mut self, hash: &Int, code: &[u8]) -> Arc<JumpTable> {
@@ -1104,7 +1087,7 @@ mod tests {
             Account {
                 value: Int::from(5u32),
                 nonce: Int::ONE,
-                code: (Buf::default(), Int::ZERO),
+                code: (Code::default(), Int::ZERO),
             },
         );
         cache.set_code(&target, vec![0x60, 0x00].into(), Int::from(7u32));
@@ -1211,7 +1194,7 @@ mod tests {
             Account {
                 value: Int::from(10u32),
                 nonce: Int::ONE,
-                code: (Buf::default(), Int::ZERO),
+                code: (Code::default(), Int::ZERO),
             },
         );
         cache.init(&a, &k1, Int::from(5u32));
@@ -1233,7 +1216,7 @@ mod tests {
             Account {
                 value: Int::from(3u32),
                 nonce: Int::ONE,
-                code: (Buf::default(), Int::ZERO),
+                code: (Code::default(), Int::ZERO),
             },
         );
         cache.destroy(&a);
@@ -1274,7 +1257,7 @@ mod tests {
                 Account {
                     value: Int::from(11u32),
                     nonce: Int::ONE,
-                    code: (Buf::default(), Int::ZERO),
+                    code: (Code::default(), Int::ZERO),
                 },
                 vec![
                     (Int::from(1u32), Int::from(6u32)),
@@ -1351,7 +1334,7 @@ mod tests {
             Account {
                 value: Int::ZERO,
                 nonce: Int::ONE,
-                code: (Buf::default(), Int::ZERO),
+                code: (Code::default(), Int::ZERO),
             },
         );
         assert_eq!(cache.get(&target, &key), Some((Int::ZERO, Int::ZERO)));
@@ -1377,7 +1360,7 @@ mod tests {
         let loaded = || Account {
             value: Int::from(3u32),
             nonce: Int::from(4u32),
-            code: (Buf::default(), Int::ZERO),
+            code: (Code::default(), Int::ZERO),
         };
 
         assert_eq!(

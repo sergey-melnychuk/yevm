@@ -116,10 +116,10 @@ pub async fn run(
     let mut db = InMemoryDB::default();
     for (acc, account, storage) in &env {
         let addr = to_addr(acc);
-        let code = if account.code.0.0.is_empty() {
+        let code = if account.code.0.is_empty() {
             None
         } else {
-            Some(Bytecode::new_raw(Bytes::from(account.code.0.0.clone())))
+            Some(Bytecode::new_raw(Bytes::from(account.code.0.to_vec())))
         };
         db.insert_account_info(
             addr,
@@ -276,7 +276,7 @@ pub async fn run(
                 Account {
                     value: from_u256(account.info.balance),
                     nonce: Int::from(account.info.nonce),
-                    code: (Buf(code_bytes), code_hash),
+                    code: (code_bytes.into(), code_hash),
                 },
                 kv,
             ),

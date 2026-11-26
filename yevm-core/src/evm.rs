@@ -6,7 +6,10 @@ use serde::{Deserialize, Serialize};
 use yevm_base::math::{U256, lift};
 use yevm_misc::keccak256;
 
-use crate::{Acc, Call, Int, Result, ops, state::State};
+use crate::{
+    Acc, Call, Int, Result, ops,
+    state::{Code, State},
+};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub enum HaltReason {
@@ -254,8 +257,8 @@ pub struct Evm {
     /// and [`Self::push`], see [`word`] and [`int`].
     pub stack: Vec<U256>,
     pub memory: Vec<u8>,
-    /// The frame's code, shared with other frames running the same code.
-    pub code: Arc<[u8]>,
+    /// The frame's code, shared with the account and other frames running the same code.
+    pub code: Code,
     /// The `JUMPDEST`s of `code`, analysed on the first jump unless set by the executor.
     jumpdests: Option<Arc<JumpTable>>,
     /// The block header, shared by every frame of the transaction.
@@ -297,13 +300,13 @@ impl Evm {
 
     pub fn new(
         head: impl Into<Arc<Head>>,
-        code: impl Into<Arc<[u8]>>,
+        code: impl Into<Code>,
         gas: u64,
         chain_id: Int,
         gas_price: Int,
         blob_hashes: Vec<Int>,
     ) -> Self {
-        let code: Arc<[u8]> = code.into();
+        let code: Code = code.into();
         Self {
             pc: 0,
             gas: Gas::new(gas),

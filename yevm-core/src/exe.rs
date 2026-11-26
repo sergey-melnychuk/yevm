@@ -15,7 +15,7 @@ use crate::{Acc, Call, Error, Int, Result, Spec};
 use crate::{
     call::Head,
     chain::{Chain, fetch},
-    state::{Account, State},
+    state::{Account, Code, State},
     trace::Event,
 };
 
@@ -154,11 +154,7 @@ async fn process_request_queue(
     if !state.has_acc(&addr) {
         fetch(Fetch::Account(addr), state, chain).await?;
     }
-    if state
-        .code(&addr)
-        .map(|(c, _)| c.0.is_empty())
-        .unwrap_or(true)
-    {
+    if state.code(&addr).map(|(c, _)| c.is_empty()).unwrap_or(true) {
         // Predeploy not yet in state (pre-activation replay) -- nothing to do.
         return Ok(());
     }
@@ -571,7 +567,7 @@ fn merge_state_gas(parent: &mut Gas, child: &Gas, ok: bool, new_account: bool) {
 pub fn is_alive(state: &mut (impl State + ?Sized), acc: &Acc) -> bool {
     state
         .acc(acc)
-        .is_some_and(|a| !a.value.is_zero() || !a.nonce.is_zero() || !a.code.0.0.is_empty())
+        .is_some_and(|a| !a.value.is_zero() || !a.nonce.is_zero() || !a.code.0.is_empty())
 }
 
 /// Charges an Amsterdam transaction's delegations (EIP-8037): a new account for an authority
@@ -944,7 +940,7 @@ impl Executor {
                 Account {
                     value: existing_balance,
                     nonce: Int::ONE,
-                    code: (Buf::default(), Int::ZERO),
+                    code: (Code::default(), Int::ZERO),
                 },
             );
             // EIP-2929: add newly created address to accessed_addresses
@@ -1116,7 +1112,7 @@ impl Executor {
                         last_popped_checkpoint = None; // success
 
                         let hash = Int::from(keccak256(code.as_slice()).as_ref());
-                        state.set_code(&addr, code, hash);
+                        state.set_code(&addr, code.into(), hash);
 
                         let _ = this.evm.push(addr.to());
                         let return_gas = (gas.limit - gas.spent).max(0);
@@ -1356,7 +1352,7 @@ impl Executor {
                             Account {
                                 value: existing_balance,
                                 nonce: Int::ONE,
-                                code: (Buf::default(), Int::ZERO),
+                                code: (Code::default(), Int::ZERO),
                             },
                         );
 
@@ -1583,7 +1579,7 @@ impl Executor {
             && !code.0.is_empty()
         {
             let hash = Int::from(keccak256(code.as_slice()).as_ref());
-            state.set_code(&addr, code.clone(), hash);
+            state.set_code(&addr, code.clone().into(), hash);
         }
 
         state.set_depth(0);
@@ -1690,8 +1686,8 @@ async fn prepare(
 ) -> Result<CallFrame> {
     let is_create = matches!(mode, CallMode::Create(_) | CallMode::Create2(_));
     // The code hash, when the code is deployed code, keys its cached jump table.
-    let (code, code_hash): (Arc<[u8]>, Option<Int>) = if is_create {
-        (std::mem::take(&mut call.data).into_vec().into(), None)
+    let (code, code_hash): (Code, Option<Int>) = if is_create {
+        (std::mem::take(&mut call.data).into(), None)
     } else {
         let call_to = call.to.expect("checked non-create call");
         if let Some((code, hash)) = state.frame_code(&call_to) {
@@ -1700,7 +1696,7 @@ async fn prepare(
             fetch(Fetch::Account(call_to), state, chain).await?;
             match state.frame_code(&call_to) {
                 Some((code, hash)) => (code, Some(hash)),
-                None => (Arc::from([]), None),
+                None => (Code::default(), None),
             }
         }
     };
@@ -1719,7 +1715,7 @@ async fn prepare(
                     state.warm_acc(&delegate);
                     (code, Some(hash))
                 }
-                None => (Arc::from([]), None),
+                None => (Code::default(), None),
             }
         }
     } else {
@@ -1799,11 +1795,13 @@ mod tests {
             Ok(Account {
                 value: Int::ZERO,
                 nonce: Int::ONE,
-                code: (code, hash),
+                code: (code.into(), hash),
             })
         }
         async fn code(&self, acc: &Acc) -> eyre::Result<(Buf, Int)> {
-            self.acc(acc).await.map(|account| account.code)
+            self.acc(acc)
+                .await
+                .map(|account| (account.code.0.into(), account.code.1))
         }
         async fn nonce(&self, acc: &Acc) -> eyre::Result<u64> {
             self.acc(acc).await.map(|account| account.nonce.as_u64())

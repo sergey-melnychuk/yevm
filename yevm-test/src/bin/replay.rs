@@ -1299,7 +1299,7 @@ mod live {
                     let account = Account {
                         value: Int::from(account.info.balance.to_be_bytes::<32>().as_slice()),
                         nonce: account.info.nonce.into(),
-                        code: (code, Int::ZERO),
+                        code: (code.into(), Int::ZERO),
                     };
                     let acc = Acc::from(address.as_slice());
                     (acc, account, storage)

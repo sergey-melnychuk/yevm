@@ -12,7 +12,7 @@ use yevm_core::{
     call::{AccessListItem, AuthorizationListItem},
     evm::HaltReason,
     exe::Outcome,
-    state::Account,
+    state::{Account, Code},
 };
 use yevm_misc::buf::Buf;
 
@@ -48,13 +48,14 @@ pub(crate) fn account(info: Option<&AccountInfo>, code: Option<&Bytecode>) -> Ac
     let Some(info) = info else {
         return Account::default();
     };
+    // Shares the bytes reth read (or cached) instead of copying them.
     let code = code
-        .map(|code| code.original_byte_slice().to_vec())
+        .map(|code| Code::from(code.original_bytes()))
         .unwrap_or_default();
     Account {
         value: int(info.balance),
         nonce: Int::from(info.nonce),
-        code: (Buf(code), int_b256(info.code_hash)),
+        code: (code, int_b256(info.code_hash)),
     }
 }
 
@@ -81,7 +82,7 @@ pub(crate) fn account_info(
         // yevm keeps the code hash it loaded or computed, so an equal hash is unchanged code.
         AccountInfo::new(balance, nonce, original.code_hash, original.code.clone())
     } else {
-        let code = Bytecode::from_stored(Bytes::copy_from_slice(code.as_slice()));
+        let code = Bytecode::from_stored(Bytes::from(code.clone()));
         AccountInfo::new(balance, nonce, code.hash_slow(), Some(code))
     };
     Some(info)

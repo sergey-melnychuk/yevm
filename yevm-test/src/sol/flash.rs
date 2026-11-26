@@ -26,7 +26,7 @@ async fn test_flash_loan() -> eyre::Result<()> {
         Account {
             value: super::ethers(10),
             nonce: Int::ZERO,
-            code: (Buf::default(), Int::ZERO),
+            code: (Default::default(), Int::ZERO),
         },
         vec![],
     )];

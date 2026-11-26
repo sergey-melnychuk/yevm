@@ -11734,7 +11734,7 @@ dependencies = [
 [[package]]
 name = "silt-cache"
 version = "0.1.0"
-source = "git+https://github.com/sergey-melnychuk/silt.git?rev=22bf761c1bf1487fd4930e9fcafea35030b6bba5#22bf761c1bf1487fd4930e9fcafea35030b6bba5"
+source = "git+https://github.com/sergey-melnychuk/silt.git?rev=23c095b5b2baec3f7a9848ff5afbc27e495f3d7f#23c095b5b2baec3f7a9848ff5afbc27e495f3d7f"
 dependencies = [
  "async-trait",
  "dashmap",
@@ -11752,10 +11752,11 @@ dependencies = [
 [[package]]
 name = "silt-node"
 version = "0.1.0"
-source = "git+https://github.com/sergey-melnychuk/silt.git?rev=22bf761c1bf1487fd4930e9fcafea35030b6bba5#22bf761c1bf1487fd4930e9fcafea35030b6bba5"
+source = "git+https://github.com/sergey-melnychuk/silt.git?rev=23c095b5b2baec3f7a9848ff5afbc27e495f3d7f#23c095b5b2baec3f7a9848ff5afbc27e495f3d7f"
 dependencies = [
  "alloy-eips 2.5.0",
  "alloy-primitives",
+ "alloy-rlp",
  "async-trait",
  "eyre",
  "futures",
@@ -11772,7 +11773,7 @@ dependencies = [
 [[package]]
 name = "silt-wire"
 version = "0.1.0"
-source = "git+https://github.com/sergey-melnychuk/silt.git?rev=22bf761c1bf1487fd4930e9fcafea35030b6bba5#22bf761c1bf1487fd4930e9fcafea35030b6bba5"
+source = "git+https://github.com/sergey-melnychuk/silt.git?rev=23c095b5b2baec3f7a9848ff5afbc27e495f3d7f#23c095b5b2baec3f7a9848ff5afbc27e495f3d7f"
 dependencies = [
  "eyre",
  "postcard",

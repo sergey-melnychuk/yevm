@@ -19,7 +19,7 @@ use yevm_core::{
     call::{Block, Head},
     chain::Chain,
     evm::JumpTable,
-    state::{Account, State},
+    state::{Account, Code, State},
     trace::Event,
 };
 use yevm_misc::buf::Buf;
@@ -216,7 +216,7 @@ impl State for DbState<'_, '_> {
         cache.set_value_or_load(acc, value, || load(*db.get_mut(), originals, error, acc))
     }
 
-    fn set_code(&mut self, acc: &Acc, code: Buf, hash: Int) -> Int {
+    fn set_code(&mut self, acc: &Acc, code: Code, hash: Int) -> Int {
         let Self {
             cache,
             db,
@@ -253,7 +253,7 @@ impl State for DbState<'_, '_> {
         self.cache.nonce(acc)
     }
 
-    fn code(&mut self, acc: &Acc) -> Option<(Buf, Int)> {
+    fn code(&mut self, acc: &Acc) -> Option<(Code, Int)> {
         if let Some(value) = self.cache.code(acc) {
             return Some(value);
         }
@@ -402,7 +402,7 @@ impl State for DbState<'_, '_> {
         self.cache.code_hash(acc)
     }
 
-    fn frame_code(&mut self, acc: &Acc) -> Option<(Arc<[u8]>, Int)> {
+    fn frame_code(&mut self, acc: &Acc) -> Option<(Code, Int)> {
         if let Some(value) = self.cache.frame_code(acc) {
             return Some(value);
         }

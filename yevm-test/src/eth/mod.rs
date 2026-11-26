@@ -64,7 +64,7 @@ pub fn build_map(env: &Env) -> HashMap<Acc, dto::AccountState> {
                 *acc,
                 dto::AccountState {
                     balance: account.value,
-                    code: account.code.0.clone(),
+                    code: account.code.0.clone().into(),
                     nonce: account.nonce,
                     storage,
                 },

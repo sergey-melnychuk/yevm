@@ -26,7 +26,7 @@ async fn test_vault_give_move_take() -> eyre::Result<()> {
             Account {
                 value: super::ethers(10),
                 nonce: Int::ZERO,
-                code: (Buf::default(), Int::ZERO),
+                code: (Default::default(), Int::ZERO),
             },
             vec![],
         ),
@@ -35,7 +35,7 @@ async fn test_vault_give_move_take() -> eyre::Result<()> {
             Account {
                 value: super::ethers(10),
                 nonce: Int::ZERO,
-                code: (Buf::default(), Int::ZERO),
+                code: (Default::default(), Int::ZERO),
             },
             vec![],
         ),

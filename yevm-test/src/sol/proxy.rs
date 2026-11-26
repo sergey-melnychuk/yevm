@@ -28,7 +28,7 @@ async fn test_proxy_delegatecall() -> eyre::Result<()> {
         Account {
             value: super::ethers(1),
             nonce: Int::ZERO,
-            code: (Buf::default(), Int::ZERO),
+            code: (Default::default(), Int::ZERO),
         },
         vec![],
     )];

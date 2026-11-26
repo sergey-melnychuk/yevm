@@ -217,7 +217,7 @@ pub fn call<S: State>(evm: &mut Evm, ctx: &Context, _: &Call, state: &mut S) -> 
         }
         let is_empty = state
             .acc(&address)
-            .map(|a| a.value.is_zero() && a.nonce.is_zero() && a.code.0.0.is_empty())
+            .map(|a| a.value.is_zero() && a.nonce.is_zero() && a.code.0.is_empty())
             .unwrap_or(true);
         if is_empty && evm.spec().state_gas() {
             // EIP-8037: state gas for the new account, given back if the call fails.
@@ -619,7 +619,7 @@ pub fn selfdestruct<S: State>(
         // EIP-161: creating empty account costs 25000 when transferring value
         let is_empty = state
             .acc(&beneficiary)
-            .map(|a| a.value.is_zero() && a.nonce.is_zero() && a.code.0.0.is_empty())
+            .map(|a| a.value.is_zero() && a.nonce.is_zero() && a.code.0.is_empty())
             .unwrap_or(true);
         if is_empty {
             evm.gas_charge(25000)?;

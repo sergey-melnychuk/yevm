@@ -63,7 +63,7 @@ use yevm_base::{Acc, Int};
 use yevm_core::{
     call::{AccessListItem, AuthorizationListItem, Block, Head, Tx, TxCall, TxFull},
     chain::Chain,
-    state::Account,
+    state::{Account, Code},
 };
 use yevm_misc::buf::Buf;
 
@@ -475,12 +475,12 @@ fn read_account(state: &dyn StateProvider, acc: &Acc) -> eyre::Result<Account> {
             let code = state
                 .bytecode_by_hash(&code_hash)
                 .context("reth: bytecode_by_hash")?;
-            let bytes = code
-                .map(|c| c.original_byte_slice().to_vec())
+            let code = code
+                .map(|c| Code::from(c.original_bytes()))
                 .unwrap_or_default();
-            (Buf(bytes), RethDb::hash(code_hash))
+            (code, RethDb::hash(code_hash))
         }
-        None => (Buf::default(), Int::ZERO),
+        None => (Code::default(), Int::ZERO),
     };
     Ok(Account {
         value: account
@@ -520,7 +520,8 @@ impl Chain for RethDb {
     }
 
     async fn code(&self, acc: &Acc) -> eyre::Result<(Buf, Int)> {
-        Ok(self.acc(acc).await?.code)
+        let (code, hash) = self.acc(acc).await?.code;
+        Ok((code.into(), hash))
     }
 
     async fn nonce(&self, acc: &Acc) -> eyre::Result<u64> {
@@ -591,7 +592,8 @@ where
     }
 
     async fn code(&self, acc: &Acc) -> eyre::Result<(Buf, Int)> {
-        Ok(self.acc(acc).await?.code)
+        let (code, hash) = self.acc(acc).await?.code;
+        Ok((code.into(), hash))
     }
 
     async fn nonce(&self, acc: &Acc) -> eyre::Result<u64> {

@@ -24,7 +24,7 @@ async fn test_hello_deploy_and_read() -> eyre::Result<()> {
         Account {
             value: super::ethers(1),
             nonce: Int::ZERO,
-            code: (Buf::default(), Int::ZERO),
+            code: (Default::default(), Int::ZERO),
         },
         vec![],
     )];
@@ -81,7 +81,7 @@ async fn test_owner_get_set_odd() -> eyre::Result<()> {
             Account {
                 value: super::ethers(1),
                 nonce: Int::ZERO,
-                code: (Buf::default(), Int::ZERO),
+                code: (Default::default(), Int::ZERO),
             },
             vec![],
         ),
@@ -90,7 +90,7 @@ async fn test_owner_get_set_odd() -> eyre::Result<()> {
             Account {
                 value: super::ethers(1),
                 nonce: Int::ZERO,
-                code: (Buf::default(), Int::ZERO),
+                code: (Default::default(), Int::ZERO),
             },
             vec![],
         ),
